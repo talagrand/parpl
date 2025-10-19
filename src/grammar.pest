@@ -50,12 +50,12 @@ member = {
 
 // CEL Spec (lines 83-89): Primary = ["."] IDENT ["(" [ExprList] ")"] | ...
 primary = {
-    "."? ~ ident ~ ("(" ~ expr_list? ~ ")")?            // Function call or identifier
+    literal                                              // Literal value (try first to avoid 'r' or 'b' being parsed as identifiers)
+  | "."? ~ ident ~ ("(" ~ expr_list? ~ ")")?            // Function call or identifier
   | "(" ~ expr ~ ")"                                     // Parenthesized expression
   | "[" ~ expr_list? ~ ","? ~ "]"                        // List literal
   | "{" ~ map_inits? ~ ","? ~ "}"                        // Map literal
   | "."? ~ selector ~ ("." ~ selector)* ~ "{" ~ field_inits? ~ ","? ~ "}"  // Message literal
-  | literal                                              // Literal value
 }
 
 // CEL Spec (line 90): ExprList = Expr {"," Expr}
@@ -94,9 +94,9 @@ literal = {
 }
 
 // CEL Spec (line 143): INT_LIT = -? DIGIT+ | -? 0x HEXDIGIT+
-// CEL-RESTRICTED: Hex integer literals not yet implemented
 int_lit = @{
-    "-"? ~ ASCII_DIGIT+
+    "-"? ~ "0" ~ ("x" | "X") ~ ASCII_HEX_DIGIT+
+  | "-"? ~ ASCII_DIGIT+
 }
 
 // CEL Spec (line 144): UINT_LIT = INT_LIT [uU]
@@ -122,19 +122,18 @@ exponent = @{
 }
 
 // CEL Spec (lines 149-153): STRING_LIT = [rR]? ( "..." | '...' | """...""" | '''...''' )
-// CEL-RESTRICTED: Escape sequences not yet fully implemented
-// CEL-RESTRICTED: Triple-quoted strings not yet implemented
+// CEL-RESTRICTED: Escape sequences not yet implemented (will be handled during value construction)
 string_lit = @{
     ("r" | "R")? ~ (
-        "\"" ~ (!"\"" ~ !"\r" ~ !"\n" ~ ANY)* ~ "\""
+        "\"\"\"" ~ (!"\"\"\"" ~ ANY)* ~ "\"\"\""
+      | "'''" ~ (!"'''" ~ ANY)* ~ "'''"
+      | "\"" ~ (!"\"" ~ !"\r" ~ !"\n" ~ ANY)* ~ "\""
       | "'" ~ (!"'" ~ !"\r" ~ !"\n" ~ ANY)* ~ "'"
     )
 }
 
 // CEL Spec (line 154): BYTES_LIT = [bB] STRING_LIT
-bytes_lit = @{
-    ("b" | "B") ~ string_lit
-}
+bytes_lit = ${ ("b" | "B") ~ string_lit }
 
 // CEL Spec (lines 155-159): ESCAPE = \ [abfnrtv\?"'`] | ...
 // CEL-RESTRICTED: Escape sequences not yet implemented
