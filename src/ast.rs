@@ -5,18 +5,22 @@
 // - All expression types from the CEL grammar
 // - Span information for error reporting
 // - Deferred processing (escape sequences handled during value construction)
+// - Arena allocation for efficient memory management
 
 use std::fmt;
 
 /// A complete CEL expression (the root of the AST)
+///
+/// **Arena-allocated**: All `Expr` nodes are allocated in a `bumpalo::Bump` arena.
+/// The lifetime `'arena` ties the expression to the arena that owns it.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Expr {
-    pub kind: ExprKind,
+pub struct Expr<'arena> {
+    pub kind: ExprKind<'arena>,
     pub span: Span,
 }
 
 /// Source location information for error reporting
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
@@ -36,50 +40,68 @@ impl Span {
 }
 
 /// The kind of expression (CEL spec lines 68-94)
+///
+/// **Arena-allocated**: Uses `&'arena Expr<'arena>` instead of `Box<Expr>`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ExprKind {
+pub enum ExprKind<'arena> {
     /// Ternary conditional: `condition ? true_expr : false_expr`
     /// CEL Spec (line 68): Expr = ConditionalOr ["?" ConditionalOr ":" Expr]
-    Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
+    Ternary(
+        &'arena Expr<'arena>,
+        &'arena Expr<'arena>,
+        &'arena Expr<'arena>,
+    ),
 
     /// Binary operation: left op right
     /// Covers: ||, &&, <, <=, >=, >, ==, !=, in, +, -, *, /, %
-    Binary(BinaryOp, Box<Expr>, Box<Expr>),
+    Binary(BinaryOp, &'arena Expr<'arena>, &'arena Expr<'arena>),
 
     /// Unary operation: op expr
     /// Covers: !, - (with repetition like !! or --)
-    Unary(UnaryOp, Box<Expr>),
+    Unary(UnaryOp, &'arena Expr<'arena>),
 
     /// Member access: expr.field or expr.method(args)
-    /// CEL Spec (line 79): Member "." SELECTOR ["(" [ExprList] ")"]
-    Member(Box<Expr>, String, Option<Vec<Expr>>),
+    /// CEL Spec (line 79): Member "." SELECTOR \["(" \[ExprList\] ")"\]
+    Member(
+        &'arena Expr<'arena>,
+        &'arena str,
+        Option<&'arena [Expr<'arena>]>,
+    ),
 
-    /// Index access: expr[index]
-    /// CEL Spec (line 79): Member "[" Expr "]"
-    Index(Box<Expr>, Box<Expr>),
+    /// Index access: expr\[index\]
+    /// CEL Spec (line 79): Member "\[" Expr "\]"
+    Index(&'arena Expr<'arena>, &'arena Expr<'arena>),
 
     /// Function call: func(args) or .func(args)
-    /// CEL Spec (line 83): ["."] IDENT "(" [ExprList] ")"
-    Call(Option<Box<Expr>>, String, Vec<Expr>),
+    /// CEL Spec (line 83): \["."\] IDENT "(" \[ExprList\] ")"
+    Call(
+        Option<&'arena Expr<'arena>>,
+        &'arena str,
+        &'arena [Expr<'arena>],
+    ),
 
     /// Identifier reference
     /// CEL Spec (line 83): IDENT
-    Ident(String),
+    Ident(&'arena str),
 
-    /// List literal: [expr, ...]
-    /// CEL Spec (line 86): "[" [ExprList] "]"
-    List(Vec<Expr>),
+    /// List literal: \[expr, ...\]
+    /// CEL Spec (line 86): "\[" \[ExprList\] "\]"
+    List(&'arena [Expr<'arena>]),
 
     /// Map literal: {key: value, ...}
-    /// CEL Spec (line 87): "{" [MapInits] "}"
-    Map(Vec<(Expr, Expr)>),
+    /// CEL Spec (line 87): "{" \[MapInits\] "}"
+    Map(&'arena [(Expr<'arena>, Expr<'arena>)]),
 
     /// Message/struct literal: Type{field: value, ...} or .Type{...}
-    /// CEL Spec (line 88): ["."] SELECTOR {"." SELECTOR} "{" [FieldInits] "}"
-    Struct(Option<Box<Expr>>, Vec<String>, Vec<(String, Expr)>),
+    /// CEL Spec (line 88): \["."\] SELECTOR {"." SELECTOR} "{" \[FieldInits\] "}"
+    Struct(
+        Option<&'arena Expr<'arena>>,
+        &'arena [&'arena str],
+        &'arena [(&'arena str, Expr<'arena>)],
+    ),
 
     /// Literal value
-    Literal(Literal),
+    Literal(Literal<'arena>),
 }
 
 /// Binary operators (in precedence order from spec)
@@ -164,22 +186,24 @@ impl fmt::Display for UnaryOp {
 }
 
 /// Literal values (CEL spec lines 141-161)
+///
+/// **Arena-allocated**: String data stored as `&'arena str` instead of `String`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Literal {
+pub enum Literal<'arena> {
     /// Integer literal: 123, -456, 0xFF
     /// CEL Spec (line 143): INT_LIT = -? DIGIT+ | -? 0x HEXDIGIT+
     /// Raw string from parser - parsing happens during value construction
-    Int(String),
+    Int(&'arena str),
 
     /// Unsigned integer literal: 123u, 0xFFu
-    /// CEL Spec (line 144): UINT_LIT = INT_LIT [uU]
+    /// CEL Spec (line 144): UINT_LIT = INT_LIT \[uU\]
     /// Raw string from parser (without 'u' suffix) - parsing happens during value construction
-    UInt(String),
+    UInt(&'arena str),
 
     /// Floating-point literal: 1.5, 1e10, -3.14e-2
     /// CEL Spec (line 145): FLOAT_LIT
     /// Raw string from parser - parsing happens during value construction
-    Float(String),
+    Float(&'arena str),
 
     /// String literal: "hello", 'world', """multiline""", r"raw\n"
     /// CEL Spec (lines 149-153): STRING_LIT
@@ -188,13 +212,13 @@ pub enum Literal {
     /// - raw_content: the content between quotes (without quotes)
     /// - is_raw: true if prefixed with r/R (no escape processing)
     /// - quote_style: SingleQuote, DoubleQuote, TripleSingleQuote, TripleDoubleQuote
-    String(String, bool, QuoteStyle),
+    String(&'arena str, bool, QuoteStyle),
 
     /// Bytes literal: b"hello", b'bytes', b"""multi"""
-    /// CEL Spec (line 154): BYTES_LIT = [bB] STRING_LIT
+    /// CEL Spec (line 154): BYTES_LIT = \[bB\] STRING_LIT
     /// **CEL-RESTRICTED**: Escape sequences processed during value construction
     /// Stores: (raw_content, is_raw, quote_style)
-    Bytes(String, bool, QuoteStyle),
+    Bytes(&'arena str, bool, QuoteStyle),
 
     /// Boolean literal: true, false
     /// CEL Spec (line 160): BOOL_LIT
@@ -218,38 +242,8 @@ pub enum QuoteStyle {
     TripleDoubleQuote,
 }
 
-impl Expr {
-    pub fn new(kind: ExprKind, span: Span) -> Self {
+impl<'arena> Expr<'arena> {
+    pub fn new(kind: ExprKind<'arena>, span: Span) -> Self {
         Self { kind, span }
-    }
-
-    /// Create a literal expression
-    pub fn literal(lit: Literal, span: Span) -> Self {
-        Self::new(ExprKind::Literal(lit), span)
-    }
-
-    /// Create an identifier expression
-    pub fn ident(name: String, span: Span) -> Self {
-        Self::new(ExprKind::Ident(name), span)
-    }
-
-    /// Create a binary operation
-    pub fn binary(op: BinaryOp, left: Expr, right: Expr) -> Self {
-        let span = left.span.combine(&right.span);
-        Self::new(ExprKind::Binary(op, Box::new(left), Box::new(right)), span)
-    }
-
-    /// Create a unary operation
-    pub fn unary(op: UnaryOp, expr: Expr, span: Span) -> Self {
-        Self::new(ExprKind::Unary(op, Box::new(expr)), span)
-    }
-
-    /// Create a ternary conditional
-    pub fn ternary(cond: Expr, if_true: Expr, if_false: Expr) -> Self {
-        let span = cond.span.combine(&if_false.span);
-        Self::new(
-            ExprKind::Ternary(Box::new(cond), Box::new(if_true), Box::new(if_false)),
-            span,
-        )
     }
 }

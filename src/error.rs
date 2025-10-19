@@ -266,50 +266,62 @@ pub type Result<T> = std::result::Result<T, Error>;
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_error_display() {
-        let err = Error::syntax("unexpected token".to_string(), 5);
-        let display = format!("{}", err);
-        assert!(display.contains("Parsing"));
-        assert!(display.contains("unexpected token"));
-        assert!(display.contains("5..5"));
+    macro_rules! test_cases {
+        ($($name:ident: $test:expr),* $(,)?) => {
+            $(
+                #[test]
+                fn $name() {
+                    $test
+                }
+            )*
+        };
     }
 
-    #[test]
-    fn test_nesting_depth_error() {
-        let err = Error::nesting_depth(51, 50);
-        assert_eq!(err.phase, Phase::Parsing);
-        assert!(matches!(
-            err.kind,
-            ErrorKind::NestingDepthExceeded { depth: 51, max: 50 }
-        ));
-    }
+    // ============================================================
+    // Section: Error Construction and Display Tests
+    // ============================================================
 
-    #[test]
-    fn test_undefined_variable_error() {
-        let err = Error::undefined_variable("x".to_string(), Span::new(10, 11));
-        assert_eq!(err.phase, Phase::Evaluation);
-        assert!(err.message.contains("Undefined variable: x"));
-    }
+    test_cases! {
+        test_error_display: {
+            let err = Error::syntax("unexpected token".to_string(), 5);
+            let display = format!("{}", err);
+            assert!(display.contains("Parsing"));
+            assert!(display.contains("unexpected token"));
+            assert!(display.contains("5..5"));
+        },
 
-    #[test]
-    fn test_type_mismatch_error() {
-        let err = Error::type_mismatch("int".to_string(), "string".to_string(), Span::new(5, 10));
-        assert_eq!(err.phase, Phase::Evaluation);
-        assert!(err.message.contains("expected int, got string"));
-    }
+        test_nesting_depth_error: {
+            let err = Error::nesting_depth(51, 50);
+            assert_eq!(err.phase, Phase::Parsing);
+            assert!(matches!(
+                err.kind,
+                ErrorKind::NestingDepthExceeded { depth: 51, max: 50 }
+            ));
+        },
 
-    #[test]
-    fn test_error_with_span() {
-        let err = Error::new(
-            Phase::Evaluation,
-            ErrorKind::DivisionByZero,
-            "Division by zero".to_string(),
-        )
-        .with_span(Span::new(10, 15));
+        test_undefined_variable_error: {
+            let err = Error::undefined_variable("x".to_string(), Span::new(10, 11));
+            assert_eq!(err.phase, Phase::Evaluation);
+            assert!(err.message.contains("Undefined variable: x"));
+        },
 
-        assert_eq!(err.span, Some(Span::new(10, 15)));
-        let display = format!("{}", err);
-        assert!(display.contains("10..15"));
+        test_type_mismatch_error: {
+            let err = Error::type_mismatch("int".to_string(), "string".to_string(), Span::new(5, 10));
+            assert_eq!(err.phase, Phase::Evaluation);
+            assert!(err.message.contains("expected int, got string"));
+        },
+
+        test_error_with_span: {
+            let err = Error::new(
+                Phase::Evaluation,
+                ErrorKind::DivisionByZero,
+                "Division by zero".to_string(),
+            )
+            .with_span(Span::new(10, 15));
+
+            assert_eq!(err.span, Some(Span::new(10, 15)));
+            let display = format!("{}", err);
+            assert!(display.contains("10..15"));
+        },
     }
 }

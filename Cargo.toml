@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 pest = "2.8"
 pest_derive = "2.8"
+bumpalo = "3.14"

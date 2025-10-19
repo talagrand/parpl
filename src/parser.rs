@@ -134,59 +134,87 @@ fn validate_nesting_depth(input: &str, max_depth: usize) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// Test basic literal parsing
-    /// CEL Spec (line 147-148): Literals
-    #[test]
-    fn test_int_literals() {
-        assert!(parse("42").is_ok());
-        assert!(parse("-17").is_ok());
-        assert!(parse("0").is_ok());
+    #[cfg(test)]
+    mod test_util {
+        use super::super::*;
+
+        pub fn assert_parses(input: &str) {
+            let result = parse(input);
+            assert!(result.is_ok(), "Failed to parse '{}': {:?}", input, result);
+        }
+
+        pub fn assert_parse_fails(input: &str) {
+            let result = parse(input);
+            assert!(result.is_err(), "Expected '{}' to fail parsing", input);
+        }
+
+        pub fn assert_error_contains(input: &str, expected: &str) {
+            match parse(input) {
+                Err(e) => {
+                    let msg = format!("{}", e);
+                    assert!(
+                        msg.contains(expected),
+                        "Error message '{}' should contain '{}'",
+                        msg,
+                        expected
+                    );
+                }
+                Ok(_) => panic!("Expected '{}' to fail, but it parsed successfully", input),
+            }
+        }
     }
 
-    #[test]
-    fn test_hex_int_literals() {
-        assert!(parse("0x1A").is_ok());
-        assert!(parse("0xFF").is_ok());
-        assert!(parse("-0x10").is_ok());
-        assert!(parse("0X2B").is_ok());
+    macro_rules! test_cases {
+        ($($name:ident: $input:expr => $assert_fn:ident),* $(,)?) => {
+            $(
+                #[test]
+                fn $name() {
+                    test_util::$assert_fn($input);
+                }
+            )*
+        };
     }
 
-    #[test]
-    fn test_negative_integer() {
-        let result = parse("-42");
-        assert!(
-            result.is_ok(),
-            "Failed to parse negative integer: {:?}",
-            result
-        );
-    }
+    // ============================================================
+    // Section: Literal Parsing (CEL Spec lines 147-148)
+    // ============================================================
 
-    #[test]
-    fn test_uint_literal() {
-        let result = parse("42u");
-        assert!(result.is_ok(), "Failed to parse uint literal: {:?}", result);
-    }
+    test_cases! {
+        // Integer literals
+        test_int_42: "42" => assert_parses,
+        test_int_negative: "-17" => assert_parses,
+        test_int_zero: "0" => assert_parses,
+        test_int_negative_42: "-42" => assert_parses,
 
-    #[test]
-    fn test_float_literal() {
-        let result = parse("3.14");
-        assert!(
-            result.is_ok(),
-            "Failed to parse float literal: {:?}",
-            result
-        );
-    }
+        // Hex integer literals
+        test_hex_1a: "0x1A" => assert_parses,
+        test_hex_ff: "0xFF" => assert_parses,
+        test_hex_negative: "-0x10" => assert_parses,
+        test_hex_upper_x: "0X2B" => assert_parses,
 
-    #[test]
-    fn test_string_literals() {
-        assert!(parse(r#""hello""#).is_ok());
-        assert!(parse("'world'").is_ok());
-        assert!(parse(r#"r"raw""#).is_ok());
-        assert!(parse("R'raw'").is_ok());
+        // Unsigned integers
+        test_uint_42: "42u" => assert_parses,
+
+        // Float literals
+        test_float_pi: "3.14" => assert_parses,
+
+        // String literals
+        test_string_double: r#""hello""# => assert_parses,
+        test_string_single: "'world'" => assert_parses,
+        test_string_raw_double: r#"r"raw""# => assert_parses,
+        test_string_raw_single: "R'raw'" => assert_parses,
+
+        // Boolean literals
+        test_bool_true: "true" => assert_parses,
+        test_bool_false: "false" => assert_parses,
+
+        // Null literal
+        test_null: "null" => assert_parses,
     }
 
     #[test]
     fn test_triple_quoted_strings() {
+        // These need special handling due to newlines
         assert!(parse(
             r#""""multi
 line
@@ -205,116 +233,65 @@ line""""#
         .is_ok());
     }
 
-    #[test]
-    fn test_bool_literal_true() {
-        let result = parse("true");
-        assert!(result.is_ok(), "Failed to parse bool literal: {:?}", result);
+    // ============================================================
+    // Section: Arithmetic Operations (CEL Spec lines 81-82)
+    // ============================================================
+
+    test_cases! {
+        test_addition: "1 + 2" => assert_parses,
+        test_multiplication: "3 * 4" => assert_parses,
+        test_complex_arithmetic: "1 + 2 * 3" => assert_parses,
     }
 
-    #[test]
-    fn test_bool_literal_false() {
-        let result = parse("false");
-        assert!(result.is_ok(), "Failed to parse bool literal: {:?}", result);
+    // ============================================================
+    // Section: Logical Operations (CEL Spec lines 77-78)
+    // ============================================================
+
+    test_cases! {
+        test_logical_and: "true && false" => assert_parses,
+        test_logical_or: "true || false" => assert_parses,
     }
 
-    #[test]
-    fn test_null_literal() {
-        let result = parse("null");
-        assert!(result.is_ok(), "Failed to parse null literal: {:?}", result);
+    // ============================================================
+    // Section: Ternary Operator (CEL Spec line 76)
+    // ============================================================
+
+    test_cases! {
+        test_ternary: "true ? 1 : 2" => assert_parses,
     }
 
-    /// Test arithmetic operations
-    /// CEL Spec (lines 81-82): Addition and Multiplication
-    #[test]
-    fn test_addition() {
-        let result = parse("1 + 2");
-        assert!(result.is_ok(), "Failed to parse addition: {:?}", result);
+    // ============================================================
+    // Section: Parenthesized Expressions (CEL Spec line 92)
+    // ============================================================
+
+    test_cases! {
+        test_parentheses: "(1 + 2)" => assert_parses,
     }
 
-    #[test]
-    fn test_multiplication() {
-        let result = parse("3 * 4");
-        assert!(
-            result.is_ok(),
-            "Failed to parse multiplication: {:?}",
-            result
-        );
+    // ============================================================
+    // Section: List Literals (CEL Spec line 93)
+    // ============================================================
+
+    test_cases! {
+        test_empty_list: "[]" => assert_parses,
+        test_list_with_elements: "[1, 2, 3]" => assert_parses,
     }
 
-    #[test]
-    fn test_complex_arithmetic() {
-        let result = parse("1 + 2 * 3");
-        assert!(
-            result.is_ok(),
-            "Failed to parse complex arithmetic: {:?}",
-            result
-        );
+    // ============================================================
+    // Section: Reserved Words (CEL Spec lines 170-172)
+    // ============================================================
+
+    test_cases! {
+        test_reserved_word_for: "for" => assert_parse_fails,
     }
 
-    /// Test logical operations
-    /// CEL Spec (lines 77-78): ConditionalOr and ConditionalAnd
-    #[test]
-    fn test_logical_and() {
-        let result = parse("true && false");
-        assert!(result.is_ok(), "Failed to parse logical AND: {:?}", result);
-    }
+    // ============================================================
+    // Section: Complexity Limits
+    // CEL spec (langdef.md lines 95-108) requires:
+    // - 24-32 repetitions of repeating rules, we support 48-64
+    // - 12 repetitions of recursive rules, we support 24
+    // ============================================================
 
-    #[test]
-    fn test_logical_or() {
-        let result = parse("true || false");
-        assert!(result.is_ok(), "Failed to parse logical OR: {:?}", result);
-    }
-
-    /// Test ternary operator
-    /// CEL Spec (line 76): Expr with conditional
-    #[test]
-    fn test_ternary() {
-        let result = parse("true ? 1 : 2");
-        assert!(result.is_ok(), "Failed to parse ternary: {:?}", result);
-    }
-
-    /// Test parenthesized expressions
-    /// CEL Spec (line 92): Primary with parentheses
-    #[test]
-    fn test_parentheses() {
-        let result = parse("(1 + 2)");
-        assert!(
-            result.is_ok(),
-            "Failed to parse parenthesized expr: {:?}",
-            result
-        );
-    }
-
-    /// Test list literals
-    /// CEL Spec (line 93): List literal
-    #[test]
-    fn test_empty_list() {
-        let result = parse("[]");
-        assert!(result.is_ok(), "Failed to parse empty list: {:?}", result);
-    }
-
-    #[test]
-    fn test_list_with_elements() {
-        let result = parse("[1, 2, 3]");
-        assert!(result.is_ok(), "Failed to parse list: {:?}", result);
-    }
-
-    /// Test that reserved words are rejected as identifiers
-    /// CEL Spec (lines 170-172): Reserved words
-    #[test]
-    fn test_reserved_word_rejection() {
-        // "for" is a reserved word and should not parse as an identifier
-        let result = parse("for");
-        assert!(
-            result.is_err(),
-            "Reserved word 'for' should not parse as identifier"
-        );
-    }
-
-    /// Tests that we can handle expressions within the doubled CEL spec limits
-    /// CEL spec (langdef.md lines 95-108) requires:
-    /// - 24-32 repetitions of repeating rules, we support 48-64
-    /// - 12 repetitions of recursive rules, we support 24
     #[test]
     fn test_complexity_limits_respected() {
         // 64 terms with || (within our doubled limit of spec's 32)
@@ -338,8 +315,6 @@ line""""#
         let _ = parse(&long_id);
 
         // Moderately nested parentheses (50 levels - at our depth limit)
-        // Note: Pest's call limit prevents timeout, not stack overflow from deep recursion
-        // Deep recursion is inherent to recursive descent parsers
         let deep_parens = format!("{}1{}", "(".repeat(50), ")".repeat(50));
         assert!(
             parse(&deep_parens).is_ok(),
@@ -347,8 +322,11 @@ line""""#
         );
     }
 
-    /// Test nesting depth validation
-    /// CEL spec requires 12 recursive repetitions, we support 50
+    // ============================================================
+    // Section: Nesting Depth Validation
+    // CEL spec requires 12 recursive repetitions, we support 50
+    // ============================================================
+
     #[test]
     fn test_nesting_depth_limit_parentheses() {
         // 50 nested parens should work (at limit)
@@ -357,17 +335,8 @@ line""""#
 
         // 51 nested parens should fail
         let over_limit = format!("{}1{}", "(".repeat(51), ")".repeat(51));
-        let result = parse(&over_limit);
-        assert!(result.is_err(), "Should reject 51 nested parens");
-
-        if let Err(e) = result {
-            let msg = format!("{}", e);
-            assert!(
-                msg.contains("Nesting depth") && msg.contains("exceeds maximum"),
-                "Error should mention nesting depth: {}",
-                msg
-            );
-        }
+        test_util::assert_error_contains(&over_limit, "Nesting depth");
+        test_util::assert_error_contains(&over_limit, "exceeds maximum");
     }
 
     #[test]

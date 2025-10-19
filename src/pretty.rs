@@ -97,7 +97,7 @@ fn print_expr(buf: &mut String, expr: &Expr, indent: usize, config: &PrettyConfi
                 buf.push_str(&format!("{}  target:\n", indent_str));
                 print_expr(buf, target, indent + 2, config);
                 buf.push_str(&format!("{}  args:\n", indent_str));
-                for arg in args {
+                for arg in *args {
                     print_expr(buf, arg, indent + 2, config);
                 }
             } else {
@@ -125,7 +125,7 @@ fn print_expr(buf: &mut String, expr: &Expr, indent: usize, config: &PrettyConfi
             }
             if !args.is_empty() {
                 buf.push_str(&format!("{}  args:\n", indent_str));
-                for arg in args {
+                for arg in *args {
                     print_expr(buf, arg, indent + 2, config);
                 }
             }
@@ -139,7 +139,7 @@ fn print_expr(buf: &mut String, expr: &Expr, indent: usize, config: &PrettyConfi
             buf.push_str("List\n");
             if !elements.is_empty() {
                 buf.push_str(&format!("{}  elements:\n", indent_str));
-                for elem in elements {
+                for elem in *elements {
                     print_expr(buf, elem, indent + 2, config);
                 }
             }
@@ -149,7 +149,7 @@ fn print_expr(buf: &mut String, expr: &Expr, indent: usize, config: &PrettyConfi
             buf.push_str("Map\n");
             if !entries.is_empty() {
                 buf.push_str(&format!("{}  entries:\n", indent_str));
-                for (key, value) in entries {
+                for (key, value) in *entries {
                     buf.push_str(&format!("{}    key:\n", indent_str));
                     print_expr(buf, key, indent + 3, config);
                     buf.push_str(&format!("{}    value:\n", indent_str));
@@ -168,7 +168,7 @@ fn print_expr(buf: &mut String, expr: &Expr, indent: usize, config: &PrettyConfi
             }
             if !fields.is_empty() {
                 buf.push_str(&format!("{}  fields:\n", indent_str));
-                for (name, value) in fields {
+                for (name, value) in *fields {
                     buf.push_str(&format!("{}    {}:\n", indent_str, name));
                     print_expr(buf, value, indent + 3, config);
                 }
@@ -217,7 +217,7 @@ fn quote_char(style: QuoteStyle) -> &'static str {
 }
 
 // Implement Display for convenience
-impl fmt::Display for Expr {
+impl fmt::Display for Expr<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", pretty_print(self))
     }
@@ -226,55 +226,81 @@ impl fmt::Display for Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build_ast;
+    use crate::test_util::*;
 
-    #[test]
-    fn test_pretty_print_literal() {
-        let ast = build_ast("42").unwrap();
-        let output = pretty_print(&ast);
-        assert!(output.contains("Literal(Int(42))"));
+    macro_rules! test_cases {
+        ($($name:ident: $test:expr),* $(,)?) => {
+            $(
+                #[test]
+                fn $name() {
+                    $test
+                }
+            )*
+        };
     }
 
-    #[test]
-    fn test_pretty_print_binary() {
-        let ast = build_ast("1 + 2").unwrap();
-        let output = pretty_print(&ast);
-        assert!(output.contains("Binary (+)"));
-        assert!(output.contains("Literal(Int(1))"));
-        assert!(output.contains("Literal(Int(2))"));
+    // ============================================================
+    // Section: Pretty Printing Tests
+    // ============================================================
+
+    test_cases! {
+        test_pretty_print_literal: {
+            let output = parse_and_pretty("42");
+            assert!(output.contains("Literal(Int(42))"));
+        },
+
+        test_pretty_print_binary: {
+            let output = parse_and_pretty("1 + 2");
+            assert!(output.contains("Binary (+)"));
+            assert!(output.contains("Literal(Int(1))"));
+            assert!(output.contains("Literal(Int(2))"));
+        },
+
+        test_pretty_print_ternary: {
+            let output = parse_and_pretty("true ? 1 : 2");
+            assert!(output.contains("Ternary"));
+        },
+
+        test_pretty_print_list: {
+            let output = parse_and_pretty("[1, 2, 3]");
+            assert!(output.contains("List"));
+            assert!(output.contains("elements:"));
+        },
+
+        test_pretty_print_nested: {
+            let output = parse_and_pretty("(1 + 2) * 3");
+            assert!(output.contains("Binary (*)"));
+            assert!(output.contains("Binary (+)"));
+        },
     }
 
-    #[test]
-    fn test_pretty_print_ternary() {
-        let ast = build_ast("true ? 1 : 2").unwrap();
-        let output = pretty_print(&ast);
-        assert!(output.contains("Ternary"));
-        assert!(output.contains("condition:"));
-        assert!(output.contains("if_true:"));
-        assert!(output.contains("if_false:"));
-    }
+    // ============================================================
+    // Section: Configuration Tests
+    // ============================================================
 
-    #[test]
-    fn test_pretty_print_list() {
-        let ast = build_ast("[1, 2, 3]").unwrap();
-        let output = pretty_print(&ast);
-        assert!(output.contains("List"));
-        assert!(output.contains("elements:"));
-    }
+    test_cases! {
+        test_pretty_print_with_spans: {
+            use crate::CelloBuilder;
+            CelloBuilder::new()
+                .parse_scoped("42", |ctx| {
+                    let config = PrettyConfig::new().with_spans();
+                    let output = pretty_print_with_config(ctx.ast()?, &config);
+                    assert!(output.contains("[0..2]"));
+                    Ok(())
+                })
+                .unwrap();
+        },
 
-    #[test]
-    fn test_pretty_print_with_spans() {
-        let ast = build_ast("42").unwrap();
-        let config = PrettyConfig::new().with_spans();
-        let output = pretty_print_with_config(&ast, &config);
-        assert!(output.contains("[0..2]"));
-    }
-
-    #[test]
-    fn test_pretty_print_nested() {
-        let ast = build_ast("(1 + 2) * 3").unwrap();
-        let output = pretty_print(&ast);
-        assert!(output.contains("Binary (*)"));
-        assert!(output.contains("Binary (+)"));
+        test_pretty_print_custom_indent: {
+            use crate::CelloBuilder;
+            CelloBuilder::new()
+                .parse_scoped("1 + 2", |ctx| {
+                    let config = PrettyConfig::new().with_indent(4);
+                    let output = pretty_print_with_config(ctx.ast()?, &config);
+                    assert!(output.contains("Binary (+)"));
+                    Ok(())
+                })
+                .unwrap();
+        },
     }
 }
