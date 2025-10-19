@@ -8,9 +8,61 @@
 
 use crate::ast::Expr;
 use crate::error::Result;
-use crate::interner::StringInterner;
 use bumpalo::Bump;
 use std::cell::RefCell;
+use string_interner::{backend::StringBackend, StringInterner as InnerInterner};
+
+// ============================================================================
+// String Interner
+// ============================================================================
+
+/// String interner with deduplication
+///
+/// A thin wrapper around string-interner that provides lifetime-safe access.
+pub(crate) struct StringInterner<'arena> {
+    interner: InnerInterner<StringBackend>,
+    _phantom: std::marker::PhantomData<&'arena ()>,
+}
+
+impl<'arena> StringInterner<'arena> {
+    /// Create a new string interner
+    pub(crate) fn new() -> Self {
+        Self {
+            interner: InnerInterner::new(),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Intern a string, returning a reference with arena lifetime
+    ///
+    /// If the string has been interned before, returns the existing
+    /// reference. Otherwise, allocates and caches it.
+    ///
+    /// Note: The returned &str has 'arena lifetime because this StringInterner
+    /// is stored in CelloContext with 'arena lifetime.
+    pub(crate) fn intern(&mut self, s: &str) -> &'arena str {
+        let symbol = self.interner.get_or_intern(s);
+        // SAFETY: The string-interner stores strings with its own lifetime.
+        // Since self has 'arena lifetime (it's stored in CelloContext),
+        // the strings it returns also have 'arena lifetime.
+        // We transmute to make this explicit to the compiler.
+        unsafe {
+            std::mem::transmute::<&str, &'arena str>(
+                self.interner.resolve(symbol).expect("Symbol must resolve"),
+            )
+        }
+    }
+}
+
+impl<'arena> Default for StringInterner<'arena> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
+// Configuration Builder
+// ============================================================================
 
 /// Configuration builder for CEL parsing and evaluation
 ///
@@ -131,15 +183,7 @@ impl CelloBuilder {
     /// ```
     pub fn build(self) -> CelloContext {
         let arena = Bump::new();
-        // SAFETY: We create the interner with 'static lifetime, but it's actually
-        // tied to the arena. This is safe because:
-        // 1. Both arena and interner live in CelloContext
-        // 2. We reset both together
-        // 3. Interner references are transmuted back when accessed
-        let interner = unsafe {
-            let interner_ref = &arena as *const Bump;
-            StringInterner::new(&*interner_ref)
-        };
+        let interner = StringInterner::new();
 
         CelloContext {
             arena,
@@ -249,11 +293,8 @@ impl CelloContext {
         // Reset arena for new parse
         self.arena.reset();
 
-        // Reset interner with fresh arena reference
-        // This is necessary because the arena address may have changed if
-        // CelloContext was moved in memory.
-        let interner_arena: &'static Bump = unsafe { std::mem::transmute(&self.arena) };
-        self.interner.borrow_mut().reset_arena(interner_arena);
+        // Reset interner - just create a new one
+        *self.interner.borrow_mut() = StringInterner::new();
 
         self.input = Some(input.to_string());
         self.ast = None;
@@ -328,7 +369,8 @@ impl CelloContext {
     /// The arena and string interner are cleared.
     pub fn reset(&mut self) {
         self.arena.reset();
-        self.interner.borrow_mut().clear_cache();
+        // Reset interner - just create a new one
+        *self.interner.borrow_mut() = StringInterner::new();
         self.input = None;
         self.ast = None;
     }

@@ -10,8 +10,8 @@
 // - Identifier resolution: handled during evaluation
 
 use crate::ast::*;
+use crate::context::StringInterner;
 use crate::error::Result;
-use crate::interner::StringInterner;
 use crate::parser::{ParseConfig, Rule};
 use bumpalo::Bump;
 use pest::iterators::Pair;
@@ -362,7 +362,7 @@ fn build_expr<'arena>(
 
             match first.as_rule() {
                 Rule::literal => Ok(arena.alloc(Expr::new(
-                    ExprKind::Literal(build_literal(first, span, interner)?),
+                    ExprKind::Literal(build_literal(first, span, arena, interner)?),
                     span,
                 ))),
                 Rule::ident => {
@@ -449,7 +449,7 @@ fn build_expr<'arena>(
         }
 
         Rule::literal => Ok(arena.alloc(Expr::new(
-            ExprKind::Literal(build_literal(pair, span, interner)?),
+            ExprKind::Literal(build_literal(pair, span, arena, interner)?),
             span,
         ))),
         Rule::ident => Ok(arena.alloc(Expr::new(
@@ -465,6 +465,7 @@ fn build_expr<'arena>(
 fn build_literal<'arena>(
     pair: Pair<Rule>,
     span: Span,
+    arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<Literal<'arena>> {
     let inner = pair
@@ -506,7 +507,7 @@ fn build_literal<'arena>(
     };
 
     // Process the RawLiteral into a Literal, adding span information to any errors
-    crate::literal::process_literal(&raw_literal, &mut interner.borrow_mut())
+    crate::literal::process_literal(&raw_literal, &mut interner.borrow_mut(), arena)
         .map_err(|e| e.with_span(span))
 }
 
@@ -679,7 +680,7 @@ mod tests {
     // Test helper that leaks arena (acceptable in tests)
     fn build_ast(input: &str) -> Result<Expr<'static>> {
         let arena = Box::leak(Box::new(Bump::new()));
-        let interner = RefCell::new(StringInterner::new(arena));
+        let interner = RefCell::new(StringInterner::new());
         build_ast_with_arena(input, ParseConfig::default(), arena, &interner).cloned()
     }
 
