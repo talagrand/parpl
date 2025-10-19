@@ -48,9 +48,9 @@ pub enum ErrorKind {
     /// Call limit exceeded (DoS protection)
     CallLimitExceeded,
     /// Invalid escape sequence in string literal
-    InvalidEscape { sequence: String },
+    InvalidEscape { message: String },
     /// Invalid numeric literal
-    InvalidNumber { literal: String, reason: String },
+    InvalidNumber { literal: String },
     /// Undefined variable reference
     UndefinedVariable { name: String },
     /// Type mismatch during evaluation
@@ -148,15 +148,26 @@ impl Error {
     }
 
     /// Create an invalid number error
-    pub fn invalid_number(literal: String, reason: String, span: Span) -> Self {
+    pub fn invalid_number(literal: String) -> Self {
         Self {
             phase: Phase::AstConstruction,
             kind: ErrorKind::InvalidNumber {
                 literal: literal.clone(),
-                reason: reason.clone(),
             },
-            span: Some(span),
-            message: format!("Invalid number '{}': {}", literal, reason),
+            span: None,
+            message: format!("Invalid number: {}", literal),
+        }
+    }
+
+    /// Create an invalid escape sequence error
+    pub fn invalid_escape(message: String) -> Self {
+        Self {
+            phase: Phase::AstConstruction,
+            kind: ErrorKind::InvalidEscape {
+                message: message.clone(),
+            },
+            span: None,
+            message: format!("Invalid escape sequence: {}", message),
         }
     }
 }

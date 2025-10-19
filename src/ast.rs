@@ -100,8 +100,50 @@ pub enum ExprKind<'arena> {
         &'arena [(&'arena str, Expr<'arena>)],
     ),
 
-    /// Literal value
+    /// Literal value (processed and validated)
     Literal(Literal<'arena>),
+}
+
+/// Raw literal from the parser (unparsed strings)
+///
+/// This represents the literal as it appears in the source code, before any
+/// processing or validation. The ast_builder converts these to `Literal` nodes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RawLiteral<'arena> {
+    /// Integer literal: "123", "0xFF", "-456"
+    /// CEL Spec (line 145): INT_LIT ::= -? DIGIT+ | -? 0x HEXDIGIT+
+    Int(&'arena str),
+
+    /// Unsigned integer literal: "123", "0xFF" (without 'u' suffix)
+    /// CEL Spec (line 146): UINT_LIT ::= INT_LIT [uU]
+    UInt(&'arena str),
+
+    /// Floating-point literal: "3.14", "1e10", ".5"
+    /// CEL Spec (line 147): FLOAT_LIT
+    Float(&'arena str),
+
+    /// String literal: raw content between quotes
+    /// CEL Spec (lines 149-153): STRING_LIT
+    /// Stores: (content, is_raw, quote_style)
+    /// - content: the text between quotes (without the quotes themselves)
+    /// - is_raw: true if prefixed with r/R (no escape processing needed)
+    /// - quote_style: which quote delimiters were used
+    String(&'arena str, bool, QuoteStyle),
+
+    /// Bytes literal: raw content between quotes
+    /// CEL Spec (line 154): BYTES_LIT = [bB] STRING_LIT
+    /// Stores: (content, is_raw, quote_style)
+    Bytes(&'arena str, bool, QuoteStyle),
+
+    /// Boolean literal: true, false
+    /// CEL Spec (line 160): BOOL_LIT
+    /// Already processed by parser
+    Bool(bool),
+
+    /// Null literal: null
+    /// CEL Spec (line 161): NULL_LIT
+    /// Already processed by parser
+    Null,
 }
 
 /// Binary operators (in precedence order from spec)
@@ -185,40 +227,37 @@ impl fmt::Display for UnaryOp {
     }
 }
 
-/// Literal values (CEL spec lines 141-161)
+/// Processed literal values (validated and ready for evaluation)
 ///
+/// All numeric values are parsed, all escape sequences are processed.
 /// **Arena-allocated**: String data stored as `&'arena str` instead of `String`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal<'arena> {
-    /// Integer literal: 123, -456, 0xFF
+    /// Integer literal: parsed i64 value
     /// CEL Spec (line 143): INT_LIT = -? DIGIT+ | -? 0x HEXDIGIT+
-    /// Raw string from parser - parsing happens during value construction
-    Int(&'arena str),
+    /// Range: i64::MIN to i64::MAX
+    Int(i64),
 
-    /// Unsigned integer literal: 123u, 0xFFu
-    /// CEL Spec (line 144): UINT_LIT = INT_LIT \[uU\]
-    /// Raw string from parser (without 'u' suffix) - parsing happens during value construction
-    UInt(&'arena str),
+    /// Unsigned integer literal: parsed u64 value
+    /// CEL Spec (line 144): UINT_LIT = INT_LIT [uU]
+    /// Range: 0 to u64::MAX
+    UInt(u64),
 
-    /// Floating-point literal: 1.5, 1e10, -3.14e-2
+    /// Floating-point literal: parsed f64 value
     /// CEL Spec (line 145): FLOAT_LIT
-    /// Raw string from parser - parsing happens during value construction
-    Float(&'arena str),
+    /// IEEE 754 double-precision
+    Float(f64),
 
-    /// String literal: "hello", 'world', """multiline""", r"raw\n"
+    /// String literal: processed with escape sequences resolved
     /// CEL Spec (lines 149-153): STRING_LIT
-    /// **CEL-RESTRICTED**: Escape sequences processed during value construction
-    /// Stores: (raw_content, is_raw, quote_style)
-    /// - raw_content: the content between quotes (without quotes)
-    /// - is_raw: true if prefixed with r/R (no escape processing)
-    /// - quote_style: SingleQuote, DoubleQuote, TripleSingleQuote, TripleDoubleQuote
-    String(&'arena str, bool, QuoteStyle),
+    /// All escape sequences (\n, \t, \xHH, \uHHHH, \UHHHHHHHH, octal) are processed
+    String(&'arena str),
 
-    /// Bytes literal: b"hello", b'bytes', b"""multi"""
-    /// CEL Spec (line 154): BYTES_LIT = \[bB\] STRING_LIT
-    /// **CEL-RESTRICTED**: Escape sequences processed during value construction
-    /// Stores: (raw_content, is_raw, quote_style)
-    Bytes(&'arena str, bool, QuoteStyle),
+    /// Bytes literal: processed with escape sequences resolved
+    /// CEL Spec (line 154): BYTES_LIT = [bB] STRING_LIT
+    /// Octal and \xHH escapes represent byte values, Unicode escapes produce UTF-8
+    /// **IMPORTANT**: Bytes are arbitrary octet sequences, may not be valid UTF-8!
+    Bytes(&'arena [u8]),
 
     /// Boolean literal: true, false
     /// CEL Spec (line 160): BOOL_LIT

@@ -46,6 +46,16 @@ impl<'arena> StringInterner<'arena> {
         interned
     }
 
+    /// Allocate a byte slice in the arena
+    ///
+    /// Bytes are not interned/deduplicated since they're less common
+    /// and may contain arbitrary non-UTF-8 data.
+    ///
+    /// CEL Spec: Bytes are arbitrary sequences of octets, not UTF-8.
+    pub fn alloc_bytes(&self, bytes: &[u8]) -> &'arena [u8] {
+        self.arena.alloc_slice_copy(bytes)
+    }
+
     /// Clear the interning cache (arena is NOT cleared)
     ///
     /// This is useful if you want to reset interning state without

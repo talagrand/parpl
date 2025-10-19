@@ -183,30 +183,53 @@ fn print_expr(buf: &mut String, expr: &Expr, indent: usize, config: &PrettyConfi
 
 fn print_literal(buf: &mut String, lit: &Literal) {
     match lit {
-        Literal::Int(s) => buf.push_str(&format!("Literal(Int({}))\n", s)),
-        Literal::UInt(s) => buf.push_str(&format!("Literal(UInt({}))\n", s)),
-        Literal::Float(s) => buf.push_str(&format!("Literal(Float({}))\n", s)),
-        Literal::String(content, is_raw, style) => {
-            let prefix = if *is_raw { "r" } else { "" };
-            let quote = quote_char(*style);
+        Literal::Int(val) => buf.push_str(&format!("Literal(Int({}))\n", val)),
+        Literal::UInt(val) => buf.push_str(&format!("Literal(UInt({}))\n", val)),
+        Literal::Float(val) => buf.push_str(&format!("Literal(Float({}))\n", val)),
+        Literal::String(content) => {
             buf.push_str(&format!(
-                "Literal(String({}{}{}{}))\n",
-                prefix, quote, content, quote
+                "Literal(String(\"{}\"))\n",
+                escape_for_display(content)
             ));
         }
-        Literal::Bytes(content, is_raw, style) => {
-            let prefix = if *is_raw { "rb" } else { "b" };
-            let quote = quote_char(*style);
-            buf.push_str(&format!(
-                "Literal(Bytes({}{}{}{}))\n",
-                prefix, quote, content, quote
-            ));
+        Literal::Bytes(bytes) => {
+            // Convert bytes to displayable string, escaping non-printable bytes
+            let escaped = bytes
+                .iter()
+                .flat_map(|&b| {
+                    if b.is_ascii_graphic() || b == b' ' {
+                        vec![b as char]
+                    } else {
+                        // Show as \xHH for non-printable bytes
+                        format!("\\x{:02x}", b).chars().collect::<Vec<_>>()
+                    }
+                })
+                .collect::<String>();
+            buf.push_str(&format!("Literal(Bytes(b\"{}\"))\n", escaped));
         }
         Literal::Bool(b) => buf.push_str(&format!("Literal(Bool({}))\n", b)),
         Literal::Null => buf.push_str("Literal(Null)\n"),
     }
 }
 
+/// Escape string content for display (reverse of escape processing)
+fn escape_for_display(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| match c {
+            '\n' => vec!['\\', 'n'],
+            '\t' => vec!['\\', 't'],
+            '\r' => vec!['\\', 'r'],
+            '\\' => vec!['\\', '\\'],
+            '"' => vec!['\\', '"'],
+            c if c.is_control() => format!("\\x{:02X}", c as u32).chars().collect(),
+            c => vec![c],
+        })
+        .collect()
+}
+
+// Note: This function is currently unused as we've removed QuoteStyle from the processed Literal
+// It may be needed in the future for displaying diagnostics or raw literals
+#[allow(dead_code)]
 fn quote_char(style: QuoteStyle) -> &'static str {
     match style {
         QuoteStyle::SingleQuote => "'",

@@ -4,9 +4,9 @@
 // All allocations are done in a bumpalo arena, and strings are interned
 // for deduplication.
 //
-// Deferred processing:
-// - Escape sequences: handled during value construction (not here)
-// - Numeric parsing: strings stored as-is, parsed during value construction
+// Processing during AST construction:
+// - Escape sequences: processed immediately via literal::process_literal
+// - Numeric parsing: validated and parsed immediately
 // - Identifier resolution: handled during evaluation
 
 use crate::ast::*;
@@ -41,14 +41,16 @@ pub fn build_ast_with_arena<'arena>(
     let pair = pairs
         .into_iter()
         .next()
-        .expect("parse should return at least one pair (cel rule)");
+        .expect("Parser validated: successful parse returns at least one pair");
 
     // The cel rule contains: SOI ~ expr ~ EOI
     // Extract the expr
     let mut inner = pair.into_inner();
-    let expr_pair = inner.next().expect("cel rule should contain expr");
+    let expr_pair = inner
+        .next()
+        .expect("Parser validated: cel = { SOI ~ expr ~ EOI }");
 
-    Ok(build_expr(expr_pair, arena, interner))
+    build_expr(expr_pair, arena, interner)
 }
 
 /// Build an expression from a pest Pair
@@ -57,28 +59,36 @@ fn build_expr<'arena>(
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
-) -> &'arena Expr<'arena> {
+) -> Result<&'arena Expr<'arena>> {
     let span = span_from_pair(&pair);
 
     match pair.as_rule() {
         Rule::expr => {
             // expr = { conditional_or ~ ("?" ~ conditional_or ~ ":" ~ expr)? }
             let mut inner = pair.into_inner();
-            let condition = build_expr(inner.next().unwrap(), arena, interner);
+            let condition = build_expr(
+                inner
+                    .next()
+                    .expect("Parser validated: expr = { conditional_or ~ ... }"),
+                arena,
+                interner,
+            )?;
 
             // Check for ternary operator
             if let Some(if_true) = inner.next() {
-                let if_false = inner.next().unwrap();
-                arena.alloc(Expr::new(
+                let if_false = inner.next().expect(
+                    "Parser validated: expr = { ... ~ (\"?\" ~ conditional_or ~ \":\" ~ expr)? }",
+                );
+                Ok(arena.alloc(Expr::new(
                     ExprKind::Ternary(
                         condition,
-                        build_expr(if_true, arena, interner),
-                        build_expr(if_false, arena, interner),
+                        build_expr(if_true, arena, interner)?,
+                        build_expr(if_false, arena, interner)?,
                     ),
                     span,
-                ))
+                )))
             } else {
-                condition
+                Ok(condition)
             }
         }
 
@@ -95,7 +105,13 @@ fn build_expr<'arena>(
         Rule::relation => {
             // relation = { addition ~ (relop ~ addition)* }
             let mut inner = pair.into_inner();
-            let mut left = build_expr(inner.next().unwrap(), arena, interner);
+            let mut left = build_expr(
+                inner
+                    .next()
+                    .expect("Parser validated: relation = { addition ~ ... }"),
+                arena,
+                interner,
+            )?;
 
             while let Some(op_pair) = inner.next() {
                 let op = match op_pair.as_str() {
@@ -108,17 +124,29 @@ fn build_expr<'arena>(
                     "in" => BinaryOp::In,
                     _ => unreachable!("unexpected relop: {}", op_pair.as_str()),
                 };
-                let right = build_expr(inner.next().unwrap(), arena, interner);
+                let right = build_expr(
+                    inner
+                        .next()
+                        .expect("Parser validated: relation = { ... ~ (relop ~ addition)* }"),
+                    arena,
+                    interner,
+                )?;
                 left = alloc_binary(arena, op, left, right, span);
             }
 
-            left
+            Ok(left)
         }
 
         Rule::addition => {
             // addition = { multiplication ~ (("+" | "-") ~ multiplication)* }
             let mut inner = pair.into_inner();
-            let mut left = build_expr(inner.next().unwrap(), arena, interner);
+            let mut left = build_expr(
+                inner
+                    .next()
+                    .expect("Parser validated: addition = { multiplication ~ ... }"),
+                arena,
+                interner,
+            )?;
 
             while let Some(next) = inner.next() {
                 let op = match next.as_str() {
@@ -134,23 +162,35 @@ fn build_expr<'arena>(
                                 BinaryOp::Subtract
                             },
                             left,
-                            build_expr(next, arena, interner),
+                            build_expr(next, arena, interner)?,
                             span,
                         );
                         continue;
                     }
                 };
-                let right = build_expr(inner.next().unwrap(), arena, interner);
+                let right = build_expr(
+                    inner
+                        .next()
+                        .expect("Parser validated: addition = { ... ~ ((\" +\" | \"-\") ~ multiplication)* }"),
+                    arena,
+                    interner,
+                )?;
                 left = alloc_binary(arena, op, left, right, span);
             }
 
-            left
+            Ok(left)
         }
 
         Rule::multiplication => {
             // multiplication = { unary ~ (("*" | "/" | "%") ~ unary)* }
             let mut inner = pair.into_inner();
-            let mut left = build_expr(inner.next().unwrap(), arena, interner);
+            let mut left = build_expr(
+                inner
+                    .next()
+                    .expect("Parser validated: multiplication = { unary ~ ... }"),
+                arena,
+                interner,
+            )?;
 
             while let Some(next) = inner.next() {
                 let op = match next.as_str() {
@@ -163,36 +203,68 @@ fn build_expr<'arena>(
                             arena,
                             BinaryOp::Multiply,
                             left,
-                            build_expr(next, arena, interner),
+                            build_expr(next, arena, interner)?,
                             span,
                         );
                         continue;
                     }
                 };
-                let right = build_expr(inner.next().unwrap(), arena, interner);
+                let right = build_expr(
+                    inner.next().expect(
+                        "Parser validated: multiplication = { ... ~ ((\"*\" | \"/\" | \"%\") ~ unary)* }",
+                    ),
+                    arena,
+                    interner,
+                )?;
                 left = alloc_binary(arena, op, left, right, span);
             }
 
-            left
+            Ok(left)
         }
 
         Rule::unary => {
             // unary = { member | "!"+ ~ member | "-"+ ~ member }
             let mut inner = pair.into_inner();
-            let first = inner.next().unwrap();
+            let first = inner.next().expect(
+                "Parser validated: unary = { member | \"!\"+  ~ member | \"-\"+ ~ member }",
+            );
 
             match first.as_str() {
                 s if s.chars().all(|c| c == '!') => {
                     let count = s.len();
-                    let operand = build_expr(inner.next().unwrap(), arena, interner);
+                    let operand = build_expr(
+                        inner
+                            .next()
+                            .expect("Parser validated: unary = { ... | \"!\"+ ~ member | ... }"),
+                        arena,
+                        interner,
+                    )?;
                     // Apply NOT count times (!! cancels out)
-                    apply_unary_repeated(arena, UnaryOp::Not, count, operand, span)
+                    Ok(apply_unary_repeated(
+                        arena,
+                        UnaryOp::Not,
+                        count,
+                        operand,
+                        span,
+                    ))
                 }
                 s if s.chars().all(|c| c == '-') => {
                     let count = s.len();
-                    let operand = build_expr(inner.next().unwrap(), arena, interner);
+                    let operand = build_expr(
+                        inner
+                            .next()
+                            .expect("Parser validated: unary = { ... | \"-\"+ ~ member }"),
+                        arena,
+                        interner,
+                    )?;
                     // Apply Negate count times (-- cancels out)
-                    apply_unary_repeated(arena, UnaryOp::Negate, count, operand, span)
+                    Ok(apply_unary_repeated(
+                        arena,
+                        UnaryOp::Negate,
+                        count,
+                        operand,
+                        span,
+                    ))
                 }
                 _ => build_expr(first, arena, interner), // It's a member expression
             }
@@ -201,13 +273,21 @@ fn build_expr<'arena>(
         Rule::member => {
             // member = { primary ~ ("." ~ selector ~ ("(" ~ expr_list? ~ ")")? | "[" ~ expr ~ "]")* }
             let mut inner = pair.into_inner();
-            let mut expr = build_expr(inner.next().unwrap(), arena, interner);
+            let mut expr = build_expr(
+                inner
+                    .next()
+                    .expect("Parser validated: member = { primary ~ ... }"),
+                arena,
+                interner,
+            )?;
 
             while let Some(next) = inner.next() {
                 match next.as_str() {
                     "." => {
                         // Field access or method call
-                        let selector = inner.next().unwrap();
+                        let selector = inner.next().expect(
+                            "Parser validated: member = { ... ~ (\".\" ~ selector ~ ...)* }",
+                        );
                         let field_name = interner.borrow_mut().intern(selector.as_str());
 
                         // Check if there's a function call
@@ -216,7 +296,13 @@ fn build_expr<'arena>(
                                 inner.next(); // consume "("
                                 let args = if let Some(args_pair) = inner.peek() {
                                     if args_pair.as_rule() == Rule::expr_list {
-                                        build_expr_list(inner.next().unwrap(), arena, interner)
+                                        build_expr_list(
+                                            inner.next().expect(
+                                                "Parser validated: member = { ... ~ (\"(\" ~ expr_list? ~ \")\")? }",
+                                            ),
+                                            arena,
+                                            interner,
+                                        )?
                                     } else {
                                         &[]
                                     }
@@ -246,7 +332,13 @@ fn build_expr<'arena>(
                     }
                     "[" => {
                         // Index access
-                        let index = build_expr(inner.next().unwrap(), arena, interner);
+                        let index = build_expr(
+                            inner.next().expect(
+                                "Parser validated: member = { ... ~ (\"[\" ~ expr ~ \"]\")* }",
+                            ),
+                            arena,
+                            interner,
+                        )?;
                         // "]" is implicit
                         let new_span = expr.span.combine(&span);
                         expr = arena.alloc(Expr::new(ExprKind::Index(expr, index), new_span));
@@ -258,19 +350,21 @@ fn build_expr<'arena>(
                 }
             }
 
-            expr
+            Ok(expr)
         }
 
         Rule::primary => {
             // primary = { literal | "."? ~ ident ~ ("(" ~ expr_list? ~ ")")? | ... }
             let mut inner = pair.into_inner();
-            let first = inner.next().unwrap();
+            let first = inner
+                .next()
+                .expect("Parser validated: primary = { literal | ... | \"(\" ~ expr ~ \")\" | \"[\" ~ expr_list? ~ \",\"? ~ \"]\" | \"{\" ~ map_inits? ~ \",\"? ~ \"}\" | ... }");
 
             match first.as_rule() {
-                Rule::literal => arena.alloc(Expr::new(
-                    ExprKind::Literal(build_literal(first, span, interner)),
+                Rule::literal => Ok(arena.alloc(Expr::new(
+                    ExprKind::Literal(build_literal(first, span, interner)?),
                     span,
-                )),
+                ))),
                 Rule::ident => {
                     let name = interner.borrow_mut().intern(first.as_str());
                     // Check for function call
@@ -278,28 +372,34 @@ fn build_expr<'arena>(
                         inner.next(); // consume "("
                         let args = if let Some(args_pair) = inner.peek() {
                             if args_pair.as_rule() == Rule::expr_list {
-                                build_expr_list(inner.next().unwrap(), arena, interner)
+                                build_expr_list(
+                                    inner.next().expect(
+                                        "Parser validated: primary = { ... ~ \"(\" ~ expr_list? ~ \")\" }",
+                                    ),
+                                    arena,
+                                    interner,
+                                )?
                             } else {
                                 &[]
                             }
                         } else {
                             &[]
                         };
-                        arena.alloc(Expr::new(ExprKind::Call(None, name, args), span))
+                        Ok(arena.alloc(Expr::new(ExprKind::Call(None, name, args), span)))
                     } else {
-                        arena.alloc(Expr::new(ExprKind::Ident(name), span))
+                        Ok(arena.alloc(Expr::new(ExprKind::Ident(name), span)))
                     }
                 }
                 Rule::expr => build_expr(first, arena, interner), // Parenthesized expression
                 Rule::expr_list => {
                     // List literal: [expr, ...]
-                    let items = build_expr_list(first, arena, interner);
-                    arena.alloc(Expr::new(ExprKind::List(items), span))
+                    let items = build_expr_list(first, arena, interner)?;
+                    Ok(arena.alloc(Expr::new(ExprKind::List(items), span)))
                 }
                 Rule::map_inits => {
                     // Map literal: {key: value, ...}
-                    let entries = build_map_inits(first, arena, interner);
-                    arena.alloc(Expr::new(ExprKind::Map(entries), span))
+                    let entries = build_map_inits(first, arena, interner)?;
+                    Ok(arena.alloc(Expr::new(ExprKind::Map(entries), span)))
                 }
                 _ => {
                     // Handle other primary forms
@@ -308,28 +408,38 @@ fn build_expr<'arena>(
                             // Empty list or list with items
                             if let Some(list_pair) = inner.peek() {
                                 if list_pair.as_rule() == Rule::expr_list {
-                                    let items =
-                                        build_expr_list(inner.next().unwrap(), arena, interner);
-                                    arena.alloc(Expr::new(ExprKind::List(items), span))
+                                    let items = build_expr_list(
+                                        inner.next().expect(
+                                            "Parser validated: primary = { ... ~ \"[\" ~ expr_list? ~ \",\"? ~ \"]\" }",
+                                        ),
+                                        arena,
+                                        interner,
+                                    )?;
+                                    Ok(arena.alloc(Expr::new(ExprKind::List(items), span)))
                                 } else {
-                                    arena.alloc(Expr::new(ExprKind::List(&[]), span))
+                                    Ok(arena.alloc(Expr::new(ExprKind::List(&[]), span)))
                                 }
                             } else {
-                                arena.alloc(Expr::new(ExprKind::List(&[]), span))
+                                Ok(arena.alloc(Expr::new(ExprKind::List(&[]), span)))
                             }
                         }
                         "{" => {
                             // Empty map or map with entries
                             if let Some(map_pair) = inner.peek() {
                                 if map_pair.as_rule() == Rule::map_inits {
-                                    let entries =
-                                        build_map_inits(inner.next().unwrap(), arena, interner);
-                                    arena.alloc(Expr::new(ExprKind::Map(entries), span))
+                                    let entries = build_map_inits(
+                                        inner.next().expect(
+                                            "Parser validated: primary = { ... ~ \"{\" ~ map_inits? ~ \",\"? ~ \"}\" }",
+                                        ),
+                                        arena,
+                                        interner,
+                                    )?;
+                                    Ok(arena.alloc(Expr::new(ExprKind::Map(entries), span)))
                                 } else {
-                                    arena.alloc(Expr::new(ExprKind::Map(&[]), span))
+                                    Ok(arena.alloc(Expr::new(ExprKind::Map(&[]), span)))
                                 }
                             } else {
-                                arena.alloc(Expr::new(ExprKind::Map(&[]), span))
+                                Ok(arena.alloc(Expr::new(ExprKind::Map(&[]), span)))
                             }
                         }
                         _ => unreachable!("unexpected primary: {}", first.as_str()),
@@ -338,14 +448,14 @@ fn build_expr<'arena>(
             }
         }
 
-        Rule::literal => arena.alloc(Expr::new(
-            ExprKind::Literal(build_literal(pair, span, interner)),
+        Rule::literal => Ok(arena.alloc(Expr::new(
+            ExprKind::Literal(build_literal(pair, span, interner)?),
             span,
-        )),
-        Rule::ident => arena.alloc(Expr::new(
+        ))),
+        Rule::ident => Ok(arena.alloc(Expr::new(
             ExprKind::Ident(interner.borrow_mut().intern(pair.as_str())),
             span,
-        )),
+        ))),
 
         _ => unreachable!("unexpected rule in build_expr: {:?}", pair.as_rule()),
     }
@@ -354,34 +464,50 @@ fn build_expr<'arena>(
 /// Build a literal expression
 fn build_literal<'arena>(
     pair: Pair<Rule>,
-    _span: Span,
+    span: Span,
     interner: &RefCell<StringInterner<'arena>>,
-) -> Literal<'arena> {
-    let inner = pair.into_inner().next().unwrap();
+) -> Result<Literal<'arena>> {
+    let inner = pair
+        .into_inner()
+        .next()
+        .expect("Parser validated: literal = { float_lit | uint_lit | int_lit | bytes_lit | string_lit | bool_lit | null_lit }");
 
-    match inner.as_rule() {
-        Rule::int_lit => Literal::Int(interner.borrow_mut().intern(inner.as_str())),
+    // First, create a RawLiteral from the parser output
+    let raw_literal = match inner.as_rule() {
+        Rule::int_lit => RawLiteral::Int(interner.borrow_mut().intern(inner.as_str())),
         Rule::uint_lit => {
-            // Remove the 'u' suffix
+            // Remove the 'u' suffix using strip_suffix
             let s = inner.as_str();
-            Literal::UInt(interner.borrow_mut().intern(&s[..s.len() - 1]))
+            let s_without_suffix = s
+                .strip_suffix('u')
+                .or_else(|| s.strip_suffix('U'))
+                .expect("Parser validated: uint_lit ends with 'u' or 'U'");
+            RawLiteral::UInt(interner.borrow_mut().intern(s_without_suffix))
         }
-        Rule::float_lit => Literal::Float(interner.borrow_mut().intern(inner.as_str())),
+        Rule::float_lit => RawLiteral::Float(interner.borrow_mut().intern(inner.as_str())),
         Rule::string_lit => {
             let s = inner.as_str();
             let (content, is_raw, quote_style) = parse_string_literal(s, interner);
-            Literal::String(content, is_raw, quote_style)
+            RawLiteral::String(content, is_raw, quote_style)
         }
         Rule::bytes_lit => {
-            // Skip the 'b' or 'B' prefix
-            let s = &inner.as_str()[1..];
+            // Skip the 'b' or 'B' prefix using strip_prefix
+            let s = inner
+                .as_str()
+                .strip_prefix('b')
+                .or_else(|| inner.as_str().strip_prefix('B'))
+                .expect("Parser validated: bytes_lit starts with 'b' or 'B'");
             let (content, is_raw, quote_style) = parse_string_literal(s, interner);
-            Literal::Bytes(content, is_raw, quote_style)
+            RawLiteral::Bytes(content, is_raw, quote_style)
         }
-        Rule::bool_lit => Literal::Bool(inner.as_str() == "true"),
-        Rule::null_lit => Literal::Null,
+        Rule::bool_lit => RawLiteral::Bool(inner.as_str() == "true"),
+        Rule::null_lit => RawLiteral::Null,
         _ => unreachable!("unexpected literal rule: {:?}", inner.as_rule()),
-    }
+    };
+
+    // Process the RawLiteral into a Literal, adding span information to any errors
+    crate::literal::process_literal(&raw_literal, &mut interner.borrow_mut())
+        .map_err(|e| e.with_span(span))
 }
 
 /// Parse a string literal, extracting content, raw flag, and quote style
@@ -392,17 +518,34 @@ fn parse_string_literal<'arena>(
     s: &str,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> (&'arena str, bool, QuoteStyle) {
-    let is_raw = s.starts_with('r') || s.starts_with('R');
-    let s = if is_raw { &s[1..] } else { s };
+    // Check for raw string prefix using pattern matching
+    let (s, is_raw) = if let Some(rest) = s.strip_prefix('r').or_else(|| s.strip_prefix('R')) {
+        (rest, true)
+    } else {
+        (s, false)
+    };
 
-    let (content, quote_style) = if s.starts_with("\"\"\"") {
-        (&s[3..s.len() - 3], QuoteStyle::TripleDoubleQuote)
-    } else if s.starts_with("'''") {
-        (&s[3..s.len() - 3], QuoteStyle::TripleSingleQuote)
-    } else if s.starts_with('"') {
-        (&s[1..s.len() - 1], QuoteStyle::DoubleQuote)
-    } else if s.starts_with('\'') {
-        (&s[1..s.len() - 1], QuoteStyle::SingleQuote)
+    // Match quote style and extract content using strip_prefix/strip_suffix
+    let (content, quote_style) = if let Some(rest) = s.strip_prefix("\"\"\"") {
+        let content = rest
+            .strip_suffix("\"\"\"")
+            .expect("Parser validated: triple-quoted string ends with \"\"\"");
+        (content, QuoteStyle::TripleDoubleQuote)
+    } else if let Some(rest) = s.strip_prefix("'''") {
+        let content = rest
+            .strip_suffix("'''")
+            .expect("Parser validated: triple-quoted string ends with '''");
+        (content, QuoteStyle::TripleSingleQuote)
+    } else if let Some(rest) = s.strip_prefix('"') {
+        let content = rest
+            .strip_suffix('"')
+            .expect("Parser validated: double-quoted string ends with \"");
+        (content, QuoteStyle::DoubleQuote)
+    } else if let Some(rest) = s.strip_prefix('\'') {
+        let content = rest
+            .strip_suffix('\'')
+            .expect("Parser validated: single-quoted string ends with '");
+        (content, QuoteStyle::SingleQuote)
     } else {
         unreachable!("invalid string literal: {}", s)
     };
@@ -418,13 +561,15 @@ fn build_expr_list<'arena>(
     pair: Pair<Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
-) -> &'arena [Expr<'arena>] {
-    let exprs: Vec<&Expr<'arena>> = pair
+) -> Result<&'arena [Expr<'arena>]> {
+    let exprs: Result<Vec<&Expr<'arena>>> = pair
         .into_inner()
         .map(|p| build_expr(p, arena, interner))
         .collect();
+    let exprs = exprs?;
 
-    arena.alloc_slice_fill_with(exprs.len(), |i| exprs[i].clone())
+    // Use iterator instead of indexing
+    Ok(arena.alloc_slice_fill_iter(exprs.iter().map(|e| (*e).clone())))
 }
 
 /// Build map initializers - collect into std Vec, then clone into arena slice
@@ -435,21 +580,22 @@ fn build_map_inits<'arena>(
     pair: Pair<Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
-) -> &'arena [(Expr<'arena>, Expr<'arena>)] {
+) -> Result<&'arena [(Expr<'arena>, Expr<'arena>)]> {
     let mut inner = pair.into_inner();
     let mut entries: Vec<(&Expr<'arena>, &Expr<'arena>)> = Vec::new();
 
     while let Some(key) = inner.next() {
-        let value = inner.next().unwrap();
+        let value = inner
+            .next()
+            .expect("Parser validated: map_inits = { expr ~ \":\" ~ expr ~ ... }");
         entries.push((
-            build_expr(key, arena, interner),
-            build_expr(value, arena, interner),
+            build_expr(key, arena, interner)?,
+            build_expr(value, arena, interner)?,
         ));
     }
 
-    arena.alloc_slice_fill_with(entries.len(), |i| {
-        (entries[i].0.clone(), entries[i].1.clone())
-    })
+    // Use iterator instead of indexing
+    Ok(arena.alloc_slice_fill_iter(entries.iter().map(|(k, v)| ((*k).clone(), (*v).clone()))))
 }
 
 /// Extract span from a pest Pair
@@ -501,17 +647,29 @@ fn build_binary_chain<'arena>(
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
     op: BinaryOp,
-) -> &'arena Expr<'arena> {
+) -> Result<&'arena Expr<'arena>> {
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
-    let mut left = build_expr(inner.next().unwrap(), arena, interner);
+    let mut left = build_expr(
+        inner
+            .next()
+            .expect("Parser validated: conditional_or/conditional_and = { ... ~ ... }"),
+        arena,
+        interner,
+    )?;
 
     while inner.peek().is_some() {
-        let right = build_expr(inner.next().unwrap(), arena, interner);
+        let right = build_expr(
+            inner
+                .next()
+                .expect("Parser validated: conditional_or/conditional_and = { ... ~ (op ~ ...)* }"),
+            arena,
+            interner,
+        )?;
         left = alloc_binary(arena, op, left, right, span);
     }
 
-    left
+    Ok(left)
 }
 
 #[cfg(test)]
@@ -544,17 +702,15 @@ mod tests {
     test_cases! {
         test_build_ast_literal_int: "42" => |ast| {
             match ast.kind {
-                ExprKind::Literal(Literal::Int(s)) => assert_eq!(s, "42"),
+                ExprKind::Literal(Literal::Int(val)) => assert_eq!(val, 42),
                 _ => panic!("expected int literal"),
             }
         },
 
         test_build_ast_literal_string: r#""hello""# => |ast| {
             match ast.kind {
-                ExprKind::Literal(Literal::String(content, is_raw, quote)) => {
+                ExprKind::Literal(Literal::String(content)) => {
                     assert_eq!(content, "hello");
-                    assert!(!is_raw);
-                    assert_eq!(quote, QuoteStyle::DoubleQuote);
                 }
                 _ => panic!("expected string literal"),
             }
@@ -565,11 +721,11 @@ mod tests {
                 ExprKind::Binary(op, left, right) => {
                     assert_eq!(op, BinaryOp::Add);
                     match left.kind {
-                        ExprKind::Literal(Literal::Int(s)) => assert_eq!(s, "1"),
+                        ExprKind::Literal(Literal::Int(val)) => assert_eq!(val, 1),
                         _ => panic!("expected int literal for left"),
                     }
                     match right.kind {
-                        ExprKind::Literal(Literal::Int(s)) => assert_eq!(s, "2"),
+                        ExprKind::Literal(Literal::Int(val)) => assert_eq!(val, 2),
                         _ => panic!("expected int literal for right"),
                     }
                 }
@@ -585,11 +741,11 @@ mod tests {
                         _ => panic!("expected true literal"),
                     }
                     match if_true.kind {
-                        ExprKind::Literal(Literal::Int(s)) => assert_eq!(s, "1"),
+                        ExprKind::Literal(Literal::Int(val)) => assert_eq!(val, 1),
                         _ => panic!("expected int literal"),
                     }
                     match if_false.kind {
-                        ExprKind::Literal(Literal::Int(s)) => assert_eq!(s, "2"),
+                        ExprKind::Literal(Literal::Int(val)) => assert_eq!(val, 2),
                         _ => panic!("expected int literal"),
                     }
                 }

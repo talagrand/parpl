@@ -82,7 +82,9 @@ pub fn parse_with_config(input: &str, config: ParseConfig) -> Result<Pairs<'_, R
     // - 24-32 repetitions of repeating rules (we support 48-64)
     // - 12 repetitions of recursive rules (we support 24)
     pest::set_call_limit(Some(
-        NonZeroUsize::new(config.max_call_limit).unwrap_or(NonZeroUsize::new(10_000_000).unwrap()),
+        NonZeroUsize::new(config.max_call_limit).unwrap_or_else(|| {
+            NonZeroUsize::new(10_000_000).expect("10_000_000 is non-zero and a valid call limit")
+        }),
     ));
 
     // Pre-validate nesting depth to prevent stack overflow

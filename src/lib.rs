@@ -5,6 +5,7 @@ mod ast_builder;
 pub mod context;
 pub mod error;
 mod interner;
+mod literal;
 pub mod parser;
 pub mod pretty;
 
