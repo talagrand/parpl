@@ -26,7 +26,7 @@ pub struct ParseConfig {
 impl Default for ParseConfig {
     fn default() -> Self {
         Self {
-            max_nesting_depth: 50,
+            max_nesting_depth: crate::constants::DEFAULT_MAX_RECURSION_DEPTH,
             max_call_limit: 10_000_000,
         }
     }
@@ -97,7 +97,7 @@ pub fn parse_with_config(input: &str, config: ParseConfig) -> Result<Pairs<'_, R
 
 /// Validate that input doesn't exceed maximum nesting depth
 ///
-/// **CEL-RESTRICTED**: We limit nesting depth to 50 (spec requires 12 minimum).
+/// Default limit: 24 (2x CEL spec minimum of 12, per langdef.md line 107).
 /// This prevents stack overflow from deeply nested parentheses, brackets, or
 /// ternary expressions.
 ///
@@ -316,27 +316,27 @@ line""""#
         let long_id = "a".repeat(1000);
         let _ = parse(&long_id);
 
-        // Moderately nested parentheses (50 levels - at our depth limit)
-        let deep_parens = format!("{}1{}", "(".repeat(50), ")".repeat(50));
+        // Moderately nested parentheses (24 levels - at our depth limit)
+        let deep_parens = format!("{}1{}", "(".repeat(24), ")".repeat(24));
         assert!(
             parse(&deep_parens).is_ok(),
-            "Should handle 50 nested parentheses"
+            "Should handle 24 nested parentheses"
         );
     }
 
     // ============================================================
     // Section: Nesting Depth Validation
-    // CEL spec requires 12 recursive repetitions, we support 50
+    // CEL spec requires 12 recursive repetitions, we default to 24 (2x)
     // ============================================================
 
     #[test]
     fn test_nesting_depth_limit_parentheses() {
-        // 50 nested parens should work (at limit)
-        let at_limit = format!("{}1{}", "(".repeat(50), ")".repeat(50));
-        assert!(parse(&at_limit).is_ok(), "Should accept 50 nested parens");
+        // 24 nested parens should work (at limit)
+        let at_limit = format!("{}1{}", "(".repeat(24), ")".repeat(24));
+        assert!(parse(&at_limit).is_ok(), "Should accept 24 nested parens");
 
-        // 51 nested parens should fail
-        let over_limit = format!("{}1{}", "(".repeat(51), ")".repeat(51));
+        // 25 nested parens should fail
+        let over_limit = format!("{}1{}", "(".repeat(25), ")".repeat(25));
         test_util::assert_error_contains(&over_limit, "Nesting depth");
         test_util::assert_error_contains(&over_limit, "exceeds maximum");
     }
@@ -344,13 +344,13 @@ line""""#
     #[test]
     fn test_nesting_depth_limit_brackets() {
         // Test nested brackets (list indexing)
-        let at_limit = format!("{}x{}", "[".repeat(50), "]".repeat(50));
-        assert!(parse(&at_limit).is_ok(), "Should accept 50 nested brackets");
+        let at_limit = format!("{}x{}", "[".repeat(24), "]".repeat(24));
+        assert!(parse(&at_limit).is_ok(), "Should accept 24 nested brackets");
 
-        let over_limit = format!("{}x{}", "[".repeat(51), "]".repeat(51));
+        let over_limit = format!("{}x{}", "[".repeat(25), "]".repeat(25));
         assert!(
             parse(&over_limit).is_err(),
-            "Should reject 51 nested brackets"
+            "Should reject 25 nested brackets"
         );
     }
 
@@ -358,26 +358,26 @@ line""""#
     fn test_nesting_depth_limit_braces() {
         // Test nested braces (map literals)
         // Use lists inside maps to avoid ternary operator parsing issues
-        let at_limit = format!("{{1:{}}}", "[".repeat(49) + "x" + &"]".repeat(49));
+        let at_limit = format!("{{1:{}}}", "[".repeat(23) + "x" + &"]".repeat(23));
         assert!(
             parse(&at_limit).is_ok(),
-            "Should accept 50 total nesting depth (1 brace + 49 brackets)"
+            "Should accept 24 total nesting depth (1 brace + 23 brackets)"
         );
 
-        let over_limit = format!("{{1:{}}}", "[".repeat(50) + "x" + &"]".repeat(50));
+        let over_limit = format!("{{1:{}}}", "[".repeat(24) + "x" + &"]".repeat(24));
         assert!(
             parse(&over_limit).is_err(),
-            "Should reject 51 total nesting depth (1 brace + 50 brackets)"
+            "Should reject 25 total nesting depth (1 brace + 24 brackets)"
         );
     }
 
     #[test]
     fn test_nesting_depth_mixed_delimiters() {
         // Mixed delimiters should count toward total depth
-        let mixed = "(".repeat(25) + &"[".repeat(25) + "1" + &"]".repeat(25) + &")".repeat(25);
+        let mixed = "(".repeat(12) + &"[".repeat(12) + "1" + &"]".repeat(12) + &")".repeat(12);
         assert!(
             parse(&mixed).is_ok(),
-            "Should accept 50 total nesting depth"
+            "Should accept 24 total nesting depth"
         );
 
         let mixed_over = "(".repeat(26) + &"[".repeat(25) + "1" + &"]".repeat(25) + &")".repeat(26);

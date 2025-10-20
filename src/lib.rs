@@ -2,6 +2,7 @@
 
 pub mod ast;
 mod ast_builder;
+pub mod constants;
 pub mod context;
 pub mod error;
 mod literal;

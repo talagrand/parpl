@@ -53,328 +53,396 @@ pub fn build_ast_with_arena<'arena>(
     build_expr(expr_pair, arena, interner)
 }
 
-/// Build an expression from a pest Pair
-/// Main recursive function to build an Expr from a pest Pair
+// ============================================================================
+// EXPRESSION PRECEDENCE CHAIN (CEL Spec lines 68-94)
+// ============================================================================
+//
+// Precedence from lowest to highest (each function calls the next level):
+//
+//   1. build_expr_ternary     - Ternary: a ? b : c
+//   2. build_conditional_or   - Logical OR: ||
+//   3. build_conditional_and  - Logical AND: &&
+//   4. build_relation         - Comparisons: <, <=, >, >=, ==, !=, in
+//   5. build_addition         - Addition/Subtraction: +, -
+//   6. build_multiplication   - Multiply/Divide/Modulo: *, /, %
+//   7. build_unary            - Unary operators: !, -
+//   8. build_member           - Member access/indexing: .field, [index]
+//   9. build_primary          - Literals, identifiers, parentheses
+//
+// KEY OPTIMIZATION: Each function calls the NEXT precedence level directly,
+// not through build_expr(). This eliminates the dispatch overhead.
+//
+// Previously, every level called build_expr() which dispatched through a
+// giant match statement, causing ~10 stack frames per nesting level.
+// Now we get ~1 stack frame per nesting level, allowing 10x deeper nesting.
+//
+// ONLY build_primary() calls build_expr() for parenthesized expressions,
+// which need to start at the top of the precedence chain.
+//
+// TO ADD NEW PRECEDENCE LEVEL:
+//   1. Create new build_foo() function
+//   2. Make it call the next level down
+//   3. Update the level above to call your new function
+//   4. Add Rule::foo case to build_expr() dispatch
+//   5. Update this comment
+//
+// ============================================================================
+
+/// Build an expression from a pest Pair (dispatch entry point)
+///
+/// This function dispatches to the appropriate precedence level based on
+/// the rule type. It should only be called from:
+///   1. build_ast_with_arena() - top-level entry point
+///   2. build_primary() - for parenthesized expressions
+///
+/// All other cases call precedence-level functions directly.
 fn build_expr<'arena>(
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<&'arena Expr<'arena>> {
-    let span = span_from_pair(&pair);
-
     match pair.as_rule() {
-        Rule::expr => {
-            // expr = { conditional_or ~ ("?" ~ conditional_or ~ ":" ~ expr)? }
-            let mut inner = pair.into_inner();
-            let condition = build_expr(
-                inner
-                    .next()
-                    .expect("Parser validated: expr = { conditional_or ~ ... }"),
-                arena,
-                interner,
-            )?;
-
-            // Check for ternary operator
-            if let Some(if_true) = inner.next() {
-                let if_false = inner.next().expect(
-                    "Parser validated: expr = { ... ~ (\"?\" ~ conditional_or ~ \":\" ~ expr)? }",
-                );
-                Ok(arena.alloc(Expr::new(
-                    ExprKind::Ternary(
-                        condition,
-                        build_expr(if_true, arena, interner)?,
-                        build_expr(if_false, arena, interner)?,
-                    ),
-                    span,
-                )))
-            } else {
-                Ok(condition)
-            }
+        Rule::expr => build_expr_ternary(pair, arena, interner),
+        Rule::conditional_or => build_conditional_or(pair, arena, interner),
+        Rule::conditional_and => build_conditional_and(pair, arena, interner),
+        Rule::relation => build_relation(pair, arena, interner),
+        Rule::addition => build_addition(pair, arena, interner),
+        Rule::multiplication => build_multiplication(pair, arena, interner),
+        Rule::unary => build_unary(pair, arena, interner),
+        Rule::member => build_member(pair, arena, interner),
+        Rule::primary => build_primary(pair, arena, interner),
+        Rule::literal => {
+            let span = span_from_pair(&pair);
+            Ok(arena.alloc(Expr::new(
+                ExprKind::Literal(build_literal(pair, span, arena, interner)?),
+                span,
+            )))
         }
-
-        Rule::conditional_or => {
-            // conditional_or = { conditional_and ~ ("||" ~ conditional_and)* }
-            build_binary_chain(pair, arena, interner, BinaryOp::LogicalOr)
+        Rule::ident => {
+            let span = span_from_pair(&pair);
+            let name = interner.borrow_mut().intern(pair.as_str());
+            Ok(arena.alloc(Expr::new(ExprKind::Ident(name), span)))
         }
+        _ => unreachable!("Unexpected rule in build_expr: {:?}", pair.as_rule()),
+    }
+}
 
-        Rule::conditional_and => {
-            // conditional_and = { relation ~ ("&&" ~ relation)* }
-            build_binary_chain(pair, arena, interner, BinaryOp::LogicalAnd)
-        }
+/// Build ternary conditional expression (top of precedence chain)
+/// CEL Spec: expr = { conditional_or ~ ("?" ~ conditional_or ~ ":" ~ expr)? }
+fn build_expr_ternary<'arena>(
+    pair: pest::iterators::Pair<'_, Rule>,
+    arena: &'arena Bump,
+    interner: &RefCell<StringInterner<'arena>>,
+) -> Result<&'arena Expr<'arena>> {
+    let span = span_from_pair(&pair);
+    let mut inner = pair.into_inner();
 
-        Rule::relation => {
-            // relation = { addition ~ (relop ~ addition)* }
-            let mut inner = pair.into_inner();
-            let mut left = build_expr(
-                inner
-                    .next()
-                    .expect("Parser validated: relation = { addition ~ ... }"),
-                arena,
-                interner,
-            )?;
+    // Build condition - call next precedence level DIRECTLY
+    let condition = build_conditional_or(
+        inner
+            .next()
+            .expect("Parser validated: expr = { conditional_or ~ ... }"),
+        arena,
+        interner,
+    )?;
 
-            while let Some(op_pair) = inner.next() {
-                let op = match op_pair.as_str() {
-                    "<" => BinaryOp::Less,
-                    "<=" => BinaryOp::LessEq,
-                    ">" => BinaryOp::Greater,
-                    ">=" => BinaryOp::GreaterEq,
-                    "==" => BinaryOp::Equals,
-                    "!=" => BinaryOp::NotEquals,
-                    "in" => BinaryOp::In,
-                    _ => unreachable!("unexpected relop: {}", op_pair.as_str()),
-                };
-                let right = build_expr(
-                    inner
-                        .next()
-                        .expect("Parser validated: relation = { ... ~ (relop ~ addition)* }"),
-                    arena,
-                    interner,
-                )?;
-                left = alloc_binary(arena, op, left, right, span);
-            }
+    // Check for ternary operator
+    if let Some(if_true_pair) = inner.next() {
+        let if_false_pair = inner
+            .next()
+            .expect("Parser validated: expr = { ... ~ (\"?\" ~ conditional_or ~ \":\" ~ expr)? }");
+        Ok(arena.alloc(Expr::new(
+            ExprKind::Ternary(
+                condition,
+                build_conditional_or(if_true_pair, arena, interner)?,
+                build_expr_ternary(if_false_pair, arena, interner)?, // Right-associative
+            ),
+            span,
+        )))
+    } else {
+        Ok(condition)
+    }
+}
 
-            Ok(left)
-        }
+/// Build logical OR expression
+/// CEL Spec: conditional_or = { conditional_and ~ ("||" ~ conditional_and)* }
+fn build_conditional_or<'arena>(
+    pair: pest::iterators::Pair<'_, Rule>,
+    arena: &'arena Bump,
+    interner: &RefCell<StringInterner<'arena>>,
+) -> Result<&'arena Expr<'arena>> {
+    let span = span_from_pair(&pair);
+    let mut inner = pair.into_inner();
 
-        Rule::addition => {
-            // addition = { multiplication ~ (("+" | "-") ~ multiplication)* }
-            let mut inner = pair.into_inner();
-            let mut left = build_expr(
-                inner
-                    .next()
-                    .expect("Parser validated: addition = { multiplication ~ ... }"),
-                arena,
-                interner,
-            )?;
+    let mut left = build_conditional_and(
+        inner
+            .next()
+            .expect("Parser validated: conditional_or = { conditional_and ~ ... }"),
+        arena,
+        interner,
+    )?;
 
-            while let Some(next) = inner.next() {
-                let op = match next.as_str() {
-                    "+" => BinaryOp::Add,
-                    "-" => BinaryOp::Subtract,
-                    _ => {
-                        // It's the right operand
-                        left = alloc_binary(
-                            arena,
-                            if inner.len() == 0 {
-                                BinaryOp::Add
-                            } else {
-                                BinaryOp::Subtract
-                            },
-                            left,
-                            build_expr(next, arena, interner)?,
-                            span,
-                        );
-                        continue;
-                    }
-                };
-                let right = build_expr(
-                    inner
-                        .next()
-                        .expect("Parser validated: addition = { ... ~ ((\" +\" | \"-\") ~ multiplication)* }"),
-                    arena,
-                    interner,
-                )?;
-                left = alloc_binary(arena, op, left, right, span);
-            }
+    for right_pair in inner {
+        let right = build_conditional_and(right_pair, arena, interner)?;
+        left = alloc_binary(arena, BinaryOp::LogicalOr, left, right, span);
+    }
 
-            Ok(left)
-        }
+    Ok(left)
+}
 
-        Rule::multiplication => {
-            // multiplication = { unary ~ (("*" | "/" | "%") ~ unary)* }
-            let mut inner = pair.into_inner();
-            let mut left = build_expr(
-                inner
-                    .next()
-                    .expect("Parser validated: multiplication = { unary ~ ... }"),
-                arena,
-                interner,
-            )?;
+/// Build logical AND expression
+/// CEL Spec: conditional_and = { relation ~ ("&&" ~ relation)* }
+fn build_conditional_and<'arena>(
+    pair: pest::iterators::Pair<'_, Rule>,
+    arena: &'arena Bump,
+    interner: &RefCell<StringInterner<'arena>>,
+) -> Result<&'arena Expr<'arena>> {
+    let span = span_from_pair(&pair);
+    let mut inner = pair.into_inner();
 
-            while let Some(next) = inner.next() {
-                let op = match next.as_str() {
-                    "*" => BinaryOp::Multiply,
-                    "/" => BinaryOp::Divide,
-                    "%" => BinaryOp::Modulo,
-                    _ => {
-                        // It's the right operand (shouldn't happen with current grammar)
-                        left = alloc_binary(
-                            arena,
-                            BinaryOp::Multiply,
-                            left,
-                            build_expr(next, arena, interner)?,
-                            span,
-                        );
-                        continue;
-                    }
-                };
-                let right = build_expr(
-                    inner.next().expect(
-                        "Parser validated: multiplication = { ... ~ ((\"*\" | \"/\" | \"%\") ~ unary)* }",
-                    ),
-                    arena,
-                    interner,
-                )?;
-                left = alloc_binary(arena, op, left, right, span);
-            }
+    let mut left = build_relation(
+        inner
+            .next()
+            .expect("Parser validated: conditional_and = { relation ~ ... }"),
+        arena,
+        interner,
+    )?;
 
-            Ok(left)
-        }
+    for right_pair in inner {
+        let right = build_relation(right_pair, arena, interner)?;
+        left = alloc_binary(arena, BinaryOp::LogicalAnd, left, right, span);
+    }
 
-        Rule::unary => {
-            // unary = { member | "!"+ ~ member | "-"+ ~ member }
-            let mut inner = pair.into_inner();
-            let first = inner.next().expect(
-                "Parser validated: unary = { member | \"!\"+  ~ member | \"-\"+ ~ member }",
-            );
+    Ok(left)
+}
 
-            match first.as_str() {
-                s if s.chars().all(|c| c == '!') => {
-                    let count = s.len();
-                    let operand = build_expr(
-                        inner
-                            .next()
-                            .expect("Parser validated: unary = { ... | \"!\"+ ~ member | ... }"),
-                        arena,
-                        interner,
-                    )?;
-                    // Apply NOT count times (!! cancels out)
-                    Ok(apply_unary_repeated(
-                        arena,
-                        UnaryOp::Not,
-                        count,
-                        operand,
-                        span,
-                    ))
-                }
-                s if s.chars().all(|c| c == '-') => {
-                    let count = s.len();
-                    let operand = build_expr(
-                        inner
-                            .next()
-                            .expect("Parser validated: unary = { ... | \"-\"+ ~ member }"),
-                        arena,
-                        interner,
-                    )?;
-                    // Apply Negate count times (-- cancels out)
-                    Ok(apply_unary_repeated(
-                        arena,
-                        UnaryOp::Negate,
-                        count,
-                        operand,
-                        span,
-                    ))
-                }
-                _ => build_expr(first, arena, interner), // It's a member expression
-            }
-        }
+/// Build relational expression
+/// CEL Spec: relation = { addition ~ (relop ~ addition)* }
+fn build_relation<'arena>(
+    pair: pest::iterators::Pair<'_, Rule>,
+    arena: &'arena Bump,
+    interner: &RefCell<StringInterner<'arena>>,
+) -> Result<&'arena Expr<'arena>> {
+    let span = span_from_pair(&pair);
+    let mut inner = pair.into_inner();
 
-        Rule::member => {
-            // member = { primary ~ ("." ~ selector ~ ("(" ~ expr_list? ~ ")")? | "[" ~ expr ~ "]")* }
-            let mut inner = pair.into_inner();
-            let mut expr = build_expr(
-                inner
-                    .next()
-                    .expect("Parser validated: member = { primary ~ ... }"),
-                arena,
-                interner,
-            )?;
+    let mut left = build_addition(
+        inner
+            .next()
+            .expect("Parser validated: relation = { addition ~ ... }"),
+        arena,
+        interner,
+    )?;
 
-            while let Some(next) = inner.next() {
-                match next.as_str() {
-                    "." => {
-                        // Field access or method call
-                        let selector = inner.next().expect(
-                            "Parser validated: member = { ... ~ (\".\" ~ selector ~ ...)* }",
-                        );
-                        let field_name = interner.borrow_mut().intern(selector.as_str());
-
-                        // Check if there's a function call
-                        if let Some(peek) = inner.peek() {
-                            if peek.as_str() == "(" {
-                                inner.next(); // consume "("
-                                let args = if let Some(args_pair) = inner.peek() {
-                                    if args_pair.as_rule() == Rule::expr_list {
-                                        build_expr_list(
-                                            inner.next().expect(
-                                                "Parser validated: member = { ... ~ (\"(\" ~ expr_list? ~ \")\")? }",
-                                            ),
-                                            arena,
-                                            interner,
-                                        )?
-                                    } else {
-                                        &[]
-                                    }
-                                } else {
-                                    &[]
-                                };
-                                // Consume ")" - it's implicit in the grammar
-                                let new_span = expr.span.combine(&span);
-                                expr = arena.alloc(Expr::new(
-                                    ExprKind::Member(expr, field_name, Some(args)),
-                                    new_span,
-                                ));
-                            } else {
-                                let new_span = expr.span.combine(&span);
-                                expr = arena.alloc(Expr::new(
-                                    ExprKind::Member(expr, field_name, None),
-                                    new_span,
-                                ));
-                            }
-                        } else {
-                            let new_span = expr.span.combine(&span);
-                            expr = arena.alloc(Expr::new(
-                                ExprKind::Member(expr, field_name, None),
-                                new_span,
-                            ));
-                        }
-                    }
-                    "[" => {
-                        // Index access
-                        let index = build_expr(
-                            inner.next().expect(
-                                "Parser validated: member = { ... ~ (\"[\" ~ expr ~ \"]\")* }",
-                            ),
-                            arena,
-                            interner,
-                        )?;
-                        // "]" is implicit
-                        let new_span = expr.span.combine(&span);
-                        expr = arena.alloc(Expr::new(ExprKind::Index(expr, index), new_span));
-                    }
-                    _ => {
-                        // This is part of the next operation
-                        continue;
-                    }
-                }
-            }
-
-            Ok(expr)
-        }
-
-        Rule::primary => {
-            // primary = { literal | "."? ~ ident ~ ("(" ~ expr_list? ~ ")")? | ... }
-            let mut inner = pair.into_inner();
-            let first = inner
+    while let Some(op_pair) = inner.next() {
+        let op = match op_pair.as_str() {
+            "<" => BinaryOp::Less,
+            "<=" => BinaryOp::LessEq,
+            ">" => BinaryOp::Greater,
+            ">=" => BinaryOp::GreaterEq,
+            "==" => BinaryOp::Equals,
+            "!=" => BinaryOp::NotEquals,
+            "in" => BinaryOp::In,
+            _ => unreachable!("unexpected relop: {}", op_pair.as_str()),
+        };
+        let right = build_addition(
+            inner
                 .next()
-                .expect("Parser validated: primary = { literal | ... | \"(\" ~ expr ~ \")\" | \"[\" ~ expr_list? ~ \",\"? ~ \"]\" | \"{\" ~ map_inits? ~ \",\"? ~ \"}\" | ... }");
+                .expect("Parser validated: relation = { ... ~ (relop ~ addition)* }"),
+            arena,
+            interner,
+        )?;
+        left = alloc_binary(arena, op, left, right, span);
+    }
 
-            match first.as_rule() {
-                Rule::literal => Ok(arena.alloc(Expr::new(
-                    ExprKind::Literal(build_literal(first, span, arena, interner)?),
+    Ok(left)
+}
+
+/// Build addition/subtraction expression
+/// CEL Spec: addition = { multiplication ~ (("+" | "-") ~ multiplication)* }
+fn build_addition<'arena>(
+    pair: pest::iterators::Pair<'_, Rule>,
+    arena: &'arena Bump,
+    interner: &RefCell<StringInterner<'arena>>,
+) -> Result<&'arena Expr<'arena>> {
+    let span = span_from_pair(&pair);
+    let mut inner = pair.into_inner();
+
+    let mut left = build_multiplication(
+        inner
+            .next()
+            .expect("Parser validated: addition = { multiplication ~ ... }"),
+        arena,
+        interner,
+    )?;
+
+    while let Some(next) = inner.next() {
+        let op = match next.as_str() {
+            "+" => BinaryOp::Add,
+            "-" => BinaryOp::Subtract,
+            _ => {
+                // It's the right operand
+                left = alloc_binary(
+                    arena,
+                    BinaryOp::Add,
+                    left,
+                    build_multiplication(next, arena, interner)?,
                     span,
-                ))),
-                Rule::ident => {
-                    let name = interner.borrow_mut().intern(first.as_str());
-                    // Check for function call
-                    if inner.peek().map(|p| p.as_str()) == Some("(") {
+                );
+                continue;
+            }
+        };
+        let right = build_multiplication(
+            inner.next().expect(
+                "Parser validated: addition = { ... ~ ((\" +\" | \"-\") ~ multiplication)* }",
+            ),
+            arena,
+            interner,
+        )?;
+        left = alloc_binary(arena, op, left, right, span);
+    }
+
+    Ok(left)
+}
+
+/// Build multiplication/division/modulo expression
+/// CEL Spec: multiplication = { unary ~ (("*" | "/" | "%") ~ unary)* }
+fn build_multiplication<'arena>(
+    pair: pest::iterators::Pair<'_, Rule>,
+    arena: &'arena Bump,
+    interner: &RefCell<StringInterner<'arena>>,
+) -> Result<&'arena Expr<'arena>> {
+    let span = span_from_pair(&pair);
+    let mut inner = pair.into_inner();
+
+    let mut left = build_unary(
+        inner
+            .next()
+            .expect("Parser validated: multiplication = { unary ~ ... }"),
+        arena,
+        interner,
+    )?;
+
+    while let Some(next) = inner.next() {
+        let op = match next.as_str() {
+            "*" => BinaryOp::Multiply,
+            "/" => BinaryOp::Divide,
+            "%" => BinaryOp::Modulo,
+            _ => {
+                // It's the right operand
+                left = alloc_binary(
+                    arena,
+                    BinaryOp::Multiply,
+                    left,
+                    build_unary(next, arena, interner)?,
+                    span,
+                );
+                continue;
+            }
+        };
+        let right = build_unary(
+            inner.next().expect(
+                "Parser validated: multiplication = { ... ~ ((\"*\" | \"/\" | \"%\") ~ unary)* }",
+            ),
+            arena,
+            interner,
+        )?;
+        left = alloc_binary(arena, op, left, right, span);
+    }
+
+    Ok(left)
+}
+
+/// Build unary expression
+/// CEL Spec: unary = { member | "!"+ ~ member | "-"+ ~ member }
+fn build_unary<'arena>(
+    pair: pest::iterators::Pair<'_, Rule>,
+    arena: &'arena Bump,
+    interner: &RefCell<StringInterner<'arena>>,
+) -> Result<&'arena Expr<'arena>> {
+    let span = span_from_pair(&pair);
+    let mut inner = pair.into_inner();
+    let first = inner
+        .next()
+        .expect("Parser validated: unary = { member | \"!\"+  ~ member | \"-\"+ ~ member }");
+
+    match first.as_str() {
+        s if s.chars().all(|c| c == '!') => {
+            let count = s.len();
+            let operand = build_member(
+                inner
+                    .next()
+                    .expect("Parser validated: unary = { ... | \"!\"+ ~ member | ... }"),
+                arena,
+                interner,
+            )?;
+            // Apply NOT count times (!! cancels out)
+            Ok(apply_unary_repeated(
+                arena,
+                UnaryOp::Not,
+                count,
+                operand,
+                span,
+            ))
+        }
+        s if s.chars().all(|c| c == '-') => {
+            let count = s.len();
+            let operand = build_member(
+                inner
+                    .next()
+                    .expect("Parser validated: unary = { ... | \"-\"+ ~ member }"),
+                arena,
+                interner,
+            )?;
+            // Apply Negate count times (-- cancels out)
+            Ok(apply_unary_repeated(
+                arena,
+                UnaryOp::Negate,
+                count,
+                operand,
+                span,
+            ))
+        }
+        _ => build_member(first, arena, interner), // It's a member expression
+    }
+}
+
+/// Build member access/indexing expression
+/// CEL Spec: member = { primary ~ ("." ~ selector ~ ("(" ~ expr_list? ~ ")")? | "[" ~ expr ~ "]")* }
+fn build_member<'arena>(
+    pair: pest::iterators::Pair<'_, Rule>,
+    arena: &'arena Bump,
+    interner: &RefCell<StringInterner<'arena>>,
+) -> Result<&'arena Expr<'arena>> {
+    let span = span_from_pair(&pair);
+    let mut inner = pair.into_inner();
+
+    let mut expr = build_primary(
+        inner
+            .next()
+            .expect("Parser validated: member = { primary ~ ... }"),
+        arena,
+        interner,
+    )?;
+
+    while let Some(next) = inner.next() {
+        match next.as_str() {
+            "." => {
+                // Field access or method call
+                let selector = inner
+                    .next()
+                    .expect("Parser validated: member = { ... ~ (\".\" ~ selector ~ ...)* }");
+                let field_name = interner.borrow_mut().intern(selector.as_str());
+
+                // Check if there's a function call
+                if let Some(peek) = inner.peek() {
+                    if peek.as_str() == "(" {
                         inner.next(); // consume "("
                         let args = if let Some(args_pair) = inner.peek() {
                             if args_pair.as_rule() == Rule::expr_list {
                                 build_expr_list(
                                     inner.next().expect(
-                                        "Parser validated: primary = { ... ~ \"(\" ~ expr_list? ~ \")\" }",
+                                        "Parser validated: member = { ... ~ (\"(\" ~ expr_list? ~ \")\")? }",
                                     ),
                                     arena,
                                     interner,
@@ -385,79 +453,150 @@ fn build_expr<'arena>(
                         } else {
                             &[]
                         };
-                        Ok(arena.alloc(Expr::new(ExprKind::Call(None, name, args), span)))
+                        // Consume ")" - it's implicit in the grammar
+                        let new_span = expr.span.combine(&span);
+                        expr = arena.alloc(Expr::new(
+                            ExprKind::Member(expr, field_name, Some(args)),
+                            new_span,
+                        ));
                     } else {
-                        Ok(arena.alloc(Expr::new(ExprKind::Ident(name), span)))
+                        let new_span = expr.span.combine(&span);
+                        expr = arena.alloc(Expr::new(
+                            ExprKind::Member(expr, field_name, None),
+                            new_span,
+                        ));
                     }
-                }
-                Rule::expr => build_expr(first, arena, interner), // Parenthesized expression
-                Rule::expr_list => {
-                    // List literal: [expr, ...]
-                    let items = build_expr_list(first, arena, interner)?;
-                    Ok(arena.alloc(Expr::new(ExprKind::List(items), span)))
-                }
-                Rule::map_inits => {
-                    // Map literal: {key: value, ...}
-                    let entries = build_map_inits(first, arena, interner)?;
-                    Ok(arena.alloc(Expr::new(ExprKind::Map(entries), span)))
-                }
-                _ => {
-                    // Handle other primary forms
-                    match first.as_str() {
-                        "[" => {
-                            // Empty list or list with items
-                            if let Some(list_pair) = inner.peek() {
-                                if list_pair.as_rule() == Rule::expr_list {
-                                    let items = build_expr_list(
-                                        inner.next().expect(
-                                            "Parser validated: primary = { ... ~ \"[\" ~ expr_list? ~ \",\"? ~ \"]\" }",
-                                        ),
-                                        arena,
-                                        interner,
-                                    )?;
-                                    Ok(arena.alloc(Expr::new(ExprKind::List(items), span)))
-                                } else {
-                                    Ok(arena.alloc(Expr::new(ExprKind::List(&[]), span)))
-                                }
-                            } else {
-                                Ok(arena.alloc(Expr::new(ExprKind::List(&[]), span)))
-                            }
-                        }
-                        "{" => {
-                            // Empty map or map with entries
-                            if let Some(map_pair) = inner.peek() {
-                                if map_pair.as_rule() == Rule::map_inits {
-                                    let entries = build_map_inits(
-                                        inner.next().expect(
-                                            "Parser validated: primary = { ... ~ \"{\" ~ map_inits? ~ \",\"? ~ \"}\" }",
-                                        ),
-                                        arena,
-                                        interner,
-                                    )?;
-                                    Ok(arena.alloc(Expr::new(ExprKind::Map(entries), span)))
-                                } else {
-                                    Ok(arena.alloc(Expr::new(ExprKind::Map(&[]), span)))
-                                }
-                            } else {
-                                Ok(arena.alloc(Expr::new(ExprKind::Map(&[]), span)))
-                            }
-                        }
-                        _ => unreachable!("unexpected primary: {}", first.as_str()),
-                    }
+                } else {
+                    let new_span = expr.span.combine(&span);
+                    expr = arena.alloc(Expr::new(
+                        ExprKind::Member(expr, field_name, None),
+                        new_span,
+                    ));
                 }
             }
+            "[" => {
+                // Index access - call build_expr to start at top of precedence chain
+                let index = build_expr(
+                    inner
+                        .next()
+                        .expect("Parser validated: member = { ... ~ (\"[\" ~ expr ~ \"]\")* }"),
+                    arena,
+                    interner,
+                )?;
+                // "]" is implicit
+                let new_span = expr.span.combine(&span);
+                expr = arena.alloc(Expr::new(ExprKind::Index(expr, index), new_span));
+            }
+            _ => {
+                // This is part of the next operation
+                continue;
+            }
         }
+    }
 
+    Ok(expr)
+}
+
+/// Build primary expression (bottom of precedence chain)
+/// CEL Spec: primary = { literal | "."? ~ ident ~ ("(" ~ expr_list? ~ ")")? | ... }
+fn build_primary<'arena>(
+    pair: pest::iterators::Pair<'_, Rule>,
+    arena: &'arena Bump,
+    interner: &RefCell<StringInterner<'arena>>,
+) -> Result<&'arena Expr<'arena>> {
+    let span = span_from_pair(&pair);
+    let mut inner = pair.into_inner();
+    let first = inner
+        .next()
+        .expect("Parser validated: primary = { literal | ... | \"(\" ~ expr ~ \")\" | \"[\" ~ expr_list? ~ \",\"? ~ \"]\" | \"{\" ~ map_inits? ~ \",\"? ~ \"}\" | ... }");
+
+    match first.as_rule() {
         Rule::literal => Ok(arena.alloc(Expr::new(
-            ExprKind::Literal(build_literal(pair, span, arena, interner)?),
+            ExprKind::Literal(build_literal(first, span, arena, interner)?),
             span,
         ))),
-        Rule::ident => Ok(arena.alloc(Expr::new(
-            ExprKind::Ident(interner.borrow_mut().intern(pair.as_str())),
-            span,
-        ))),
-
-        _ => unreachable!("unexpected rule in build_expr: {:?}", pair.as_rule()),
+        Rule::ident => {
+            let name = interner.borrow_mut().intern(first.as_str());
+            // Check for function call
+            if inner.peek().map(|p| p.as_str()) == Some("(") {
+                inner.next(); // consume "("
+                let args = if let Some(args_pair) = inner.peek() {
+                    if args_pair.as_rule() == Rule::expr_list {
+                        build_expr_list(
+                            inner.next().expect(
+                                "Parser validated: primary = { ... ~ \"(\" ~ expr_list? ~ \")\" }",
+                            ),
+                            arena,
+                            interner,
+                        )?
+                    } else {
+                        &[]
+                    }
+                } else {
+                    &[]
+                };
+                Ok(arena.alloc(Expr::new(ExprKind::Call(None, name, args), span)))
+            } else {
+                Ok(arena.alloc(Expr::new(ExprKind::Ident(name), span)))
+            }
+        }
+        // Parenthesized expression - ONLY place that calls build_expr()
+        // This starts at the top of the precedence chain again
+        Rule::expr => build_expr(first, arena, interner),
+        Rule::expr_list => {
+            // List literal: [expr, ...]
+            let items = build_expr_list(first, arena, interner)?;
+            Ok(arena.alloc(Expr::new(ExprKind::List(items), span)))
+        }
+        Rule::map_inits => {
+            // Map literal: {key: value, ...}
+            let entries = build_map_inits(first, arena, interner)?;
+            Ok(arena.alloc(Expr::new(ExprKind::Map(entries), span)))
+        }
+        _ => {
+            // Handle other primary forms
+            match first.as_str() {
+                "[" => {
+                    // Empty list or list with items
+                    if let Some(list_pair) = inner.peek() {
+                        if list_pair.as_rule() == Rule::expr_list {
+                            let items = build_expr_list(
+                                inner.next().expect(
+                                    "Parser validated: primary = { ... ~ \"[\" ~ expr_list? ~ \",\"? ~ \"]\" }",
+                                ),
+                                arena,
+                                interner,
+                            )?;
+                            Ok(arena.alloc(Expr::new(ExprKind::List(items), span)))
+                        } else {
+                            Ok(arena.alloc(Expr::new(ExprKind::List(&[]), span)))
+                        }
+                    } else {
+                        Ok(arena.alloc(Expr::new(ExprKind::List(&[]), span)))
+                    }
+                }
+                "{" => {
+                    // Empty map or map with entries
+                    if let Some(map_pair) = inner.peek() {
+                        if map_pair.as_rule() == Rule::map_inits {
+                            let entries = build_map_inits(
+                                inner.next().expect(
+                                    "Parser validated: primary = { ... ~ \"{\" ~ map_inits? ~ \",\"? ~ \"}\" }",
+                                ),
+                                arena,
+                                interner,
+                            )?;
+                            Ok(arena.alloc(Expr::new(ExprKind::Map(entries), span)))
+                        } else {
+                            Ok(arena.alloc(Expr::new(ExprKind::Map(&[]), span)))
+                        }
+                    } else {
+                        Ok(arena.alloc(Expr::new(ExprKind::Map(&[]), span)))
+                    }
+                }
+                _ => unreachable!("unexpected primary: {}", first.as_str()),
+            }
+        }
     }
 }
 
@@ -640,37 +779,6 @@ fn apply_unary_repeated<'arena>(
         expr = alloc_unary(arena, op, expr, base_span);
     }
     expr
-}
-
-/// Build a binary chain (left-associative)
-fn build_binary_chain<'arena>(
-    pair: pest::iterators::Pair<'_, Rule>,
-    arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
-    op: BinaryOp,
-) -> Result<&'arena Expr<'arena>> {
-    let span = span_from_pair(&pair);
-    let mut inner = pair.into_inner();
-    let mut left = build_expr(
-        inner
-            .next()
-            .expect("Parser validated: conditional_or/conditional_and = { ... ~ ... }"),
-        arena,
-        interner,
-    )?;
-
-    while inner.peek().is_some() {
-        let right = build_expr(
-            inner
-                .next()
-                .expect("Parser validated: conditional_or/conditional_and = { ... ~ (op ~ ...)* }"),
-            arena,
-            interner,
-        )?;
-        left = alloc_binary(arena, op, left, right, span);
-    }
-
-    Ok(left)
 }
 
 #[cfg(test)]

@@ -91,7 +91,7 @@ impl<'arena> Default for StringInterner<'arena> {
 /// ```
 #[derive(Debug, Clone)]
 pub struct CelloBuilder {
-    /// Maximum nesting depth for expressions (default: 50, CEL spec requires 12)
+    /// Maximum nesting depth for expressions (default: 24, 2x CEL spec minimum of 12)
     max_nesting_depth: usize,
     /// Maximum call limit for pest parser (default: 10 million)
     max_call_limit: usize,
@@ -103,12 +103,12 @@ impl CelloBuilder {
     /// Create a new builder with default configuration
     ///
     /// Defaults:
-    /// - `max_nesting_depth`: 50 (CEL spec requires 12)
+    /// - `max_nesting_depth`: 24 (2x CEL spec minimum of 12)
     /// - `max_call_limit`: 10,000,000
     /// - `strict_mode`: false
     pub fn new() -> Self {
         Self {
-            max_nesting_depth: 50,
+            max_nesting_depth: crate::constants::DEFAULT_MAX_RECURSION_DEPTH,
             max_call_limit: 10_000_000,
             strict_mode: false,
         }
@@ -398,7 +398,7 @@ mod tests {
     test_cases! {
         test_builder_defaults: {
             let builder = CelloBuilder::new();
-            assert_eq!(builder.get_max_nesting_depth(), 50);
+            assert_eq!(builder.get_max_nesting_depth(), 24);
             assert_eq!(builder.get_max_call_limit(), 10_000_000);
             assert!(!builder.is_strict_mode());
         },
@@ -416,7 +416,7 @@ mod tests {
 
         test_builder_default_trait: {
             let builder = CelloBuilder::default();
-            assert_eq!(builder.get_max_nesting_depth(), 50);
+            assert_eq!(builder.get_max_nesting_depth(), 24);
         },
     }
 
