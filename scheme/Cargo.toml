@@ -1,0 +1,8 @@
+[package]
+name = "newparser"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nom = "7"
+thiserror = "1"
