@@ -42,7 +42,8 @@ where
 /// # use cello::test_util::*;
 /// # use cello::{ExprKind, ParseConfig};
 /// let config = ParseConfig {
-///     max_nesting_depth: 5,
+///     max_parse_depth: 128,
+///     max_ast_depth: 24,
 ///     max_call_limit: 100,
 /// };
 /// parse_with_config("1 + 2", config, |ast| {
@@ -55,7 +56,8 @@ where
     F: for<'a> FnOnce(&Expr<'a>),
 {
     CelloBuilder::new()
-        .max_nesting_depth(config.max_nesting_depth)
+        .max_parse_depth(config.max_parse_depth)
+        .max_ast_depth(config.max_ast_depth)
         .max_call_limit(config.max_call_limit)
         .parse_scoped(input, |ctx| {
             f(ctx.ast()?);

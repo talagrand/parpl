@@ -11,11 +11,24 @@
 
 use crate::ast::*;
 use crate::context::StringInterner;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::parser::{ParseConfig, Rule};
 use bumpalo::Bump;
 use pest::iterators::Pair;
 use std::cell::RefCell;
+
+/// Check recursion depth remaining and return error if exhausted
+///
+/// This is called at the entry of each recursive function.
+/// Since depth_left is passed by value, it automatically "resets" on return.
+#[inline(always)]
+fn check_depth(depth_left: usize) -> Result<usize> {
+    if depth_left == 0 {
+        Err(Error::nesting_depth(0, 0)) // Will be improved to show actual limit
+    } else {
+        Ok(depth_left - 1)
+    }
+}
 
 /// Build an AST using a provided arena and interner
 ///
@@ -35,7 +48,7 @@ pub fn build_ast_with_arena<'arena>(
     // First parse with pest
     let pairs = crate::parser::parse_with_config(input, config)?;
 
-    // Convert to AST
+    // Convert to AST with depth tracking
     // The parse tree has structure: SOI ~ expr ~ EOI
     // We want just the expr
     let pair = pairs
@@ -50,7 +63,8 @@ pub fn build_ast_with_arena<'arena>(
         .next()
         .expect("Parser validated: cel = { SOI ~ expr ~ EOI }");
 
-    build_expr(expr_pair, arena, interner)
+    // Start with max depth remaining
+    build_expr(config.max_ast_depth, expr_pair, arena, interner)
 }
 
 // ============================================================================
@@ -97,20 +111,24 @@ pub fn build_ast_with_arena<'arena>(
 ///
 /// All other cases call precedence-level functions directly.
 fn build_expr<'arena>(
+    depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<&'arena Expr<'arena>> {
+    // Check depth and decrement for recursive calls
+    let depth_left = check_depth(depth_left)?;
+
     match pair.as_rule() {
-        Rule::expr => build_expr_ternary(pair, arena, interner),
-        Rule::conditional_or => build_conditional_or(pair, arena, interner),
-        Rule::conditional_and => build_conditional_and(pair, arena, interner),
-        Rule::relation => build_relation(pair, arena, interner),
-        Rule::addition => build_addition(pair, arena, interner),
-        Rule::multiplication => build_multiplication(pair, arena, interner),
-        Rule::unary => build_unary(pair, arena, interner),
-        Rule::member => build_member(pair, arena, interner),
-        Rule::primary => build_primary(pair, arena, interner),
+        Rule::expr => build_expr_ternary(depth_left, pair, arena, interner),
+        Rule::conditional_or => build_conditional_or(depth_left, pair, arena, interner),
+        Rule::conditional_and => build_conditional_and(depth_left, pair, arena, interner),
+        Rule::relation => build_relation(depth_left, pair, arena, interner),
+        Rule::addition => build_addition(depth_left, pair, arena, interner),
+        Rule::multiplication => build_multiplication(depth_left, pair, arena, interner),
+        Rule::unary => build_unary(depth_left, pair, arena, interner),
+        Rule::member => build_member(depth_left, pair, arena, interner),
+        Rule::primary => build_primary(depth_left, pair, arena, interner),
         Rule::literal => {
             let span = span_from_pair(&pair);
             Ok(arena.alloc(Expr::new(
@@ -130,15 +148,18 @@ fn build_expr<'arena>(
 /// Build ternary conditional expression (top of precedence chain)
 /// CEL Spec: expr = { conditional_or ~ ("?" ~ conditional_or ~ ":" ~ expr)? }
 fn build_expr_ternary<'arena>(
+    depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<&'arena Expr<'arena>> {
+    let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
 
     // Build condition - call next precedence level DIRECTLY
     let condition = build_conditional_or(
+        depth_left,
         inner
             .next()
             .expect("Parser validated: expr = { conditional_or ~ ... }"),
@@ -154,8 +175,8 @@ fn build_expr_ternary<'arena>(
         Ok(arena.alloc(Expr::new(
             ExprKind::Ternary(
                 condition,
-                build_conditional_or(if_true_pair, arena, interner)?,
-                build_expr_ternary(if_false_pair, arena, interner)?, // Right-associative
+                build_conditional_or(depth_left, if_true_pair, arena, interner)?,
+                build_expr_ternary(depth_left, if_false_pair, arena, interner)?, // Right-associative
             ),
             span,
         )))
@@ -167,14 +188,17 @@ fn build_expr_ternary<'arena>(
 /// Build logical OR expression
 /// CEL Spec: conditional_or = { conditional_and ~ ("||" ~ conditional_and)* }
 fn build_conditional_or<'arena>(
+    depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<&'arena Expr<'arena>> {
+    let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
 
     let mut left = build_conditional_and(
+        depth_left,
         inner
             .next()
             .expect("Parser validated: conditional_or = { conditional_and ~ ... }"),
@@ -183,7 +207,7 @@ fn build_conditional_or<'arena>(
     )?;
 
     for right_pair in inner {
-        let right = build_conditional_and(right_pair, arena, interner)?;
+        let right = build_conditional_and(depth_left, right_pair, arena, interner)?;
         left = alloc_binary(arena, BinaryOp::LogicalOr, left, right, span);
     }
 
@@ -193,14 +217,17 @@ fn build_conditional_or<'arena>(
 /// Build logical AND expression
 /// CEL Spec: conditional_and = { relation ~ ("&&" ~ relation)* }
 fn build_conditional_and<'arena>(
+    depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<&'arena Expr<'arena>> {
+    let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
 
     let mut left = build_relation(
+        depth_left,
         inner
             .next()
             .expect("Parser validated: conditional_and = { relation ~ ... }"),
@@ -209,7 +236,7 @@ fn build_conditional_and<'arena>(
     )?;
 
     for right_pair in inner {
-        let right = build_relation(right_pair, arena, interner)?;
+        let right = build_relation(depth_left, right_pair, arena, interner)?;
         left = alloc_binary(arena, BinaryOp::LogicalAnd, left, right, span);
     }
 
@@ -219,14 +246,17 @@ fn build_conditional_and<'arena>(
 /// Build relational expression
 /// CEL Spec: relation = { addition ~ (relop ~ addition)* }
 fn build_relation<'arena>(
+    depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<&'arena Expr<'arena>> {
+    let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
 
     let mut left = build_addition(
+        depth_left,
         inner
             .next()
             .expect("Parser validated: relation = { addition ~ ... }"),
@@ -246,6 +276,7 @@ fn build_relation<'arena>(
             _ => unreachable!("unexpected relop: {}", op_pair.as_str()),
         };
         let right = build_addition(
+            depth_left,
             inner
                 .next()
                 .expect("Parser validated: relation = { ... ~ (relop ~ addition)* }"),
@@ -261,14 +292,17 @@ fn build_relation<'arena>(
 /// Build addition/subtraction expression
 /// CEL Spec: addition = { multiplication ~ (("+" | "-") ~ multiplication)* }
 fn build_addition<'arena>(
+    depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<&'arena Expr<'arena>> {
+    let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
 
     let mut left = build_multiplication(
+        depth_left,
         inner
             .next()
             .expect("Parser validated: addition = { multiplication ~ ... }"),
@@ -286,13 +320,14 @@ fn build_addition<'arena>(
                     arena,
                     BinaryOp::Add,
                     left,
-                    build_multiplication(next, arena, interner)?,
+                    build_multiplication(depth_left, next, arena, interner)?,
                     span,
                 );
                 continue;
             }
         };
         let right = build_multiplication(
+            depth_left,
             inner.next().expect(
                 "Parser validated: addition = { ... ~ ((\" +\" | \"-\") ~ multiplication)* }",
             ),
@@ -308,14 +343,17 @@ fn build_addition<'arena>(
 /// Build multiplication/division/modulo expression
 /// CEL Spec: multiplication = { unary ~ (("*" | "/" | "%") ~ unary)* }
 fn build_multiplication<'arena>(
+    depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<&'arena Expr<'arena>> {
+    let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
 
     let mut left = build_unary(
+        depth_left,
         inner
             .next()
             .expect("Parser validated: multiplication = { unary ~ ... }"),
@@ -334,13 +372,14 @@ fn build_multiplication<'arena>(
                     arena,
                     BinaryOp::Multiply,
                     left,
-                    build_unary(next, arena, interner)?,
+                    build_unary(depth_left, next, arena, interner)?,
                     span,
                 );
                 continue;
             }
         };
         let right = build_unary(
+            depth_left,
             inner.next().expect(
                 "Parser validated: multiplication = { ... ~ ((\"*\" | \"/\" | \"%\") ~ unary)* }",
             ),
@@ -356,10 +395,12 @@ fn build_multiplication<'arena>(
 /// Build unary expression
 /// CEL Spec: unary = { member | "!"+ ~ member | "-"+ ~ member }
 fn build_unary<'arena>(
+    depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<&'arena Expr<'arena>> {
+    let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
     let first = inner
@@ -370,6 +411,7 @@ fn build_unary<'arena>(
         s if s.chars().all(|c| c == '!') => {
             let count = s.len();
             let operand = build_member(
+                depth_left,
                 inner
                     .next()
                     .expect("Parser validated: unary = { ... | \"!\"+ ~ member | ... }"),
@@ -388,6 +430,7 @@ fn build_unary<'arena>(
         s if s.chars().all(|c| c == '-') => {
             let count = s.len();
             let operand = build_member(
+                depth_left,
                 inner
                     .next()
                     .expect("Parser validated: unary = { ... | \"-\"+ ~ member }"),
@@ -403,21 +446,24 @@ fn build_unary<'arena>(
                 span,
             ))
         }
-        _ => build_member(first, arena, interner), // It's a member expression
+        _ => build_member(depth_left, first, arena, interner), // It's a member expression
     }
 }
 
 /// Build member access/indexing expression
 /// CEL Spec: member = { primary ~ ("." ~ selector ~ ("(" ~ expr_list? ~ ")")? | "[" ~ expr ~ "]")* }
 fn build_member<'arena>(
+    depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<&'arena Expr<'arena>> {
+    let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
 
     let mut expr = build_primary(
+        depth_left,
         inner
             .next()
             .expect("Parser validated: member = { primary ~ ... }"),
@@ -441,6 +487,7 @@ fn build_member<'arena>(
                         let args = if let Some(args_pair) = inner.peek() {
                             if args_pair.as_rule() == Rule::expr_list {
                                 build_expr_list(
+                                    depth_left,
                                     inner.next().expect(
                                         "Parser validated: member = { ... ~ (\"(\" ~ expr_list? ~ \")\")? }",
                                     ),
@@ -477,6 +524,7 @@ fn build_member<'arena>(
             "[" => {
                 // Index access - call build_expr to start at top of precedence chain
                 let index = build_expr(
+                    depth_left,
                     inner
                         .next()
                         .expect("Parser validated: member = { ... ~ (\"[\" ~ expr ~ \"]\")* }"),
@@ -500,10 +548,12 @@ fn build_member<'arena>(
 /// Build primary expression (bottom of precedence chain)
 /// CEL Spec: primary = { literal | "."? ~ ident ~ ("(" ~ expr_list? ~ ")")? | ... }
 fn build_primary<'arena>(
+    depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<&'arena Expr<'arena>> {
+    let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
     let first = inner
@@ -523,6 +573,7 @@ fn build_primary<'arena>(
                 let args = if let Some(args_pair) = inner.peek() {
                     if args_pair.as_rule() == Rule::expr_list {
                         build_expr_list(
+                            depth_left,
                             inner.next().expect(
                                 "Parser validated: primary = { ... ~ \"(\" ~ expr_list? ~ \")\" }",
                             ),
@@ -542,15 +593,15 @@ fn build_primary<'arena>(
         }
         // Parenthesized expression - ONLY place that calls build_expr()
         // This starts at the top of the precedence chain again
-        Rule::expr => build_expr(first, arena, interner),
+        Rule::expr => build_expr(depth_left, first, arena, interner),
         Rule::expr_list => {
             // List literal: [expr, ...]
-            let items = build_expr_list(first, arena, interner)?;
+            let items = build_expr_list(depth_left, first, arena, interner)?;
             Ok(arena.alloc(Expr::new(ExprKind::List(items), span)))
         }
         Rule::map_inits => {
             // Map literal: {key: value, ...}
-            let entries = build_map_inits(first, arena, interner)?;
+            let entries = build_map_inits(depth_left, first, arena, interner)?;
             Ok(arena.alloc(Expr::new(ExprKind::Map(entries), span)))
         }
         _ => {
@@ -561,6 +612,7 @@ fn build_primary<'arena>(
                     if let Some(list_pair) = inner.peek() {
                         if list_pair.as_rule() == Rule::expr_list {
                             let items = build_expr_list(
+                                depth_left,
                                 inner.next().expect(
                                     "Parser validated: primary = { ... ~ \"[\" ~ expr_list? ~ \",\"? ~ \"]\" }",
                                 ),
@@ -580,6 +632,7 @@ fn build_primary<'arena>(
                     if let Some(map_pair) = inner.peek() {
                         if map_pair.as_rule() == Rule::map_inits {
                             let entries = build_map_inits(
+                                depth_left,
                                 inner.next().expect(
                                     "Parser validated: primary = { ... ~ \"{\" ~ map_inits? ~ \",\"? ~ \"}\" }",
                                 ),
@@ -698,13 +751,14 @@ fn parse_string_literal<'arena>(
 /// We must clone because build_expr returns &Expr (reference) but we need to store
 /// Expr values in the slice. Since Expr is not Copy, we clone.
 fn build_expr_list<'arena>(
+    depth_left: usize,
     pair: Pair<Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<&'arena [Expr<'arena>]> {
     let exprs: Result<Vec<&Expr<'arena>>> = pair
         .into_inner()
-        .map(|p| build_expr(p, arena, interner))
+        .map(|p| build_expr(depth_left, p, arena, interner))
         .collect();
     let exprs = exprs?;
 
@@ -717,6 +771,7 @@ fn build_expr_list<'arena>(
 /// We must clone because build_expr returns &Expr (reference) but we need to store
 /// Expr values in the slice. Since Expr is not Copy, we clone.
 fn build_map_inits<'arena>(
+    depth_left: usize,
     pair: Pair<Rule>,
     arena: &'arena Bump,
     interner: &RefCell<StringInterner<'arena>>,
@@ -729,8 +784,8 @@ fn build_map_inits<'arena>(
             .next()
             .expect("Parser validated: map_inits = { expr ~ \":\" ~ expr ~ ... }");
         entries.push((
-            build_expr(key, arena, interner)?,
-            build_expr(value, arena, interner)?,
+            build_expr(depth_left, key, arena, interner)?,
+            build_expr(depth_left, value, arena, interner)?,
         ));
     }
 

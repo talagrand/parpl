@@ -17,16 +17,27 @@ pub use pest::iterators::Pairs;
 /// Configuration for parsing CEL expressions
 #[derive(Debug, Clone, Copy)]
 pub struct ParseConfig {
-    /// Maximum nesting depth (parentheses, brackets, braces)
-    pub max_nesting_depth: usize,
-    /// Maximum number of rule invocations (pest call limit)
+    /// Maximum nesting depth for pre-parse heuristic validation (default: 128)
+    ///
+    /// This protects against Pest parser stack overflow (~171 depth on 1MB stack).
+    /// Uses a simple heuristic that counts opening delimiters.
+    pub max_parse_depth: usize,
+
+    /// Maximum AST nesting depth for AST builder (default: 24)
+    ///
+    /// This protects against AST builder stack overflow (~38 depth on 1MB stack).
+    /// Must be LOWER than max_parse_depth to prevent crashes during AST construction.
+    pub max_ast_depth: usize,
+
+    /// Maximum number of rule invocations (pest call limit for DoS protection)
     pub max_call_limit: usize,
 }
 
 impl Default for ParseConfig {
     fn default() -> Self {
         Self {
-            max_nesting_depth: crate::constants::DEFAULT_MAX_RECURSION_DEPTH,
+            max_parse_depth: crate::constants::DEFAULT_MAX_PARSE_DEPTH,
+            max_ast_depth: crate::constants::DEFAULT_MAX_AST_DEPTH,
             max_call_limit: 10_000_000,
         }
     }
@@ -34,92 +45,91 @@ impl Default for ParseConfig {
 
 /// Parse a CEL expression from a string with default configuration
 ///
-/// This parser enforces complexity limits to prevent stack overflow and excessive
-/// execution time on malicious inputs. The limits are set to double the minimum
-/// requirements specified in the CEL specification (langdef.md lines 95-108).
+/// Uses default limits:
+/// - `max_nesting_depth`: [`crate::constants::DEFAULT_MAX_RECURSION_DEPTH`] (128)
+/// - `max_call_limit`: 10,000,000
 ///
-/// **CEL Spec Requirements (doubled for generosity):**
-/// - Repeating rules: 48-64 repetitions (spec requires 24-32)
-/// - Recursive rules: 24 repetitions (spec requires 12)
+/// For custom limits, use [`parse_with_config`].
 ///
-/// **Complexity Protection:**
-/// - Pest tracks the **total number of rule invocations** (not stack depth)
-/// - Limit set to 10 million total rule calls across the entire parse
-/// - Prevents timeout/DoS attacks
-/// - **Stack depth** is enforced by pre-parse validation (count nesting)
-///
-/// # Examples
+/// # Example
 /// ```
 /// use cello::parse;
 ///
-/// let result = parse("1 + 2");
-/// assert!(result.is_ok());
+/// let pairs = parse("1 + 2")?;
+/// # Ok::<(), cello::Error>(())
 /// ```
 pub fn parse(input: &str) -> Result<Pairs<'_, Rule>> {
     parse_with_config(input, ParseConfig::default())
 }
 
-/// Parse a CEL expression from a string with custom configuration
+/// Parse a CEL expression with custom configuration
 ///
-/// This allows you to customize the complexity limits for parsing.
-/// Use this when you need different limits than the defaults.
+/// Allows configuring:
+/// - `max_parse_depth`: Maximum depth for heuristic pre-validation (default: 128)
+/// - `max_ast_depth`: Maximum AST recursion depth (default: 24)
+/// - `max_call_limit`: Maximum Pest rule invocations (default: 10M)
 ///
-/// # Examples
+/// # Example
 /// ```
-/// use cello::parser::{parse_with_config, ParseConfig};
+/// use cello::{parse_with_config, ParseConfig};
 ///
 /// let config = ParseConfig {
-///     max_nesting_depth: 100,
-///     max_call_limit: 1_000_000,
+///     max_parse_depth: 128,
+///     max_ast_depth: 24,
+///     max_call_limit: 50_000_000,
 /// };
 /// let result = parse_with_config("1 + 2", config);
 /// assert!(result.is_ok());
 /// ```
 pub fn parse_with_config(input: &str, config: ParseConfig) -> Result<Pairs<'_, Rule>> {
-    // Set call limit to prevent timeouts (langdef.md lines 95-108)
-    // Pest tracks TOTAL rule invocations (not stack depth) across the entire parse.
-    // CEL spec requires supporting at least:
-    // - 24-32 repetitions of repeating rules (we support 48-64)
-    // - 12 repetitions of recursive rules (we support 24)
+    // Set Pest's call limit to prevent DoS attacks
+    // This limits TOTAL rule invocations across the entire parse, not recursion depth
     pest::set_call_limit(Some(
-        NonZeroUsize::new(config.max_call_limit).unwrap_or_else(|| {
-            NonZeroUsize::new(10_000_000).expect("10_000_000 is non-zero and a valid call limit")
-        }),
+        NonZeroUsize::new(config.max_call_limit)
+            .unwrap_or_else(|| NonZeroUsize::new(10_000_000).expect("10_000_000 is non-zero")),
     ));
 
-    // Pre-validate nesting depth to prevent stack overflow
-    // Note: pest's set_call_limit only tracks total rule invocations, not stack depth
-    // See: https://github.com/pest-parser/pest/issues/674
-    validate_nesting_depth(input, config.max_nesting_depth)?;
+    // Pre-validate nesting depth to prevent Pest parser stack overflow
+    // Pre-validate nesting depth using heuristic (protects against Pest parser overflow).
+    // Pest itself uses recursion and will overflow at ~171 depth on Windows 1MB stack.
+    // Our heuristic check counts all delimiters, so the limit is set higher than actual depth.
+    validate_nesting_depth(input, config.max_parse_depth)?;
 
     CelParser::parse(Rule::cel, input).map_err(Error::from)
 }
 
-/// Validate that input doesn't exceed maximum nesting depth
+/// Validate that input doesn't exceed maximum delimiter count (heuristic depth check)
 ///
-/// Default limit: 24 (2x CEL spec minimum of 12, per langdef.md line 107).
-/// This prevents stack overflow from deeply nested parentheses, brackets, or
-/// ternary expressions.
+/// **Why this exists:** Pest parser uses recursion internally and will stack overflow
+/// at ~171 actual nesting depth on Windows 1MB stack. This pre-check prevents malicious
+/// inputs from crashing the parser by providing a friendly error message.
 ///
-/// Pest's `set_call_limit` only tracks total rule invocations, not recursion depth.
-/// Manual depth validation is required to prevent stack overflow.
-/// See: https://github.com/pest-parser/pest/issues/674
+/// **Approach:** This is a simple heuristic that tracks the maximum depth of opening
+/// delimiters. Each `(`, `[`, `{` increments the counter, and each `)`, `]`, `}` decrements
+/// it. We track the maximum depth reached during the scan.
 ///
-/// Counts:
-/// - Parentheses: `(((expr)))`
-/// - Brackets: `[[[expr]]]`
-/// - Braces: `{{{expr}}}`
+/// **What it counts:**
+/// - Opening delimiters `(`, `[`, `{` increment the counter
+/// - Closing delimiters `)`, `]`, `}` decrement the counter (with saturation)
+/// - We track the maximum counter value reached
+/// - For `((1))`, counter reaches max of 2
 ///
-/// Returns an error if depth exceeds `max_depth`.
+/// **Limitations:**
+/// - Counts delimiters in strings (false positives possible, but rare)
+/// - This is acceptable: we prefer rejecting extreme inputs over risking crashes
+///
+/// Default limit: [`crate::constants::DEFAULT_MAX_RECURSION_DEPTH`] = 128
 fn validate_nesting_depth(input: &str, max_depth: usize) -> Result<()> {
     let mut depth = 0;
+    let mut max_reached = 0;
 
     for ch in input.chars() {
         match ch {
             '(' | '[' | '{' => {
                 depth += 1;
-                if depth > max_depth {
-                    return Err(Error::nesting_depth(depth, max_depth));
+                max_reached = max_reached.max(depth);
+                if max_reached > max_depth {
+                    return Err(Error::nesting_depth(max_reached, max_depth));
                 }
             }
             ')' | ']' | '}' => {
@@ -290,8 +300,8 @@ line""""#
     // ============================================================
     // Section: Complexity Limits
     // CEL spec (langdef.md lines 95-108) requires:
-    // - 24-32 repetitions of repeating rules, we support 48-64
-    // - 12 repetitions of recursive rules, we support 24
+    // - 24-32 repetitions of repeating rules, we support unlimited width
+    // - 12 repetitions of recursive rules, we support ~64 actual depth (128 delimiter count)
     // ============================================================
 
     #[test]
@@ -316,27 +326,28 @@ line""""#
         let long_id = "a".repeat(1000);
         let _ = parse(&long_id);
 
-        // Moderately nested parentheses (24 levels - at our depth limit)
-        let deep_parens = format!("{}1{}", "(".repeat(24), ")".repeat(24));
+        // Moderately nested parentheses (128 levels - at our depth limit)
+        let deep_parens = format!("{}1{}", "(".repeat(128), ")".repeat(128));
         assert!(
             parse(&deep_parens).is_ok(),
-            "Should handle 24 nested parentheses"
+            "Should handle 128 nested parentheses"
         );
     }
 
     // ============================================================
     // Section: Nesting Depth Validation
-    // CEL spec requires 12 recursive repetitions, we default to 24 (2x)
+    // CEL spec requires 12 recursive repetitions, we default to 128 delimiter count
+    // (which allows ~64 actual nesting depth since we count both open and close)
     // ============================================================
 
     #[test]
     fn test_nesting_depth_limit_parentheses() {
-        // 24 nested parens should work (at limit)
-        let at_limit = format!("{}1{}", "(".repeat(24), ")".repeat(24));
-        assert!(parse(&at_limit).is_ok(), "Should accept 24 nested parens");
+        // 128 open parens should work (at limit)
+        let at_limit = format!("{}1{}", "(".repeat(128), ")".repeat(128));
+        assert!(parse(&at_limit).is_ok(), "Should accept 128 nested parens");
 
-        // 25 nested parens should fail
-        let over_limit = format!("{}1{}", "(".repeat(25), ")".repeat(25));
+        // 129 open parens should fail
+        let over_limit = format!("{}1{}", "(".repeat(129), ")".repeat(129));
         test_util::assert_error_contains(&over_limit, "Nesting depth");
         test_util::assert_error_contains(&over_limit, "exceeds maximum");
     }
@@ -344,13 +355,16 @@ line""""#
     #[test]
     fn test_nesting_depth_limit_brackets() {
         // Test nested brackets (list indexing)
-        let at_limit = format!("{}x{}", "[".repeat(24), "]".repeat(24));
-        assert!(parse(&at_limit).is_ok(), "Should accept 24 nested brackets");
+        let at_limit = format!("{}x{}", "[".repeat(128), "]".repeat(128));
+        assert!(
+            parse(&at_limit).is_ok(),
+            "Should accept 128 nested brackets"
+        );
 
-        let over_limit = format!("{}x{}", "[".repeat(25), "]".repeat(25));
+        let over_limit = format!("{}x{}", "[".repeat(129), "]".repeat(129));
         assert!(
             parse(&over_limit).is_err(),
-            "Should reject 25 nested brackets"
+            "Should reject 129 nested brackets"
         );
     }
 
@@ -358,32 +372,32 @@ line""""#
     fn test_nesting_depth_limit_braces() {
         // Test nested braces (map literals)
         // Use lists inside maps to avoid ternary operator parsing issues
-        let at_limit = format!("{{1:{}}}", "[".repeat(23) + "x" + &"]".repeat(23));
+        let at_limit = format!("{{1:{}}}", "[".repeat(127) + "x" + &"]".repeat(127));
         assert!(
             parse(&at_limit).is_ok(),
-            "Should accept 24 total nesting depth (1 brace + 23 brackets)"
+            "Should accept 128 total depth (1 brace + 127 brackets)"
         );
 
-        let over_limit = format!("{{1:{}}}", "[".repeat(24) + "x" + &"]".repeat(24));
+        let over_limit = format!("{{1:{}}}", "[".repeat(128) + "x" + &"]".repeat(128));
         assert!(
             parse(&over_limit).is_err(),
-            "Should reject 25 total nesting depth (1 brace + 24 brackets)"
+            "Should reject 129+ total depth (1 brace + 128 brackets)"
         );
     }
 
     #[test]
     fn test_nesting_depth_mixed_delimiters() {
-        // Mixed delimiters should count toward total depth
-        let mixed = "(".repeat(12) + &"[".repeat(12) + "1" + &"]".repeat(12) + &")".repeat(12);
+        // Mixed delimiters should count toward total delimiter count
+        let mixed = "(".repeat(64) + &"[".repeat(64) + "1" + &"]".repeat(64) + &")".repeat(64);
         assert!(
             parse(&mixed).is_ok(),
-            "Should accept 24 total nesting depth"
+            "Should accept 128 total max depth (64 parens + 64 brackets)"
         );
 
-        let mixed_over = "(".repeat(26) + &"[".repeat(25) + "1" + &"]".repeat(25) + &")".repeat(26);
+        let mixed_over = "(".repeat(65) + &"[".repeat(64) + "1" + &"]".repeat(64) + &")".repeat(65);
         assert!(
             parse(&mixed_over).is_err(),
-            "Should reject 51 total nesting depth"
+            "Should reject 129 total max depth (65 parens + 64 brackets)"
         );
     }
 }

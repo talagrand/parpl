@@ -302,11 +302,11 @@ mod tests {
         },
 
         test_nesting_depth_error: {
-            let err = Error::nesting_depth(25, 24);
+            let err = Error::nesting_depth(129, 128);
             assert_eq!(err.phase, Phase::Parsing);
             assert!(matches!(
                 err.kind,
-                ErrorKind::NestingDepthExceeded { depth: 25, max: 24 }
+                ErrorKind::NestingDepthExceeded { depth: 129, max: 128 }
             ));
         },
 

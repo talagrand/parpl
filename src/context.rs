@@ -83,7 +83,8 @@ impl<'arena> Default for StringInterner<'arena> {
 /// use cello::CelloBuilder;
 ///
 /// let mut ctx = CelloBuilder::new()
-///     .max_nesting_depth(100)
+///     .max_parse_depth(128)
+///     .max_ast_depth(24)
 ///     .max_call_limit(50_000_000)
 ///     .strict_mode(true)
 ///     .build();
@@ -91,8 +92,12 @@ impl<'arena> Default for StringInterner<'arena> {
 /// ```
 #[derive(Debug, Clone)]
 pub struct CelloBuilder {
-    /// Maximum nesting depth for expressions (default: 24, 2x CEL spec minimum of 12)
-    max_nesting_depth: usize,
+    /// Maximum parse depth for heuristic pre-validation (default: 128)
+    /// Protects against Pest parser stack overflow (~171 on 1MB stack)
+    max_parse_depth: usize,
+    /// Maximum AST nesting depth (default: 24)
+    /// Protects against AST builder stack overflow (~38 on 1MB stack)
+    max_ast_depth: usize,
     /// Maximum call limit for pest parser (default: 10 million)
     max_call_limit: usize,
     /// Enable strict mode - reject more programs than spec requires (default: false)
@@ -103,21 +108,60 @@ impl CelloBuilder {
     /// Create a new builder with default configuration
     ///
     /// Defaults:
-    /// - `max_nesting_depth`: 24 (2x CEL spec minimum of 12)
+    /// - `max_parse_depth`: 128 (heuristic pre-validation, protects Pest parser)
+    /// - `max_ast_depth`: 24 (precise AST recursion limit, 2x CEL spec minimum)
     /// - `max_call_limit`: 10,000,000
     /// - `strict_mode`: false
     pub fn new() -> Self {
         Self {
-            max_nesting_depth: crate::constants::DEFAULT_MAX_RECURSION_DEPTH,
+            max_parse_depth: crate::constants::DEFAULT_MAX_PARSE_DEPTH,
+            max_ast_depth: crate::constants::DEFAULT_MAX_AST_DEPTH,
             max_call_limit: 10_000_000,
             strict_mode: false,
         }
     }
 
-    /// Set maximum nesting depth for expressions
+    /// Set maximum parse depth for heuristic pre-validation
     ///
+    /// This protects against Pest parser stack overflow (~171 depth on 1MB stack).
+    /// Should be higher than `max_ast_depth`.
+    ///
+    /// # Examples
+    /// ```
+    /// use cello::CelloBuilder;
+    ///
+    /// let ctx = CelloBuilder::new()
+    ///     .max_parse_depth(128)
+    ///     .build();
+    /// ```
+    pub fn max_parse_depth(mut self, depth: usize) -> Self {
+        self.max_parse_depth = depth;
+        self
+    }
+
+    /// Set maximum AST nesting depth
+    ///
+    /// This protects against AST builder stack overflow (~38 depth on 1MB stack).
     /// The CEL specification requires supporting at least 12 levels of nesting.
-    /// We default to 50 for generosity.
+    /// We default to 24 (2x spec minimum).
+    ///
+    /// # Examples
+    /// ```
+    /// use cello::CelloBuilder;
+    ///
+    /// let ctx = CelloBuilder::new()
+    ///     .max_ast_depth(30)
+    ///     .build();
+    /// ```
+    pub fn max_ast_depth(mut self, depth: usize) -> Self {
+        self.max_ast_depth = depth;
+        self
+    }
+
+    /// Set maximum nesting depth (sets both parse and AST depth to same value)
+    ///
+    /// **Deprecated**: Use `max_parse_depth()` and `max_ast_depth()` separately.
+    /// This convenience method sets both to the same value.
     ///
     /// # Examples
     /// ```
@@ -128,7 +172,8 @@ impl CelloBuilder {
     ///     .build();
     /// ```
     pub fn max_nesting_depth(mut self, depth: usize) -> Self {
-        self.max_nesting_depth = depth;
+        self.max_parse_depth = depth;
+        self.max_ast_depth = depth;
         self
     }
 
@@ -223,9 +268,21 @@ impl CelloBuilder {
         f(&ctx)
     }
 
-    /// Get the maximum nesting depth
+    /// Get the maximum parse depth (heuristic pre-validation)
+    pub fn get_max_parse_depth(&self) -> usize {
+        self.max_parse_depth
+    }
+
+    /// Get the maximum AST nesting depth (precise limit)
+    pub fn get_max_ast_depth(&self) -> usize {
+        self.max_ast_depth
+    }
+
+    /// Get the maximum nesting depth (returns parse depth for backward compatibility)
+    ///
+    /// **Deprecated**: Use `get_max_parse_depth()` or `get_max_ast_depth()` explicitly.
     pub fn get_max_nesting_depth(&self) -> usize {
-        self.max_nesting_depth
+        self.max_parse_depth
     }
 
     /// Get the maximum call limit
@@ -301,7 +358,8 @@ impl CelloContext {
 
         // Use the builder's configuration for parsing
         let config = crate::parser::ParseConfig {
-            max_nesting_depth: self.config.max_nesting_depth,
+            max_parse_depth: self.config.max_parse_depth,
+            max_ast_depth: self.config.max_ast_depth,
             max_call_limit: self.config.max_call_limit,
         };
 
@@ -398,7 +456,7 @@ mod tests {
     test_cases! {
         test_builder_defaults: {
             let builder = CelloBuilder::new();
-            assert_eq!(builder.get_max_nesting_depth(), 24);
+            assert_eq!(builder.get_max_nesting_depth(), 128);
             assert_eq!(builder.get_max_call_limit(), 10_000_000);
             assert!(!builder.is_strict_mode());
         },
@@ -416,7 +474,7 @@ mod tests {
 
         test_builder_default_trait: {
             let builder = CelloBuilder::default();
-            assert_eq!(builder.get_max_nesting_depth(), 24);
+            assert_eq!(builder.get_max_nesting_depth(), 128);
         },
     }
 
@@ -510,14 +568,19 @@ mod tests {
     // ============================================================
 
     test_cases! {
-        test_config_max_nesting_depth_honored: {
-            // Create a context with low nesting depth
-            let mut ctx = CelloBuilder::new().max_nesting_depth(3).build();
+        test_config_max_parse_depth_honored: {
+            // Create a context with low parse depth but generous AST depth
+            // so that the heuristic pre-validation is the limiting factor.
+            let mut ctx = CelloBuilder::new()
+                .max_parse_depth(3)
+                .max_ast_depth(128)
+                .build();
 
-            // This should succeed (depth 3)
-            assert!(ctx.parse("(((1)))").is_ok());
+            // This should succeed (3 opening delimiters is at the limit)
+            let first = ctx.parse("(((1)))");
+            assert!(first.is_ok());
 
-            // This should fail (depth 4)
+            // This should fail (4 opening delimiters exceeds the parse depth limit)
             let result = ctx.parse("((((1))))");
             assert!(result.is_err());
 
