@@ -42,6 +42,12 @@ pub enum Token {
     CommaAt,
     /// `.`
     Dot,
+    /// `#;` (datum comment prefix)
+    ///
+    /// Note: This is a deviation from R7RS, which treats `#; <datum>` as
+    /// intertoken space. Since the lexer cannot parse `<datum>`, it yields
+    /// this token so the parser can perform the skipping.
+    DatumComment,
 }
 
 /// A single token paired with its source span.
@@ -66,14 +72,19 @@ pub type SpannedToken = Syntax<Token>;
 /// For now, `lex` implements `<intertoken space>` and a subset of
 /// `<token>` recognition: inputs that contain only intertoken space
 /// yield an empty token list. We are gradually adding `<token>`
-/// classifications, currently `<boolean>`, `<character>`, and `<string>`.
+/// classifications, currently `<boolean>`, `<character>`, `<string>`, and `<number>`.
 pub fn lex(source: &str) -> Result<Vec<SpannedToken>, ParseError> {
     let mut tokens = Vec::new();
     let mut pos = 0usize;
     let len = source.len();
 
-    // Track `#!fold-case` / `#!no-fold-case` directives. This will
-    // later influence how identifiers and symbols are recognized.
+    // Track `#!fold-case` / `#!no-fold-case` directives.
+    //
+    // R7RS-DEVIATION: Although we recognize these directives
+    // lexically, we deliberately ignore their semantics for now and
+    // keep the reader case-sensitive with ASCII-only identifiers.
+    // This errs on the side of rejecting some valid programs rather
+    // than accepting invalid ones.
     let mut _fold_case = false;
 
     while pos < len {
@@ -163,236 +174,130 @@ pub fn lex(source: &str) -> Result<Vec<SpannedToken>, ParseError> {
         }
 
         // Token recognition.
-        let ch = source[pos..].chars().next().unwrap();
-        match ch {
-            '"' => {
-                // String literal token.
-                //
-                // Grammar reference:
-                //
-                // ```text
-                // <string> ::= " <string element>* "
-                //
-                // <string element> ::= any character other than " or \
-                //                     | <mnemonic escape> | \" | \\
-                //                     | \\ <intraline whitespace>* <line ending>
-                //                       <intraline whitespace>*
-                //                     | <inline hex escape>
-                // ```
+        let start = pos;
 
-                let start = pos;
-                pos += ch.len_utf8(); // skip opening quote
+        if let Some((end, token)) = lex_string(source, start)? {
+            tokens.push(Syntax::new(Span { start, end }, token));
+            pos = end;
+            continue;
+        }
 
-                let mut result = String::new();
+        if let Some((end, token)) = lex_character(source, start)? {
+            tokens.push(Syntax::new(Span { start, end }, token));
+            pos = end;
+            continue;
+        }
 
-                loop {
-                    if pos >= len {
-                        // Unterminated string.
-                        return Err(ParseError::Incomplete);
-                    }
+        if let Some((end, token)) = lex_boolean(source, start)? {
+            tokens.push(Syntax::new(Span { start, end }, token));
+            pos = end;
+            continue;
+        }
 
-                    let ch = source[pos..].chars().next().unwrap();
-                    let ch_len = ch.len_utf8();
-
-                    match ch {
-                        '"' => {
-                            // Closing quote.
-                            pos += ch_len;
-                            let span = Span { start, end: pos };
-                            tokens.push(Syntax::new(span, Token::String(result)));
-                            break;
-                        }
-                        '\\' => {
-                            // Start of an escape sequence.
-                            pos += ch_len; // move past '\\'
-                            if pos >= len {
-                                return Err(ParseError::Incomplete);
-                            }
-
-                            let next_ch = source[pos..].chars().next().unwrap();
-                            let next_len = next_ch.len_utf8();
-
-                            match next_ch {
-                                // <mnemonic escape> ::= \\a | \\b | \\t | \\n | \\r
-                                'a' => {
-                                    result.push('\u{7}');
-                                    pos += next_len;
-                                }
-                                'b' => {
-                                    result.push('\u{8}');
-                                    pos += next_len;
-                                }
-                                't' => {
-                                    result.push('\t');
-                                    pos += next_len;
-                                }
-                                'n' => {
-                                    result.push('\n');
-                                    pos += next_len;
-                                }
-                                'r' => {
-                                    result.push('\r');
-                                    pos += next_len;
-                                }
-                                '"' => {
-                                    result.push('"');
-                                    pos += next_len;
-                                }
-                                '\\' => {
-                                    result.push('\\');
-                                    pos += next_len;
-                                }
-                                'x' | 'X' => {
-                                    // <inline hex escape> ::= \\x<hex scalar value>;
-                                    pos += next_len; // move past 'x'
-                                    let hex_start = pos;
-                                    while pos < len {
-                                        let c = source[pos..].chars().next().unwrap();
-                                        if c.is_ascii_hexdigit() {
-                                            pos += c.len_utf8();
-                                        } else {
-                                            break;
-                                        }
-                                    }
-
-                                    if pos == hex_start {
-                                        let span = Span { start, end: pos };
-                                        return Err(ParseError::lexical(
-                                            span,
-                                            "<string>",
-                                            "expected hex digits after \\x",
-                                        ));
-                                    }
-
-                                    if pos >= len {
-                                        return Err(ParseError::Incomplete);
-                                    }
-
-                                    let end_ch = source[pos..].chars().next().unwrap();
-                                    if end_ch != ';' {
-                                        let span = Span { start, end: pos };
-                                        return Err(ParseError::lexical(
-                                            span,
-                                            "<string>",
-                                            "missing terminating ';' in hex escape",
-                                        ));
-                                    }
-
-                                    let hex_digits = &source[hex_start..pos];
-                                    let codepoint =
-                                        u32::from_str_radix(hex_digits, 16).map_err(|_| {
-                                            let span = Span { start, end: pos };
-                                            ParseError::lexical(
-                                                span,
-                                                "<string>",
-                                                "invalid hex digits in hex escape",
-                                            )
-                                        })?;
-                                    if let Some(c) = char::from_u32(codepoint) {
-                                        result.push(c);
-                                    } else {
-                                        let span = Span { start, end: pos };
-                                        return Err(ParseError::lexical(
-                                            span,
-                                            "<string>",
-                                            "hex escape is not a valid Unicode scalar value",
-                                        ));
-                                    }
-
-                                    // Consume the ';'.
-                                    pos += end_ch.len_utf8();
-                                }
-                                _ => {
-                                    // Attempt the line-ending escape:
-                                    // \\ <intraline whitespace>* <line ending>
-                                    //    <intraline whitespace>*
-                                    let mut idx = pos;
-                                    while idx < len {
-                                        let c = source[idx..].chars().next().unwrap();
-                                        if c == ' ' || c == '\t' {
-                                            idx += c.len_utf8();
-                                        } else {
-                                            break;
-                                        }
-                                    }
-
-                                    if idx >= len {
-                                        return Err(ParseError::Incomplete);
-                                    }
-
-                                    let c = source[idx..].chars().next().unwrap();
-                                    if c == '\n' || c == '\r' {
-                                        // Consume the line ending (including optional LF after CR).
-                                        idx += c.len_utf8();
-                                        if c == '\r' && idx < len {
-                                            let c2 = source[idx..].chars().next().unwrap();
-                                            if c2 == '\n' {
-                                                idx += c2.len_utf8();
-                                            }
-                                        }
-
-                                        // Consume following intraline whitespace.
-                                        while idx < len {
-                                            let c2 = source[idx..].chars().next().unwrap();
-                                            if c2 == ' ' || c2 == '\t' {
-                                                idx += c2.len_utf8();
-                                            } else {
-                                                break;
-                                            }
-                                        }
-
-                                        // Backslash + line ending sequence contributes nothing.
-                                        pos = idx;
-                                    } else {
-                                        let span = Span { start, end: idx };
-                                        return Err(ParseError::lexical(
-                                            span,
-                                            "<string>",
-                                            "unknown escape sequence in string literal",
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                        '\n' | '\r' => {
-                            // Newlines are not allowed as raw string characters.
-                            let span = Span {
-                                start,
-                                end: pos + ch_len,
-                            };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<string>",
-                                "newline character in string literal",
-                            ));
-                        }
-                        _ => {
-                            // Any character other than '"' or '\\'.
-                            result.push(ch);
-                            pos += ch_len;
-                        }
-                    }
+        if let Some((end, literal)) = lex_prefixed_number(source, start)? {
+            if end < len {
+                let after = source[end..].chars().next().unwrap();
+                if !is_delimiter(after) {
+                    let span = Span { start, end };
+                    return Err(ParseError::lexical(
+                        span,
+                        "<number>",
+                        "number literal not followed by a delimiter",
+                    ));
                 }
             }
-            '+' | '-' | '0'..='9' | '.' => {
-                // `<number>` token in decimal radix (R = 10), including
-                // both real and complex forms as specified by `<complex 10>`.
-                let start = pos;
+            tokens.push(Syntax::new(Span { start, end }, Token::Number(literal)));
+            pos = end;
+            continue;
+        }
 
-                // If we start with a '.', require a digit next; otherwise this
-                // could be the standalone `.` token or part of an identifier
-                // once those are implemented.
-                if ch == '.' {
-                    let look = pos + ch.len_utf8();
-                    if look >= len {
-                        return Err(ParseError::Unimplemented);
-                    }
-                    let next = source[look..].chars().next().unwrap();
-                    if !next.is_ascii_digit() {
-                        return Err(ParseError::Unimplemented);
+        let ch = source[pos..].chars().next().unwrap();
+        match ch {
+            '(' => {
+                let end = pos + ch.len_utf8();
+                tokens.push(Syntax::new(Span { start, end }, Token::LParen));
+                pos = end;
+                continue;
+            }
+            ')' => {
+                let end = pos + ch.len_utf8();
+                tokens.push(Syntax::new(Span { start, end }, Token::RParen));
+                pos = end;
+                continue;
+            }
+            '\'' => {
+                let end = pos + ch.len_utf8();
+                tokens.push(Syntax::new(Span { start, end }, Token::Quote));
+                pos = end;
+                continue;
+            }
+            '`' => {
+                let end = pos + ch.len_utf8();
+                tokens.push(Syntax::new(Span { start, end }, Token::Backquote));
+                pos = end;
+                continue;
+            }
+            ',' => {
+                let comma_end = pos + ch.len_utf8();
+                let mut end = comma_end;
+                if comma_end < len {
+                    let next = source[comma_end..].chars().next().unwrap();
+                    if next == '@' {
+                        end = comma_end + next.len_utf8();
+                        tokens.push(Syntax::new(Span { start, end }, Token::CommaAt));
+                        pos = end;
+                        continue;
                     }
                 }
-
+                tokens.push(Syntax::new(Span { start, end }, Token::Comma));
+                pos = end;
+                continue;
+            }
+            '#' => {
+                let hash_end = pos + ch.len_utf8();
+                if hash_end < len {
+                    let next = source[hash_end..].chars().next().unwrap();
+                    if next == '(' {
+                        let end = hash_end + next.len_utf8();
+                        tokens.push(Syntax::new(Span { start, end }, Token::VectorStart));
+                        pos = end;
+                        continue;
+                    } else if next == ';' {
+                        // R7RS-DEVIATION: #; is technically a comment and should be skipped by the lexer.
+                        // However, skipping it requires parsing a full datum, which is not possible in the lexer.
+                        // We return it as a token so the parser can handle the skipping.
+                        // For now, we report Unimplemented as requested.
+                        return Err(ParseError::Unimplemented);
+                    } else if next == 'u' || next == 'U' {
+                        // Possible `#u8(` bytevector prefix.
+                        let mut p = hash_end + next.len_utf8();
+                        if p < len {
+                            let c2 = source[p..].chars().next().unwrap();
+                            if c2 == '8' {
+                                p += c2.len_utf8();
+                                if p < len {
+                                    let c3 = source[p..].chars().next().unwrap();
+                                    if c3 == '(' {
+                                        let end = p + c3.len_utf8();
+                                        tokens.push(Syntax::new(
+                                            Span { start, end },
+                                            Token::ByteVectorStart,
+                                        ));
+                                        pos = end;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Other `#`-prefixed tokens (e.g. datum comments) are not
+                // implemented yet at the lexical layer.
+                return Err(ParseError::Unimplemented);
+            }
+            '+' | '-' | '0'..='9' => {
+                // `<number>` token in decimal radix (R = 10), including
+                // both real and complex forms as specified by `<complex 10>`.
                 if let Some((end, literal)) = lex_complex_decimal(source, start)? {
                     let span = Span { start, end };
                     tokens.push(Syntax::new(span, Token::Number(literal)));
@@ -404,228 +309,31 @@ pub fn lex(source: &str) -> Result<Vec<SpannedToken>, ParseError> {
                     return Err(ParseError::Unimplemented);
                 }
             }
-            '#' => {
-                let start = pos;
-                pos += ch.len_utf8();
-                if pos >= len {
-                    // Incomplete `#`-prefixed token (boolean/character/etc.).
-                    return Err(ParseError::Incomplete);
-                }
-
-                let next = source[pos..].chars().next().unwrap();
-
-                // `<character>` tokens
-                //
-                // Grammar reference:
-                //
-                // ```text
-                // <character> ::= #\ <any character>
-                //                | #\ <character name>
-                //                | #\x<hex scalar value>
-                //
-                // <character name> ::= alarm | backspace | delete
-                //                    | escape | newline | null | return | space | tab
-                // ```
-                if next == '\\' {
-                    pos += next.len_utf8();
-                    if pos >= len {
-                        return Err(ParseError::Incomplete);
-                    }
-
-                    let c1 = source[pos..].chars().next().unwrap();
-                    let value_char;
-
-                    if c1 == 'x' || c1 == 'X' {
-                        // Hex scalar value form: `#\x<hex scalar value>`
-                        pos += c1.len_utf8();
-                        let hex_start = pos;
-                        while pos < len {
-                            let c = source[pos..].chars().next().unwrap();
-                            if c.is_ascii_hexdigit() {
-                                pos += c.len_utf8();
-                            } else {
-                                break;
-                            }
-                        }
-
-                        if pos == hex_start {
-                            let span = Span { start, end: pos };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<character>",
-                                "expected hex digits in character literal",
-                            ));
-                        }
-
-                        let hex_digits = &source[hex_start..pos];
-                        let codepoint = u32::from_str_radix(hex_digits, 16).map_err(|_| {
-                            let span = Span { start, end: pos };
-                            ParseError::lexical(
-                                span,
-                                "<character>",
-                                "invalid hex digits in character literal",
-                            )
-                        })?;
-                        value_char = match char::from_u32(codepoint) {
-                            Some(c) => c,
-                            None => {
-                                let span = Span { start, end: pos };
-                                return Err(ParseError::lexical(
-                                    span,
-                                    "<character>",
-                                    "hex scalar value is not a valid Unicode scalar value",
-                                ));
-                            }
-                        };
-                    } else if c1.is_ascii_alphabetic() {
-                        // Named character form: `#\\<character name>`
-                        let name_start = pos;
-                        while pos < len {
-                            let c = source[pos..].chars().next().unwrap();
-                            if c.is_ascii_alphabetic() {
-                                pos += c.len_utf8();
-                            } else {
-                                break;
-                            }
-                        }
-                        let name = &source[name_start..pos];
-
-                        // If only a single alphabetic character follows `#\\`,
-                        // interpret it as the `<any character>` case rather
-                        // than a `<character name>`.
-                        if name.len() == c1.len_utf8() {
-                            value_char = c1;
-                        } else {
-                            value_char = match name {
-                                "alarm" => '\u{7}',
-                                "backspace" => '\u{8}',
-                                "delete" => '\u{7F}',
-                                "escape" => '\u{1B}',
-                                "newline" => '\n',
-                                "null" => '\0',
-                                "return" => '\r',
-                                "space" => ' ',
-                                "tab" => '\t',
-                                _ => {
-                                    let span = Span { start, end: pos };
-                                    return Err(ParseError::lexical(
-                                        span,
-                                        "<character>",
-                                        "unknown character name",
-                                    ));
-                                }
-                            };
-                        }
-                    } else {
-                        // Single-character form: `#\<any character>`
-                        value_char = c1;
-                        pos += c1.len_utf8();
-                    }
-
-                    // Characters must be terminated by a <delimiter> or
-                    // the end of the input. See the note in `syn.md`:
-                    // "Identifiers that do not begin with a vertical line are
-                    // terminated by a <delimiter> or by the end of the input.
-                    // So are dot, numbers, characters, and booleans."
-                    if pos < len {
-                        let after = source[pos..].chars().next().unwrap();
-                        if !is_delimiter(after) {
-                            let span = Span { start, end: pos };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<character>",
-                                "character literal not followed by a delimiter",
-                            ));
-                        }
-                    }
-
-                    let span = Span { start, end: pos };
-                    tokens.push(Syntax::new(span, Token::Character(value_char)));
-                    continue;
-                }
-
-                // Attempt decimal `<number>` with `<exactness>` / `#d` prefix:
-                //
-                // ```text
-                // <prefix 10> ::= <radix 10> <exactness>
-                //               | <exactness> <radix 10>
-                // <exactness> ::= <empty> | #i | #e
-                // <radix 10> ::= <empty> | #d
-                // ```
-                if let Some((end, number)) = lex_hash_decimal_number(source, start)? {
-                    if end < len {
-                        let after = source[end..].chars().next().unwrap();
-                        if !is_delimiter(after) {
+            '.' => {
+                // Either a decimal `<number>` starting with `.`, or the
+                // standalone `.` punctuation token.
+                let look = pos + ch.len_utf8();
+                if look < len {
+                    let next = source[look..].chars().next().unwrap();
+                    if next.is_ascii_digit() {
+                        if let Some((end, literal)) = lex_complex_decimal(source, start)? {
                             let span = Span { start, end };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<number>",
-                                "number literal not followed by a delimiter",
-                            ));
+                            tokens.push(Syntax::new(span, Token::Number(literal)));
+                            pos = end;
+                            continue;
+                        } else {
+                            return Err(ParseError::Unimplemented);
                         }
                     }
-
-                    let span = Span { start, end };
-                    tokens.push(Syntax::new(span, Token::Number(number)));
-                    pos = end;
-                    continue;
                 }
-
-                // Attempt non-decimal `<number>` with radix prefixes
-                // `#b`, `#o`, or `#x` and optional `<exactness>`.
-                if let Some((end, number)) = lex_hash_nondecimal_number(source, start)? {
-                    let span = Span { start, end };
-                    tokens.push(Syntax::new(span, Token::Number(number)));
-                    pos = end;
-                    continue;
-                }
-
-                // `<boolean> ::= #t | #f | #true | #false`
-                let word_start = pos;
-                while pos < len {
-                    let c = source[pos..].chars().next().unwrap();
-                    if c.is_ascii_alphabetic() {
-                        pos += c.len_utf8();
-                    } else {
-                        break;
-                    }
-                }
-
-                let ident = &source[word_start..pos];
-                let lower = ident.to_ascii_lowercase();
-                let value = match lower.as_str() {
-                    "t" | "true" => Some(true),
-                    "f" | "false" => Some(false),
-                    _ => None,
-                };
-
-                if let Some(b) = value {
-                    // Booleans are also terminated by a <delimiter> or EOF.
-                    if pos < len {
-                        let after = source[pos..].chars().next().unwrap();
-                        if !is_delimiter(after) {
-                            let span = Span { start, end: pos };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<boolean>",
-                                "boolean literal not followed by a delimiter",
-                            ));
-                        }
-                    }
-
-                    let span = Span { start, end: pos };
-                    tokens.push(Syntax::new(span, Token::Boolean(b)));
-                    continue;
-                } else {
-                    // Not a `<boolean>` or decimal `<number>` with
-                    // prefix; other `#`-prefixed tokens (radix-prefixed
-                    // numbers for non-decimal R, vectors, bytevectors,
-                    // datum comments) are not implemented yet.
-                    return Err(ParseError::Unimplemented);
-                }
+                // Treat as `.` token.
+                let end = look;
+                tokens.push(Syntax::new(Span { start, end }, Token::Dot));
+                pos = end;
+                continue;
             }
             _ => {
-                // Other token classes are not yet implemented.
+                // Other token classes (identifiers, etc.) are not yet implemented.
                 return Err(ParseError::Unimplemented);
             }
         }
@@ -788,6 +496,66 @@ fn lex_sign_ureal_for_radix(
 /// <real R>   ::= <sign> <ureal R>
 ///               | <infnan>
 /// ```
+fn ensure_delimiter(
+    source: &str,
+    pos: usize,
+    start: usize,
+    context: &'static str,
+) -> Result<(), ParseError> {
+    if pos < source.len() {
+        let after = source[pos..].chars().next().unwrap();
+        if !is_delimiter(after) {
+            let span = Span { start, end: pos };
+            return Err(ParseError::lexical(
+                span,
+                context,
+                "literal not followed by a delimiter",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn lex_real_repr(
+    source: &str,
+    start: usize,
+    radix: NumberRadix,
+) -> Result<Option<(usize, RealRepr)>, ParseError> {
+    if let Some((end, infnan)) = lex_infnan_body(source, start) {
+        return Ok(Some((end, RealRepr::Infnan(infnan))));
+    }
+
+    if let Some((end, finite)) = lex_sign_ureal_for_radix(source, start, radix)? {
+        return Ok(Some((end, RealRepr::Finite(finite))));
+    }
+
+    Ok(None)
+}
+
+/// Lex a `<complex R>` or `<real R>` starting at `body_start`, with
+/// the overall literal beginning at `literal_start` (to include any
+/// prefixes in spans and `NumberLiteral.text`). This implements the
+/// generic R7RS complex grammar:
+///
+/// ```text
+/// <number>   ::= <num 2> | <num 8>
+///              | <num 10> | <num 16>
+/// <num R>    ::= <prefix R> <complex R>
+/// <complex R> ::= <real R>
+///               | <real R> @ <real R>
+///               | <real R> + <ureal R> i
+///               | <real R> - <ureal R> i
+///               | <real R> + i
+///               | <real R> - i
+///               | <real R> <infnan> i
+///               | + <ureal R> i
+///               | - <ureal R> i
+///               | <infnan> i
+///               | + i
+///               | - i
+/// <real R>   ::= <sign> <ureal R>
+///               | <infnan>
+/// ```
 fn lex_complex_with_radix(
     source: &str,
     literal_start: usize,
@@ -800,133 +568,230 @@ fn lex_complex_with_radix(
         return Ok(None);
     }
 
-    let ch = source[body_start..].chars().next().unwrap();
+    // 1. Try to parse the first component as a real number.
+    // This covers `<real R>`, the real part of `<real R> @ <real R>`,
+    // and the real part of `<real R> +/- ... i`.
+    // It also covers the imaginary part of `+ <ureal R> i` if we consider
+    // the leading `+` as part of the number.
+    let first_attempt = lex_real_repr(source, body_start, radix)?;
 
-    // Precompute whether the literal body starts with `<infnan>` so we
-    // can distinguish `+i`/`-i` from `+inf.0`, `+nan.0`, etc.
-    let starts_with_infnan = lex_infnan_body(source, body_start);
+    if let Some((end1, repr1)) = first_attempt {
+        // We successfully parsed something that looks like a real number.
+        // Now check what follows.
 
-    // 1. Pure imaginary `<infnan> i` with no explicit real part.
-    if let Some((mid, infnan)) = lex_infnan_body(source, body_start) {
-        if mid < len {
-            let i_ch = source[mid..].chars().next().unwrap();
-            if i_ch == 'i' || i_ch == 'I' {
-                let i_end = mid + i_ch.len_utf8();
-                if i_end < len {
-                    let after = source[i_end..].chars().next().unwrap();
-                    if !is_delimiter(after) {
-                        let span = Span {
-                            start: literal_start,
-                            end: i_end,
-                        };
-                        return Err(ParseError::lexical(
-                            span,
-                            "<number>",
-                            "number literal not followed by a delimiter",
-                        ));
-                    }
-                }
+        if end1 >= len {
+            // End of input. It's a real number.
+            let text = &source[literal_start..end1];
+            let kind = NumberLiteralKind {
+                radix,
+                exactness,
+                value: NumberValue::Real(repr1),
+            };
+            return Ok(Some((
+                end1,
+                NumberLiteral {
+                    text: text.to_string(),
+                    kind,
+                },
+            )));
+        }
+
+        let next_ch = source[end1..].chars().next().unwrap();
+
+        if is_delimiter(next_ch) {
+            // It's a real number.
+            let text = &source[literal_start..end1];
+            let kind = NumberLiteralKind {
+                radix,
+                exactness,
+                value: NumberValue::Real(repr1),
+            };
+            return Ok(Some((
+                end1,
+                NumberLiteral {
+                    text: text.to_string(),
+                    kind,
+                },
+            )));
+        }
+
+        match next_ch {
+            'i' | 'I' => {
+                // It was actually a pure imaginary number: `<real R> i`
+                // e.g. `+inf.0i`, `+5i` (if `+5` was parsed as real).
+                let i_end = end1 + next_ch.len_utf8();
+                ensure_delimiter(source, i_end, literal_start, "<number>")?;
 
                 let real_zero = RealRepr::Finite(FiniteRealRepr::Integer {
                     spelling: "0".to_string(),
                 });
-                let imag = RealRepr::Infnan(infnan);
                 let kind = NumberLiteralKind {
                     radix,
                     exactness,
                     value: NumberValue::Rectangular {
                         real: real_zero,
-                        imag,
+                        imag: repr1,
                     },
                 };
                 let text = &source[literal_start..i_end];
-                let literal = NumberLiteral {
-                    text: text.to_string(),
-                    kind,
-                };
-                return Ok(Some((i_end, literal)));
+                return Ok(Some((
+                    i_end,
+                    NumberLiteral {
+                        text: text.to_string(),
+                        kind,
+                    },
+                )));
             }
-        }
-        // If this was plain `<infnan>` without trailing `i`, we will
-        // treat it as `<real R>` below.
-    }
-
-    // 2. Pure imaginary forms with no explicit real part, but only
-    // when the literal does not start with `<infnan>`:
-    //
-    //   + <ureal R> i
-    //   - <ureal R> i
-    //   + i
-    //   - i
-    if (ch == '+' || ch == '-') && starts_with_infnan.is_none() {
-        // First try `+<ureal R>i` / `-<ureal R>i` using the shared
-        // `<sign> <ureal R>` helper, then fall back to the
-        // unit-imaginary `+i` / `-i` cases.
-        if let Some((end_ureal, imag_finite)) =
-            lex_sign_ureal_for_radix(source, body_start, radix)?
-        {
-            if end_ureal < len {
-                let i_ch = source[end_ureal..].chars().next().unwrap();
-                if i_ch == 'i' || i_ch == 'I' {
-                    let i_end = end_ureal + i_ch.len_utf8();
-                    if i_end < len {
-                        let after = source[i_end..].chars().next().unwrap();
-                        if !is_delimiter(after) {
-                            let span = Span {
-                                start: literal_start,
-                                end: i_end,
-                            };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<number>",
-                                "number literal not followed by a delimiter",
-                            ));
-                        }
-                    }
-
-                    let real_zero = RealRepr::Finite(FiniteRealRepr::Integer {
-                        spelling: "0".to_string(),
-                    });
-                    let imag = RealRepr::Finite(imag_finite);
+            '@' => {
+                // Polar: `<real R> @ <real R>`
+                let start2 = end1 + next_ch.len_utf8();
+                if let Some((end2, repr2)) = lex_real_repr(source, start2, radix)? {
+                    ensure_delimiter(source, end2, literal_start, "<number>")?;
                     let kind = NumberLiteralKind {
                         radix,
                         exactness,
-                        value: NumberValue::Rectangular {
-                            real: real_zero,
-                            imag,
+                        value: NumberValue::Polar {
+                            magnitude: repr1,
+                            angle: repr2,
                         },
                     };
-                    let text = &source[literal_start..i_end];
-                    let literal = NumberLiteral {
-                        text: text.to_string(),
-                        kind,
+                    let text = &source[literal_start..end2];
+                    return Ok(Some((
+                        end2,
+                        NumberLiteral {
+                            text: text.to_string(),
+                            kind,
+                        },
+                    )));
+                } else {
+                    let span = Span {
+                        start: literal_start,
+                        end: start2,
                     };
-                    return Ok(Some((i_end, literal)));
+                    return Err(ParseError::lexical(
+                        span,
+                        "<number>",
+                        "expected real after '@'",
+                    ));
                 }
             }
-        }
+            '+' | '-' => {
+                // Rectangular: `<real R> + ... i` or `<real R> - ... i`
+                // The `+` or `-` starts the imaginary part.
 
-        // Fallback: unit imaginary `+i` / `-i`.
+                // 1. Try to parse the imaginary part as a real number (including the sign).
+                // This covers `1+2i` (parsing `+2`) and `1+inf.0i` (parsing `+inf.0`).
+                if let Some((end2, repr2)) = lex_real_repr(source, end1, radix)? {
+                    if end2 >= len {
+                        // We parsed the second number but hit EOF. We need an 'i' to complete
+                        // the complex number, so this is incomplete.
+                        return Err(ParseError::Incomplete);
+                    }
+
+                    let ch2 = source[end2..].chars().next().unwrap();
+                    if ch2 == 'i' || ch2 == 'I' {
+                        let i_end = end2 + ch2.len_utf8();
+                        ensure_delimiter(source, i_end, literal_start, "<number>")?;
+
+                        let kind = NumberLiteralKind {
+                            radix,
+                            exactness,
+                            value: NumberValue::Rectangular {
+                                real: repr1,
+                                imag: repr2,
+                            },
+                        };
+                        let text = &source[literal_start..i_end];
+                        return Ok(Some((
+                            i_end,
+                            NumberLiteral {
+                                text: text.to_string(),
+                                kind,
+                            },
+                        )));
+                    }
+
+                    // If we parsed a number but it wasn't followed by 'i',
+                    // e.g. `1+2` or `1+inf.0`, this is invalid complex syntax.
+                    let span = Span {
+                        start: literal_start,
+                        end: end2,
+                    };
+                    return Err(ParseError::lexical(
+                        span,
+                        "<number>",
+                        "missing 'i' in complex number",
+                    ));
+                }
+
+                // 2. If that failed, check for `+i` / `-i` (implicit 1).
+                let sign_len = next_ch.len_utf8();
+                let after_sign = end1 + sign_len;
+
+                if after_sign < len {
+                    let after_sign_ch = source[after_sign..].chars().next().unwrap();
+                    if after_sign_ch == 'i' || after_sign_ch == 'I' {
+                        let i_end = after_sign + after_sign_ch.len_utf8();
+                        ensure_delimiter(source, i_end, literal_start, "<number>")?;
+
+                        let imag_spelling = if next_ch == '-' { "-1" } else { "1" };
+                        let imag = RealRepr::Finite(FiniteRealRepr::Integer {
+                            spelling: imag_spelling.to_string(),
+                        });
+
+                        let kind = NumberLiteralKind {
+                            radix,
+                            exactness,
+                            value: NumberValue::Rectangular { real: repr1, imag },
+                        };
+                        let text = &source[literal_start..i_end];
+                        return Ok(Some((
+                            i_end,
+                            NumberLiteral {
+                                text: text.to_string(),
+                                kind,
+                            },
+                        )));
+                    }
+                }
+
+                // If neither worked, it's an error.
+                let span = Span {
+                    start: literal_start,
+                    end: after_sign,
+                };
+                return Err(ParseError::lexical(
+                    span,
+                    "<number>",
+                    "invalid imaginary part",
+                ));
+            }
+            _ => {
+                // Some other character. Error.
+                let span = Span {
+                    start: literal_start,
+                    end: end1,
+                };
+                return Err(ParseError::lexical(
+                    span,
+                    "<number>",
+                    "number literal not followed by a delimiter",
+                ));
+            }
+        }
+    }
+
+    // If `lex_real_repr` failed, we might still have `+i` or `-i` (unit imaginary)
+    // which `lex_real_repr` doesn't handle (it expects digits or infnan).
+    let ch = source[body_start..].chars().next().unwrap();
+    if ch == '+' || ch == '-' {
         let sign_len = ch.len_utf8();
         let after_sign = body_start + sign_len;
         if after_sign < len {
             let i_ch = source[after_sign..].chars().next().unwrap();
             if i_ch == 'i' || i_ch == 'I' {
                 let i_end = after_sign + i_ch.len_utf8();
-                if i_end < len {
-                    let after = source[i_end..].chars().next().unwrap();
-                    if !is_delimiter(after) {
-                        let span = Span {
-                            start: literal_start,
-                            end: i_end,
-                        };
-                        return Err(ParseError::lexical(
-                            span,
-                            "<number>",
-                            "number literal not followed by a delimiter",
-                        ));
-                    }
-                }
+                ensure_delimiter(source, i_end, literal_start, "<number>")?;
 
                 let real_zero = RealRepr::Finite(FiniteRealRepr::Integer {
                     spelling: "0".to_string(),
@@ -935,6 +800,7 @@ fn lex_complex_with_radix(
                 let imag = RealRepr::Finite(FiniteRealRepr::Integer {
                     spelling: imag_spelling.to_string(),
                 });
+
                 let kind = NumberLiteralKind {
                     radix,
                     exactness,
@@ -944,281 +810,18 @@ fn lex_complex_with_radix(
                     },
                 };
                 let text = &source[literal_start..i_end];
-                let literal = NumberLiteral {
-                    text: text.to_string(),
-                    kind,
-                };
-                return Ok(Some((i_end, literal)));
-            }
-        }
-    }
-
-    // 3. Parse the leading `<real R>` (finite or `<infnan>`).
-    let (real_end, real_repr) = if let Some((end, infnan)) = starts_with_infnan {
-        (end, RealRepr::Infnan(infnan))
-    } else if let Some((end, finite)) = lex_sign_ureal_for_radix(source, body_start, radix)? {
-        (end, RealRepr::Finite(finite))
-    } else {
-        // Not a `<real R>` at all.
-        return Ok(None);
-    };
-
-    if real_end >= len {
-        // Pure real at end of input.
-        let text = &source[literal_start..real_end];
-        let kind = NumberLiteralKind {
-            radix,
-            exactness,
-            value: NumberValue::Real(real_repr),
-        };
-        let literal = NumberLiteral {
-            text: text.to_string(),
-            kind,
-        };
-        return Ok(Some((real_end, literal)));
-    }
-
-    let tail_ch = source[real_end..].chars().next().unwrap();
-
-    // If the next character is a delimiter, this is a pure real.
-    if is_delimiter(tail_ch) {
-        let text = &source[literal_start..real_end];
-        let kind = NumberLiteralKind {
-            radix,
-            exactness,
-            value: NumberValue::Real(real_repr),
-        };
-        let literal = NumberLiteral {
-            text: text.to_string(),
-            kind,
-        };
-        return Ok(Some((real_end, literal)));
-    }
-
-    match tail_ch {
-        '@' => {
-            // Polar form: `<real R> @ <real R>`.
-            let after_at = real_end + tail_ch.len_utf8();
-            if after_at >= len {
-                return Err(ParseError::Incomplete);
-            }
-
-            let (end2, real2_repr) =
-                if let Some((e2, infnan2)) = lex_infnan_body(source, after_at) {
-                    (e2, RealRepr::Infnan(infnan2))
-                } else if let Some((e2, finite2)) =
-                    lex_sign_ureal_for_radix(source, after_at, radix)?
-                {
-                    (e2, RealRepr::Finite(finite2))
-                } else {
-                    let span = Span {
-                        start: literal_start,
-                        end: after_at,
-                    };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "invalid polar complex number; expected real after '@'",
-                    ));
-                };
-
-            if end2 < len {
-                let after = source[end2..].chars().next().unwrap();
-                if !is_delimiter(after) {
-                    let span = Span {
-                        start: literal_start,
-                        end: end2,
-                    };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "number literal not followed by a delimiter",
-                    ));
-                }
-            }
-
-            let text = &source[literal_start..end2];
-            let kind = NumberLiteralKind {
-                radix,
-                exactness,
-                value: NumberValue::Polar {
-                    magnitude: real_repr,
-                    angle: real2_repr,
-                },
-            };
-            let literal = NumberLiteral {
-                text: text.to_string(),
-                kind,
-            };
-            Ok(Some((end2, literal)))
-        }
-        '+' | '-' => {
-            let tail_start = real_end;
-
-            // `<real R> <infnan> i`
-            if let Some((mid, infnan_imag)) = lex_infnan_body(source, tail_start) {
-                if mid >= len {
-                    return Err(ParseError::Incomplete);
-                }
-                let i_ch = source[mid..].chars().next().unwrap();
-                if i_ch == 'i' || i_ch == 'I' {
-                    let i_end = mid + i_ch.len_utf8();
-                    if i_end < len {
-                        let after = source[i_end..].chars().next().unwrap();
-                        if !is_delimiter(after) {
-                            let span = Span {
-                                start: literal_start,
-                                end: i_end,
-                            };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<number>",
-                                "number literal not followed by a delimiter",
-                            ));
-                        }
-                    }
-
-                    let imag = RealRepr::Infnan(infnan_imag);
-                    let kind = NumberLiteralKind {
-                        radix,
-                        exactness,
-                        value: NumberValue::Rectangular {
-                            real: real_repr,
-                            imag,
-                        },
-                    };
-                    let text = &source[literal_start..i_end];
-                    let literal = NumberLiteral {
+                return Ok(Some((
+                    i_end,
+                    NumberLiteral {
                         text: text.to_string(),
                         kind,
-                    };
-                    return Ok(Some((i_end, literal)));
-                } else {
-                    // We saw an `<infnan>` tail but no `i` yet.
-                    return Err(ParseError::Incomplete);
-                }
+                    },
+                )));
             }
-
-            // `<real R> +/- i`
-            let sign_len = tail_ch.len_utf8();
-            let after_sign = tail_start + sign_len;
-            if after_sign < len {
-                let i_ch = source[after_sign..].chars().next().unwrap();
-                if i_ch == 'i' || i_ch == 'I' {
-                    let i_end = after_sign + i_ch.len_utf8();
-                    if i_end < len {
-                        let after = source[i_end..].chars().next().unwrap();
-                        if !is_delimiter(after) {
-                            let span = Span {
-                                start: literal_start,
-                                end: i_end,
-                            };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<number>",
-                                "number literal not followed by a delimiter",
-                            ));
-                        }
-                    }
-
-                    let imag_spelling = if tail_ch == '-' { "-1" } else { "1" };
-                    let imag = RealRepr::Finite(FiniteRealRepr::Integer {
-                        spelling: imag_spelling.to_string(),
-                    });
-                    let kind = NumberLiteralKind {
-                        radix,
-                        exactness,
-                        value: NumberValue::Rectangular {
-                            real: real_repr,
-                            imag,
-                        },
-                    };
-                    let text = &source[literal_start..i_end];
-                    let literal = NumberLiteral {
-                        text: text.to_string(),
-                        kind,
-                    };
-                    return Ok(Some((i_end, literal)));
-                }
-            }
-
-            // `<real R> +/- <ureal R> i`
-            if let Some((end_ureal, imag_finite)) =
-                lex_sign_ureal_for_radix(source, tail_start, radix)?
-            {
-                if end_ureal >= len {
-                    return Err(ParseError::Incomplete);
-                }
-                let i_ch = source[end_ureal..].chars().next().unwrap();
-                if i_ch == 'i' || i_ch == 'I' {
-                    let i_end = end_ureal + i_ch.len_utf8();
-                    if i_end < len {
-                        let after = source[i_end..].chars().next().unwrap();
-                        if !is_delimiter(after) {
-                            let span = Span {
-                                start: literal_start,
-                                end: i_end,
-                            };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<number>",
-                                "number literal not followed by a delimiter",
-                            ));
-                        }
-                    }
-
-                    let imag = RealRepr::Finite(imag_finite);
-                    let kind = NumberLiteralKind {
-                        radix,
-                        exactness,
-                        value: NumberValue::Rectangular {
-                            real: real_repr,
-                            imag,
-                        },
-                    };
-                    let text = &source[literal_start..i_end];
-                    let literal = NumberLiteral {
-                        text: text.to_string(),
-                        kind,
-                    };
-                    return Ok(Some((i_end, literal)));
-                } else {
-                    let span = Span {
-                        start: literal_start,
-                        end: end_ureal,
-                    };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "number literal not followed by a delimiter",
-                    ));
-                }
-            }
-
-            // No valid complex tail recognized after the real part.
-            let span = Span {
-                start: literal_start,
-                end: real_end,
-            };
-            Err(ParseError::lexical(
-                span,
-                "<number>",
-                "invalid complex number syntax",
-            ))
-        }
-        _ => {
-            // Not a delimiter or complex tail start: malformed number.
-            let span = Span {
-                start: literal_start,
-                end: real_end,
-            };
-            Err(ParseError::lexical(
-                span,
-                "<number>",
-                "number literal not followed by a delimiter",
-            ))
         }
     }
+
+    Ok(None)
 }
 
 /// Lex a decimal `<complex 10>` or `<real 10>` starting at `start` by
@@ -1237,118 +840,7 @@ fn lex_complex_decimal(
     )
 }
 
-/// Lex a decimal `<number>` that begins with one or more `#` prefixes
-/// for `<exactness>` and/or `<radix 10>`.
-///
-/// Grammar reference (Formal syntax / `<number>`):
-///
-/// ```text
-/// <num 10> ::= <prefix 10> <complex 10>
-/// <prefix 10> ::= <radix 10> <exactness>
-///                | <exactness> <radix 10>
-/// <exactness> ::= <empty> | #i | #e
-/// <radix 10> ::= <empty> | #d
-/// ```
-///
-/// This helper delegates the `<complex 10>` body, including `<real 10>`,
-/// `<infnan>`, rectangular, polar, and pure-imaginary forms, to
-/// `lex_complex_decimal`, and then applies the parsed radix/exactness
-/// prefixes to the resulting `NumberLiteralKind` while preserving the
-/// original token spelling including prefixes.
-fn lex_hash_decimal_number(
-    source: &str,
-    start: usize,
-) -> Result<Option<(usize, NumberLiteral)>, ParseError> {
-    let len = source.len();
-    let mut pos = start;
-
-    if pos >= len || !source[pos..].starts_with('#') {
-        return Ok(None);
-    }
-
-    let mut radix: Option<NumberRadix> = None;
-    let mut exactness: Option<NumberExactness> = None;
-
-    // Consume one or two `#` prefixes consisting only of `d`, `e`, or `i`.
-    loop {
-        if pos >= len || !source[pos..].starts_with('#') {
-            break;
-        }
-        pos += 1; // skip '#'
-        if pos >= len {
-            return Err(ParseError::Incomplete);
-        }
-
-        let ch = source[pos..].chars().next().unwrap();
-        let lower = ch.to_ascii_lowercase();
-        pos += ch.len_utf8();
-
-        match lower {
-            'd' => {
-                if radix.is_some() {
-                    let span = Span { start, end: pos };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "duplicate radix prefix in decimal number",
-                    ));
-                }
-                radix = Some(NumberRadix::Decimal);
-            }
-            'e' => {
-                if exactness.is_some() {
-                    let span = Span { start, end: pos };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "duplicate exactness prefix in decimal number",
-                    ));
-                }
-                exactness = Some(NumberExactness::Exact);
-            }
-            'i' => {
-                if exactness.is_some() {
-                    let span = Span { start, end: pos };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "duplicate exactness prefix in decimal number",
-                    ));
-                }
-                exactness = Some(NumberExactness::Inexact);
-            }
-            // Any other prefix letter (e.g. `b`, `o`, `x`, `t`, etc.)
-            // means this is not a decimal-prefix number; leave it for
-            // other handlers (booleans, future radix support, etc.).
-            _ => {
-                return Ok(None);
-            }
-        }
-    }
-
-    // If we did not recognize any decimal-specific prefixes, this is
-    // not a `<prefix 10>`; let other handlers take over.
-    if radix.is_none() && exactness.is_none() {
-        return Ok(None);
-    }
-
-    let radix = radix.unwrap_or(NumberRadix::Decimal);
-    let exactness = exactness.unwrap_or(NumberExactness::Unspecified);
-
-    let body_start = pos;
-    if body_start >= len {
-        return Err(ParseError::Incomplete);
-    }
-
-    // Delegate the `<complex 10>` body (including plain reals and
-    // `<infnan>`) to the radix-parametric complex helper, starting at
-    // `body_start` but using `start` as the literal beginning so the
-    // prefixes are included in spans and `text`.
-    lex_complex_with_radix(source, start, body_start, radix, exactness)
-}
-
-/// Lex a non-decimal `<number>` with radix prefixes `#b`, `#o`, or
-/// `#x` and optional `<exactness>` markers `#e` or `#i`.
+/// Lex a `<number>` with optional radix and exactness prefixes.
 ///
 /// Grammar reference (Formal syntax / `<number>`):
 ///
@@ -1361,23 +853,26 @@ fn lex_hash_decimal_number(
 /// <prefix R> ::= <radix R> <exactness>
 ///               | <exactness> <radix R>
 ///
-/// <real R> ::= <sign> <ureal R>
-///             | <infnan>
-///
-/// <ureal R> ::= <uinteger R>
-///              | <uinteger R> / <uinteger R>
-///              | <decimal R>
-///
-/// <uinteger R> ::= <digit R>+
+/// <radix 2>  ::= #b
+/// <radix 8>  ::= #o
+/// <radix 10> ::= <empty> | #d
+/// <radix 16> ::= #x
+/// <exactness> ::= <empty> | #i | #e
 /// ```
 ///
-/// For `R = 2, 8, 16` there is no `<decimal R>`, so `<ureal R>` is
-/// restricted to integers and rationals. This helper recognizes the
-/// full `<complex R>` grammar for non-decimal radices, including real,
-/// rectangular, polar, pure-imaginary, and `<infnan>`-based forms, and
-/// applies the parsed radix and exactness prefixes to the resulting
-/// `NumberLiteralKind`.
-fn lex_hash_nondecimal_number(
+/// This helper unifies the handling of decimal and non-decimal prefixes.
+/// It parses any valid combination of `#<radix>` and `#<exactness>`,
+/// defaults to decimal/unspecified if both are omitted, and then
+/// delegates the body to `lex_complex_with_radix`.
+///
+/// When called from `lex`, this runs after `lex_boolean` and
+/// `lex_character`, so an initial `#` that is not followed by a
+/// radix or exactness marker causes this function to return `Ok(None)`
+/// and allow other `#`-prefixed token classes to claim the input.
+/// Once at least one `<prefix R>` component has been seen, any further
+/// `#<unknown>` sequence is reported as a `<number>` lexical error in
+/// accordance with the `<prefix R>` grammar.
+fn lex_prefixed_number(
     source: &str,
     start: usize,
 ) -> Result<Option<(usize, NumberLiteral)>, ParseError> {
@@ -1391,105 +886,106 @@ fn lex_hash_nondecimal_number(
     let mut radix: Option<NumberRadix> = None;
     let mut exactness: Option<NumberExactness> = None;
 
-    // Consume one or two `#` prefixes consisting of a radix (`#b`,
-    // `#o`, `#x`) and/or an exactness marker (`#e`, `#i`) in either
-    // order.
+    // Consume one or two `#` prefixes.
     loop {
         if pos >= len || !source[pos..].starts_with('#') {
             break;
         }
-        pos += 1; // skip '#'
-        if pos >= len {
-            return Err(ParseError::Incomplete);
+        // Peek at the character after `#`.
+        let hash_pos = pos;
+        let after_hash = hash_pos + 1;
+        if after_hash >= len {
+            // `#` at end of input is incomplete, but we let the
+            // outer loop or specific handlers deal with solitary `#`
+            // if it's not a valid prefix.
+            // However, if we already parsed a prefix, `#` at EOF is incomplete.
+            if radix.is_some() || exactness.is_some() {
+                return Err(ParseError::Incomplete);
+            } else {
+                // No prefixes yet, just `#` at EOF.
+                return Ok(None);
+            }
         }
 
-        let ch = source[pos..].chars().next().unwrap();
+        let ch = source[after_hash..].chars().next().unwrap();
         let lower = ch.to_ascii_lowercase();
-        pos += ch.len_utf8();
+        let prefix_len = 1 + ch.len_utf8(); // '#' + char
 
         match lower {
-            'b' => {
+            'b' | 'o' | 'd' | 'x' => {
                 if radix.is_some() {
-                    let span = Span { start, end: pos };
+                    let span = Span {
+                        start,
+                        end: pos + prefix_len,
+                    };
                     return Err(ParseError::lexical(
                         span,
                         "<number>",
-                        "duplicate radix prefix in non-decimal number",
+                        "duplicate radix prefix",
                     ));
                 }
-                radix = Some(NumberRadix::Binary);
+                radix = Some(match lower {
+                    'b' => NumberRadix::Binary,
+                    'o' => NumberRadix::Octal,
+                    'd' => NumberRadix::Decimal,
+                    'x' => NumberRadix::Hexadecimal,
+                    _ => unreachable!(),
+                });
+                pos += prefix_len;
             }
-            'o' => {
-                if radix.is_some() {
-                    let span = Span { start, end: pos };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "duplicate radix prefix in non-decimal number",
-                    ));
-                }
-                radix = Some(NumberRadix::Octal);
-            }
-            'x' => {
-                if radix.is_some() {
-                    let span = Span { start, end: pos };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "duplicate radix prefix in non-decimal number",
-                    ));
-                }
-                radix = Some(NumberRadix::Hexadecimal);
-            }
-            'e' => {
+            'e' | 'i' => {
                 if exactness.is_some() {
-                    let span = Span { start, end: pos };
+                    let span = Span {
+                        start,
+                        end: pos + prefix_len,
+                    };
                     return Err(ParseError::lexical(
                         span,
                         "<number>",
-                        "duplicate exactness prefix in non-decimal number",
+                        "duplicate exactness prefix",
                     ));
                 }
-                exactness = Some(NumberExactness::Exact);
+                exactness = Some(match lower {
+                    'e' => NumberExactness::Exact,
+                    'i' => NumberExactness::Inexact,
+                    _ => unreachable!(),
+                });
+                pos += prefix_len;
             }
-            'i' => {
-                if exactness.is_some() {
-                    let span = Span { start, end: pos };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "duplicate exactness prefix in non-decimal number",
-                    ));
-                }
-                exactness = Some(NumberExactness::Inexact);
-            }
-            // Any other prefix letter: if we have already seen a radix,
-            // this is an invalid prefix for non-decimal numbers;
-            // otherwise, this is not a non-decimal `<number>` and we
-            // leave it for other handlers (booleans, decimal numbers,
-            // etc.).
             _ => {
-                if radix.is_some() {
-                    let span = Span { start, end: pos };
+                // Any other character after `#`.
+                // If we have already seen a radix or exactness prefix,
+                // then this `#<unknown>` sequence is invalid in a `<number>`
+                // and we report a lexical error for `<prefix R>`.
+                //
+                // If no prefixes have been seen yet, this `#` is not part
+                // of a `<number>` prefix at all; we return `Ok(None)` so
+                // that other `#`-prefixed tokens (such as `<boolean>` or
+                // `<character>`) can handle it.
+                if radix.is_some() || exactness.is_some() {
+                    let span = Span {
+                        start,
+                        end: pos + prefix_len,
+                    };
                     return Err(ParseError::lexical(
                         span,
                         "<number>",
-                        "invalid prefix in non-decimal number",
+                        "invalid prefix in number",
                     ));
                 } else {
+                    // No prefixes seen yet. This `#` is not for us.
                     return Ok(None);
                 }
             }
         }
     }
 
-    // If we did not see a non-decimal radix, this is not a `<num 2>`,
-    // `<num 8>`, or `<num 16>`.
-    let radix = match radix {
-        Some(r) => r,
-        None => return Ok(None),
-    };
+    // If we parsed no prefixes, this is not a prefixed number.
+    if radix.is_none() && exactness.is_none() {
+        return Ok(None);
+    }
 
+    let radix = radix.unwrap_or(NumberRadix::Decimal);
     let exactness = exactness.unwrap_or(NumberExactness::Unspecified);
 
     let body_start = pos;
@@ -1497,11 +993,376 @@ fn lex_hash_nondecimal_number(
         return Err(ParseError::Incomplete);
     }
 
-    // Delegate the `<complex R>` body (including plain reals and
-    // `<infnan>`) to the shared radix-parametric helper, starting at
-    // `body_start` but treating `start` (the first `#`) as the
-    // beginning of the literal for spans and text.
+    // Delegate the body to the generic complex helper.
     lex_complex_with_radix(source, start, body_start, radix, exactness)
+}
+
+/// Lex a `<string>` token starting at `start`.
+///
+/// Grammar reference (Formal syntax / `<string>`):
+///
+/// ```text
+/// <string> ::= " <string element>* "
+/// ```
+///
+/// This helper implements the R7RS escape and line-splicing rules,
+/// including mnemonic escapes (`\n`, `\t`, etc.), `\x...;` hex escapes,
+/// and backslash-newline splices, and reports lexical errors using
+/// the `<string>` nonterminal.
+fn lex_string(source: &str, start: usize) -> Result<Option<(usize, Token)>, ParseError> {
+    let len = source.len();
+    let mut pos = start;
+
+    if pos >= len || !source[pos..].starts_with('"') {
+        return Ok(None);
+    }
+
+    pos += 1; // skip opening quote
+    let mut result = String::new();
+
+    loop {
+        if pos >= len {
+            return Err(ParseError::Incomplete);
+        }
+
+        let ch = source[pos..].chars().next().unwrap();
+        let ch_len = ch.len_utf8();
+
+        match ch {
+            '"' => {
+                pos += ch_len;
+                return Ok(Some((pos, Token::String(result))));
+            }
+            '\\' => {
+                pos += ch_len;
+                if pos >= len {
+                    return Err(ParseError::Incomplete);
+                }
+
+                let next_ch = source[pos..].chars().next().unwrap();
+                let next_len = next_ch.len_utf8();
+
+                match next_ch {
+                    'a' => {
+                        result.push('\u{7}');
+                        pos += next_len;
+                    }
+                    'b' => {
+                        result.push('\u{8}');
+                        pos += next_len;
+                    }
+                    't' => {
+                        result.push('\t');
+                        pos += next_len;
+                    }
+                    'n' => {
+                        result.push('\n');
+                        pos += next_len;
+                    }
+                    'r' => {
+                        result.push('\r');
+                        pos += next_len;
+                    }
+                    '"' => {
+                        result.push('"');
+                        pos += next_len;
+                    }
+                    '\\' => {
+                        result.push('\\');
+                        pos += next_len;
+                    }
+                    'x' | 'X' => {
+                        pos += next_len;
+                        let hex_start = pos;
+                        while pos < len {
+                            let c = source[pos..].chars().next().unwrap();
+                            if c.is_ascii_hexdigit() {
+                                pos += c.len_utf8();
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if pos == hex_start {
+                            let span = Span { start, end: pos };
+                            return Err(ParseError::lexical(
+                                span,
+                                "<string>",
+                                "expected hex digits after \\x",
+                            ));
+                        }
+
+                        if pos >= len {
+                            return Err(ParseError::Incomplete);
+                        }
+
+                        let end_ch = source[pos..].chars().next().unwrap();
+                        if end_ch != ';' {
+                            let span = Span { start, end: pos };
+                            return Err(ParseError::lexical(
+                                span,
+                                "<string>",
+                                "missing terminating ';' in hex escape",
+                            ));
+                        }
+
+                        let hex_digits = &source[hex_start..pos];
+                        let codepoint = u32::from_str_radix(hex_digits, 16).map_err(|_| {
+                            let span = Span { start, end: pos };
+                            ParseError::lexical(
+                                span,
+                                "<string>",
+                                "invalid hex digits in hex escape",
+                            )
+                        })?;
+                        if let Some(c) = char::from_u32(codepoint) {
+                            result.push(c);
+                        } else {
+                            let span = Span { start, end: pos };
+                            return Err(ParseError::lexical(
+                                span,
+                                "<string>",
+                                "hex escape is not a valid Unicode scalar value",
+                            ));
+                        }
+                        pos += end_ch.len_utf8();
+                    }
+                    _ => {
+                        let mut idx = pos;
+                        while idx < len {
+                            let c = source[idx..].chars().next().unwrap();
+                            if c == ' ' || c == '\t' {
+                                idx += c.len_utf8();
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if idx >= len {
+                            return Err(ParseError::Incomplete);
+                        }
+
+                        let c = source[idx..].chars().next().unwrap();
+                        if c == '\n' || c == '\r' {
+                            idx += c.len_utf8();
+                            if c == '\r' && idx < len {
+                                let c2 = source[idx..].chars().next().unwrap();
+                                if c2 == '\n' {
+                                    idx += c2.len_utf8();
+                                }
+                            }
+                            while idx < len {
+                                let c2 = source[idx..].chars().next().unwrap();
+                                if c2 == ' ' || c2 == '\t' {
+                                    idx += c2.len_utf8();
+                                } else {
+                                    break;
+                                }
+                            }
+                            pos = idx;
+                        } else {
+                            let span = Span { start, end: idx };
+                            return Err(ParseError::lexical(
+                                span,
+                                "<string>",
+                                "unknown escape sequence in string literal",
+                            ));
+                        }
+                    }
+                }
+            }
+            '\n' | '\r' => {
+                let span = Span {
+                    start,
+                    end: pos + ch_len,
+                };
+                return Err(ParseError::lexical(
+                    span,
+                    "<string>",
+                    "newline character in string literal",
+                ));
+            }
+            _ => {
+                result.push(ch);
+                pos += ch_len;
+            }
+        }
+    }
+}
+
+/// Lex a `<character>` token starting at `start`.
+///
+/// Grammar reference (Formal syntax / `<character>`):
+///
+/// ```text
+/// <character> ::= #\\ <any character>
+///               | #\\ <character name>
+///               | #\\x<hex scalar value>
+/// ```
+///
+/// This helper accepts the R7RS named characters and `#\\x` hex
+/// scalar values and reports lexical errors using the `<character>`
+/// nonterminal.
+fn lex_character(source: &str, start: usize) -> Result<Option<(usize, Token)>, ParseError> {
+    let len = source.len();
+    let mut pos = start;
+
+    if pos >= len || !source[pos..].starts_with("#\\") {
+        return Ok(None);
+    }
+    pos += 2; // skip "#\"
+
+    if pos >= len {
+        return Err(ParseError::Incomplete);
+    }
+
+    let c1 = source[pos..].chars().next().unwrap();
+    let value_char;
+
+    if c1 == 'x' || c1 == 'X' {
+        let hex_start = pos + c1.len_utf8();
+        let mut hex_pos = hex_start;
+        while hex_pos < len {
+            let c = source[hex_pos..].chars().next().unwrap();
+            if c.is_ascii_hexdigit() {
+                hex_pos += c.len_utf8();
+            } else {
+                break;
+            }
+        }
+
+        if hex_pos > hex_start {
+            let hex_digits = &source[hex_start..hex_pos];
+            let codepoint = u32::from_str_radix(hex_digits, 16).map_err(|_| {
+                let span = Span {
+                    start,
+                    end: hex_pos,
+                };
+                ParseError::lexical(
+                    span,
+                    "<character>",
+                    "invalid hex digits in character literal",
+                )
+            })?;
+            value_char = match char::from_u32(codepoint) {
+                Some(c) => c,
+                None => {
+                    let span = Span {
+                        start,
+                        end: hex_pos,
+                    };
+                    return Err(ParseError::lexical(
+                        span,
+                        "<character>",
+                        "hex scalar value is not a valid Unicode scalar value",
+                    ));
+                }
+            };
+            pos = hex_pos;
+        } else {
+            // No hex digits, treat as character 'x' or 'X'
+            value_char = c1;
+            pos += c1.len_utf8();
+        }
+    } else if c1.is_ascii_alphabetic() {
+        let name_start = pos;
+        while pos < len {
+            let c = source[pos..].chars().next().unwrap();
+            if c.is_ascii_alphabetic() {
+                pos += c.len_utf8();
+            } else {
+                break;
+            }
+        }
+        let name = &source[name_start..pos];
+
+        if name.len() == c1.len_utf8() {
+            value_char = c1;
+        } else {
+            value_char = match name {
+                "alarm" => '\u{7}',
+                "backspace" => '\u{8}',
+                "delete" => '\u{7F}',
+                "escape" => '\u{1B}',
+                "newline" => '\n',
+                "null" => '\0',
+                "return" => '\r',
+                "space" => ' ',
+                "tab" => '\t',
+                _ => {
+                    let span = Span { start, end: pos };
+                    return Err(ParseError::lexical(
+                        span,
+                        "<character>",
+                        "unknown character name",
+                    ));
+                }
+            };
+        }
+    } else {
+        value_char = c1;
+        pos += c1.len_utf8();
+    }
+
+    ensure_delimiter(source, pos, start, "<character>")?;
+
+    Ok(Some((pos, Token::Character(value_char))))
+}
+
+/// Lex a `<boolean>` token starting at `start`.
+///
+/// Grammar reference (Formal syntax / `<boolean>`):
+///
+/// ```text
+/// <boolean> ::= #t | #f | #true | #false
+/// ```
+///
+/// This helper is consulted before `<number>` prefix handling so that
+/// `#t` / `#f` and their long forms are always recognized as booleans.
+fn lex_boolean(source: &str, start: usize) -> Result<Option<(usize, Token)>, ParseError> {
+    let len = source.len();
+    let mut pos = start;
+
+    if pos >= len || !source[pos..].starts_with('#') {
+        return Ok(None);
+    }
+
+    let after_hash = pos + 1;
+    if after_hash >= len {
+        return Ok(None);
+    }
+
+    let c = source[after_hash..].chars().next().unwrap();
+    let lower_c = c.to_ascii_lowercase();
+    if lower_c != 't' && lower_c != 'f' {
+        return Ok(None);
+    }
+
+    let word_start = after_hash;
+    pos = word_start;
+    while pos < len {
+        let c = source[pos..].chars().next().unwrap();
+        if c.is_ascii_alphabetic() {
+            pos += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    let ident = &source[word_start..pos];
+    let lower = ident.to_ascii_lowercase();
+    let value = match lower.as_str() {
+        "t" | "true" => Some(true),
+        "f" | "false" => Some(false),
+        _ => None,
+    };
+
+    if let Some(b) = value {
+        ensure_delimiter(source, pos, start, "<boolean>")?;
+        Ok(Some((pos, Token::Boolean(b))))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Lex `<sign> <ureal R>` for non-decimal radices `R = 2, 8, 16`,
@@ -1626,9 +1487,9 @@ fn is_digit_for_radix(ch: char, radix: NumberRadix) -> bool {
 /// forms) without `#b/#o/#d/#x` prefixes or complex numbers
 /// (`1+2i`, `+i`, etc.). Prefixes and complex forms for all
 /// radices are handled at the `<number>` level by
-/// `lex_complex_decimal`, `lex_hash_decimal_number`, and
-/// `lex_hash_nondecimal_number`, so the overall `<number>`
-/// lexer is R7RS-conformant.
+/// `lex_complex_decimal` for unprefixed decimal numbers and by
+/// `lex_prefixed_number`/`lex_complex_with_radix` for prefixed
+/// forms, so the overall `<number>` lexer is R7RS-conformant.
 fn lex_decimal_number(
     source: &str,
     start: usize,
@@ -1889,8 +1750,8 @@ mod tests {
 
     #[test]
     fn lex_is_stub_for_now() {
-        // Currently only `<boolean>` is implemented as a real token;
-        // other token classes still yield `ParseError::Unimplemented`.
+        // We still do not implement `<identifier>` or most punctuation
+        // tokens, so `(foo)` currently yields `ParseError::Unimplemented`.
         let err = lex("(foo)").unwrap_err();
         assert!(matches!(err, ParseError::Unimplemented));
     }
@@ -1949,6 +1810,28 @@ mod tests {
         assert!(matches!(toks[0].value, Token::Character('a')));
         assert!(matches!(toks[1].value, Token::Character(' ')));
         assert!(matches!(toks[2].value, Token::Character('A')));
+    }
+
+    #[test]
+    fn lex_parses_punctuation_tokens() {
+        // Punctuation subset of `<token>`:
+        //   ( | ) | ' | ` | , | ,@ | . | #(
+
+        let toks = lex("( ) ' ` , ,@ . #(").unwrap();
+        assert_eq!(toks.len(), 8);
+
+        assert!(matches!(toks[0].value, Token::LParen));
+        assert!(matches!(toks[1].value, Token::RParen));
+        assert!(matches!(toks[2].value, Token::Quote));
+        assert!(matches!(toks[3].value, Token::Backquote));
+        assert!(matches!(toks[4].value, Token::Comma));
+        assert!(matches!(toks[5].value, Token::CommaAt));
+        assert!(matches!(toks[6].value, Token::Dot));
+        assert!(matches!(toks[7].value, Token::VectorStart));
+
+        let toks2 = lex("#u8(").unwrap();
+        assert_eq!(toks2.len(), 1);
+        assert!(matches!(toks2[0].value, Token::ByteVectorStart));
     }
 
     #[test]
@@ -2063,6 +1946,27 @@ mod tests {
         // `3/x` is a malformed rational.
         let err3 = lex("3/x").unwrap_err();
         match err3 {
+            ParseError::Lex { nonterminal, .. } => {
+                assert_eq!(nonterminal, "<number>");
+            }
+            _ => panic!("expected lexical error in <number>"),
+        }
+
+        // `1/2/3` has a valid rational prefix `1/2` but an extra
+        // '/' and trailing digits, so it must be rejected as a
+        // `<number>`.
+        let err4 = lex("1/2/3").unwrap_err();
+        match err4 {
+            ParseError::Lex { nonterminal, .. } => {
+                assert_eq!(nonterminal, "<number>");
+            }
+            _ => panic!("expected lexical error in <number>"),
+        }
+
+        // `0x1` looks like a C-style hexadecimal literal but is not
+        // a valid R7RS `<number>` and must be rejected.
+        let err5 = lex("0x1").unwrap_err();
+        match err5 {
             ParseError::Lex { nonterminal, .. } => {
                 assert_eq!(nonterminal, "<number>");
             }
@@ -2455,7 +2359,7 @@ mod tests {
     #[test]
     fn lex_parses_prefixed_decimal_complex_numbers() {
         // `<num 10>` complex forms with `<prefix 10>` using `#d`, `#e`, `#i`.
-        let toks = lex("#d1+2i #e1-3/4i #i+2i #e1@2 #d+inf.0i #e1+inf.0i").unwrap();
+        let toks = lex("#d1+2i #e1-3/4i #i+2i #e1-1e3i #d+inf.0i #e1+inf.0i").unwrap();
         assert_eq!(toks.len(), 6);
 
         // #d1+2i → rectangular complex with unspecified exactness.
@@ -2516,37 +2420,38 @@ mod tests {
             other => panic!("expected number token, got: {other:?}"),
         }
 
-        // #i+2i → inexact pure imaginary.
-        match &toks[2].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#i+2i");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Inexact,
-                    value: NumberValue::Rectangular { real, imag },
-                } = &n.kind
-                {
-                    match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "0");
-                        }
-                        other => panic!("unexpected real part for #i+2i: {other:?}"),
+        // #i+2i and #e1-1e3i: just basic shape checks.
+        for (idx, text) in ["#i+2i", "#e1-1e3i"].iter().enumerate() {
+            match &toks[idx + 2].value {
+                Token::Number(n) => {
+                    assert_eq!(&n.text, text);
+                    let expected_exactness = if text.starts_with("#i") {
+                        NumberExactness::Inexact
+                    } else {
+                        NumberExactness::Exact
+                    };
+
+                    if let NumberLiteralKind {
+                        radix: NumberRadix::Decimal,
+                        exactness,
+                        value: NumberValue::Rectangular { .. },
+                    } = &n.kind
+                    {
+                        assert_eq!(*exactness, expected_exactness);
+                    } else {
+                        panic!("unexpected classification for {text}: {:#?}", n.kind);
                     }
-                    match imag {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "+2");
-                        }
-                        other => panic!("unexpected imag part for #i+2i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for #i+2i: {:#?}", n.kind);
                 }
+                other => panic!("expected number token, got: {other:?}"),
             }
-            other => panic!("expected number token, got: {other:?}"),
         }
 
+        // Polar forms.
+        let toks2 = lex("#e1@2 #d-3/4@5.0 #b+inf.0@1 -3/4@5.0").unwrap();
+        assert_eq!(toks2.len(), 4);
+
         // #e1@2 → exact polar complex.
-        match &toks[3].value {
+        match &toks2[0].value {
             Token::Number(n) => {
                 assert_eq!(n.text, "#e1@2");
                 if let NumberLiteralKind {
@@ -2574,41 +2479,91 @@ mod tests {
             other => panic!("expected number token, got: {other:?}"),
         }
 
-        // #d+inf.0i and #e1+inf.0i → rectangular with `<infnan>` imaginary part.
-        for (idx, expected_text, expect_real) in
-            [(4usize, "#d+inf.0i", "0"), (5usize, "#e1+inf.0i", "1")]
-        {
-            match &toks[idx].value {
-                Token::Number(n) => {
-                    assert_eq!(n.text, expected_text);
-                    if let NumberLiteralKind {
-                        radix: NumberRadix::Decimal,
-                        value: NumberValue::Rectangular { real, imag },
-                        ..
-                    } = &n.kind
-                    {
-                        use InfinityNan::PositiveInfinity;
-                        match real {
-                            RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                                assert_eq!(spelling, expect_real);
-                            }
-                            other => panic!("unexpected real part for {expected_text}: {other:?}"),
+        // #d-3/4@5.0 → exact polar complex with rational magnitude.
+        match &toks2[1].value {
+            Token::Number(n) => {
+                assert_eq!(n.text, "#d-3/4@5.0");
+                if let NumberLiteralKind {
+                    radix: NumberRadix::Decimal,
+                    exactness: NumberExactness::Unspecified,
+                    value: NumberValue::Polar { magnitude, angle },
+                } = &n.kind
+                {
+                    match magnitude {
+                        RealRepr::Finite(FiniteRealRepr::Rational { spelling }) => {
+                            assert_eq!(spelling, "-3/4");
                         }
-                        match imag {
-                            RealRepr::Infnan(k) => {
-                                assert_eq!(*k, PositiveInfinity);
-                            }
-                            other => panic!("unexpected imag part for {expected_text}: {other:?}"),
-                        }
-                    } else {
-                        panic!(
-                            "unexpected classification for {expected_text}: {:#?}",
-                            n.kind
-                        );
+                        other => panic!("unexpected magnitude for #d-3/4@5.0: {other:?}"),
                     }
+                    match angle {
+                        RealRepr::Finite(FiniteRealRepr::Decimal { spelling }) => {
+                            assert_eq!(spelling, "5.0");
+                        }
+                        other => panic!("unexpected angle for #d-3/4@5.0: {other:?}"),
+                    }
+                } else {
+                    panic!("unexpected classification for #d-3/4@5.0: {:#?}", n.kind);
                 }
-                other => panic!("expected number token, got: {other:?}"),
             }
+            other => panic!("expected number token, got: {other:?}"),
+        }
+
+        // #b+inf.0@1 → binary polar with inf magnitude.
+        match &toks2[2].value {
+            Token::Number(n) => {
+                assert_eq!(n.text, "#b+inf.0@1");
+                if let NumberLiteralKind {
+                    radix: NumberRadix::Binary,
+                    exactness: NumberExactness::Unspecified,
+                    value: NumberValue::Polar { magnitude, angle },
+                } = &n.kind
+                {
+                    match magnitude {
+                        RealRepr::Infnan(InfinityNan::PositiveInfinity) => {
+                            // ok
+                        }
+                        other => panic!("unexpected magnitude for #b+inf.0@1: {other:?}"),
+                    }
+                    match angle {
+                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
+                            assert_eq!(spelling, "1");
+                        }
+                        other => panic!("unexpected angle for #b+inf.0@1: {other:?}"),
+                    }
+                } else {
+                    panic!("unexpected classification for #b+inf.0@1: {:#?}", n.kind);
+                }
+            }
+            other => panic!("expected number token, got: {other:?}"),
+        }
+
+        // -3/4@5.0 → mixed exactness polar complex with rational magnitude.
+        match &toks2[3].value {
+            Token::Number(n) => {
+                assert_eq!(n.text, "-3/4@5.0");
+                if let NumberLiteralKind {
+                    radix: NumberRadix::Decimal,
+                    exactness: NumberExactness::Unspecified,
+                    value: NumberValue::Polar { magnitude, angle },
+                } = &n.kind
+                {
+                    match magnitude {
+                        RealRepr::Finite(FiniteRealRepr::Rational { spelling }) => {
+                            assert_eq!(spelling, "-3/4");
+                        }
+                        other => panic!("unexpected magnitude for -3/4@5.0: {other:?}"),
+                    }
+                    match angle {
+                        RealRepr::Finite(FiniteRealRepr::Decimal { spelling }) => {
+                            assert_eq!(spelling, "5.0");
+                        }
+                        other => panic!("unexpected angle for -3/4@5.0i: {other:?}"),
+                    }
+                } else {
+                    panic!("unexpected classification for -3/4@5.0i: {:#?}", n.kind);
+                }
+            }
+            other => panic!("expected number token, got: {other:?}"),
         }
     }
 
@@ -2983,6 +2938,33 @@ mod tests {
             other => panic!("expected lexical error in <number>, got: {other:?}"),
         }
 
+        // Non-decimal numbers must also be followed by a `<delimiter>`.
+        let err6 = lex("#b1010foo").unwrap_err();
+        match err6 {
+            ParseError::Lex { nonterminal, .. } => {
+                assert_eq!(nonterminal, "<number>");
+            }
+            other => panic!("expected lexical error in <number>, got: {other:?}"),
+        }
+
+        // Exponent markers and fractional points are not permitted in
+        // non-decimal reals.
+        let err7 = lex("#b101e10").unwrap_err();
+        match err7 {
+            ParseError::Lex { nonterminal, .. } => {
+                assert_eq!(nonterminal, "<number>");
+            }
+            other => panic!("expected lexical error in <number>, got: {other:?}"),
+        }
+
+        let err8 = lex("#x1.2").unwrap_err();
+        match err8 {
+            ParseError::Lex { nonterminal, .. } => {
+                assert_eq!(nonterminal, "<number>");
+            }
+            other => panic!("expected lexical error in <number>, got: {other:?}"),
+        }
+
         // Non-decimal complex forms are now supported.
         let toks = lex("#b1+10i #x1-2i #b+i #o-i #b1@10 #x1+inf.0i #b+inf.0i").unwrap();
         assert_eq!(toks.len(), 7);
@@ -3170,8 +3152,8 @@ mod tests {
             }
             other => panic!("expected lexical error in <number>, got: {other:?}"),
         }
-        // Decimal `<infnan>` complex forms are now supported, while
-        // non-decimal ones remain unimplemented.
+        // `<infnan>` complex forms are supported for both decimal and
+        // non-decimal radices.
         let toks = lex("+inf.0i").unwrap();
         assert_eq!(toks.len(), 1);
         match &toks[0].value {
@@ -3237,6 +3219,61 @@ mod tests {
     }
 
     #[test]
+    fn lex_rejects_ambiguous_or_malformed_complex_shapes() {
+        // "1+2" at end of input is treated as incomplete, since more
+        // characters are required to decide whether this is a complex
+        // number (e.g. "1+2i") or a malformed token.
+        let err = lex("1+2").unwrap_err();
+        assert!(matches!(err, ParseError::Incomplete));
+
+        // "1+2)" has a complete `<real 10>` prefix but no valid
+        // complex tail and thus must be rejected as a `<number>`.
+        let err2 = lex("1+2)").unwrap_err();
+        match err2 {
+            ParseError::Lex { nonterminal, .. } => {
+                assert_eq!(nonterminal, "<number>");
+            }
+            other => panic!("expected lexical error in <number>, got: {other:?}"),
+        }
+
+        // Invalid polar forms: no real after '@', or a non-delimiter
+        // trailing character after the second real.
+        let err3 = lex("#e1@foo").unwrap_err();
+        match err3 {
+            ParseError::Lex { nonterminal, .. } => {
+                assert_eq!(nonterminal, "<number>");
+            }
+            other => panic!("expected lexical error in <number>, got: {other:?}"),
+        }
+
+        let err4 = lex("#b1@10x").unwrap_err();
+        match err4 {
+            ParseError::Lex { nonterminal, .. } => {
+                assert_eq!(nonterminal, "<number>");
+            }
+            other => panic!("expected lexical error in <number>, got: {other:?}"),
+        }
+
+        // `<infnan>` followed by a non-delimiter, with or without an
+        // imaginary suffix, must also be rejected.
+        let err5 = lex("+inf.0x").unwrap_err();
+        match err5 {
+            ParseError::Lex { nonterminal, .. } => {
+                assert_eq!(nonterminal, "<number>");
+            }
+            other => panic!("expected lexical error in <number>, got: {other:?}"),
+        }
+
+        let err6 = lex("+inf.0i0").unwrap_err();
+        match err6 {
+            ParseError::Lex { nonterminal, .. } => {
+                assert_eq!(nonterminal, "<number>");
+            }
+            other => panic!("expected lexical error in <number>, got: {other:?}"),
+        }
+    }
+
+    #[test]
     fn lex_parses_string_tokens_simple_and_escapes() {
         // Simple string and mnemonic/hex escapes.
         let toks = lex("  \"hi\"  \"a\\n\\t\\r\\b\\a\\\\\\\"\"  \"\\x41;\"").unwrap();
@@ -3270,5 +3307,11 @@ mod tests {
             }
             other => panic!("expected lexical error in <string>, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn lex_datum_comment_is_unimplemented() {
+        let err = lex("#; (foo)").unwrap_err();
+        assert!(matches!(err, ParseError::Unimplemented));
     }
 }
