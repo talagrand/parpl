@@ -1841,10 +1841,7 @@ mod tests {
             match (self, err) {
                 (ErrorMatcher::Unimplemented, ParseError::Unimplemented) => {}
                 (ErrorMatcher::Incomplete, ParseError::Incomplete) => {}
-                (
-                    ErrorMatcher::Lex(nt),
-                    ParseError::Lex { nonterminal, .. },
-                ) => {
+                (ErrorMatcher::Lex(nt), ParseError::Lex { nonterminal, .. }) => {
                     assert_eq!(nt, nonterminal, "{}: error nonterminal mismatch", test_name);
                 }
                 _ => panic!(

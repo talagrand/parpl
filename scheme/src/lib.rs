@@ -1,4 +1,4 @@
-mod lex;
+pub mod lex;
 
 /// A byte-offset span into the original source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
