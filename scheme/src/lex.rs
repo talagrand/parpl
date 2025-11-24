@@ -739,46 +739,75 @@ fn lex_infnan_body(source: &str, start: usize) -> Option<(usize, InfinityNan)> {
     Some((start + 6, kind))
 }
 
-/// Lex a decimal `<complex 10>` or `<real 10>` starting at `start`.
-///
-/// Grammar reference (Formal syntax / `<number>`):
-///
-/// ```text
-/// <number>    ::= <num 2> | <num 8>
-///               | <num 10> | <num 16>
-/// <num 10>   ::= <prefix 10> <complex 10>
-/// <complex 10> ::= <real 10>
-///                | <real 10> @ <real 10>
-///                | <real 10> + <ureal 10> i
-///                | <real 10> - <ureal 10> i
-///                | <real 10> + i
-///                | <real 10> - i
-///                | <real 10> <infnan> i
-///                | + <ureal 10> i
-///                | - <ureal 10> i
-///                | <infnan> i
-///                | + i
-///                | - i
-/// <real 10>  ::= <sign> <ureal 10>
-///               | <infnan>
-/// ```
-fn lex_complex_decimal(
+/// Lex `<sign> <ureal R>` for arbitrary radices `R`, where
+/// `<ureal R>` is finite (integer, rational, or, for `R = 10`,
+/// a decimal real with optional exponent). This helper delegates
+/// to the decimal or non-decimal lexers depending on `radix` and
+/// returns the `FiniteRealRepr` together with the end offset.
+fn lex_sign_ureal_for_radix(
     source: &str,
     start: usize,
+    radix: NumberRadix,
+) -> Result<Option<(usize, FiniteRealRepr)>, ParseError> {
+    match radix {
+        NumberRadix::Decimal => {
+            if let Some((end, lit)) = lex_decimal_number(source, start)? {
+                match lit.kind.value {
+                    NumberValue::Real(RealRepr::Finite(finite)) => Ok(Some((end, finite))),
+                    _ => unreachable!("decimal lexer should only produce finite real values"),
+                }
+            } else {
+                Ok(None)
+            }
+        }
+        _ => lex_nondecimal_sign_ureal(source, start, radix),
+    }
+}
+
+/// Lex a `<complex R>` or `<real R>` starting at `body_start`, with
+/// the overall literal beginning at `literal_start` (to include any
+/// prefixes in spans and `NumberLiteral.text`). This implements the
+/// generic R7RS complex grammar:
+///
+/// ```text
+/// <number>   ::= <num 2> | <num 8>
+///              | <num 10> | <num 16>
+/// <num R>    ::= <prefix R> <complex R>
+/// <complex R> ::= <real R>
+///               | <real R> @ <real R>
+///               | <real R> + <ureal R> i
+///               | <real R> - <ureal R> i
+///               | <real R> + i
+///               | <real R> - i
+///               | <real R> <infnan> i
+///               | + <ureal R> i
+///               | - <ureal R> i
+///               | <infnan> i
+///               | + i
+///               | - i
+/// <real R>   ::= <sign> <ureal R>
+///               | <infnan>
+/// ```
+fn lex_complex_with_radix(
+    source: &str,
+    literal_start: usize,
+    body_start: usize,
+    radix: NumberRadix,
+    exactness: NumberExactness,
 ) -> Result<Option<(usize, NumberLiteral)>, ParseError> {
     let len = source.len();
-    if start >= len {
+    if body_start >= len {
         return Ok(None);
     }
 
-    let ch = source[start..].chars().next().unwrap();
+    let ch = source[body_start..].chars().next().unwrap();
 
-    // Precompute whether the literal starts with `<infnan>` so we
+    // Precompute whether the literal body starts with `<infnan>` so we
     // can distinguish `+i`/`-i` from `+inf.0`, `+nan.0`, etc.
-    let starts_with_infnan = lex_infnan_body(source, start);
+    let starts_with_infnan = lex_infnan_body(source, body_start);
 
     // 1. Pure imaginary `<infnan> i` with no explicit real part.
-    if let Some((mid, infnan)) = lex_infnan_body(source, start) {
+    if let Some((mid, infnan)) = lex_infnan_body(source, body_start) {
         if mid < len {
             let i_ch = source[mid..].chars().next().unwrap();
             if i_ch == 'i' || i_ch == 'I' {
@@ -786,7 +815,10 @@ fn lex_complex_decimal(
                 if i_end < len {
                     let after = source[i_end..].chars().next().unwrap();
                     if !is_delimiter(after) {
-                        let span = Span { start, end: i_end };
+                        let span = Span {
+                            start: literal_start,
+                            end: i_end,
+                        };
                         return Err(ParseError::lexical(
                             span,
                             "<number>",
@@ -800,14 +832,14 @@ fn lex_complex_decimal(
                 });
                 let imag = RealRepr::Infnan(infnan);
                 let kind = NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
+                    radix,
+                    exactness,
                     value: NumberValue::Rectangular {
                         real: real_zero,
                         imag,
                     },
                 };
-                let text = &source[start..i_end];
+                let text = &source[literal_start..i_end];
                 let literal = NumberLiteral {
                     text: text.to_string(),
                     kind,
@@ -816,21 +848,23 @@ fn lex_complex_decimal(
             }
         }
         // If this was plain `<infnan>` without trailing `i`, we will
-        // treat it as `<real 10>` below.
+        // treat it as `<real R>` below.
     }
 
     // 2. Pure imaginary forms with no explicit real part, but only
     // when the literal does not start with `<infnan>`:
     //
-    //   + <ureal 10> i
-    //   - <ureal 10> i
+    //   + <ureal R> i
+    //   - <ureal R> i
     //   + i
     //   - i
     if (ch == '+' || ch == '-') && starts_with_infnan.is_none() {
-        // First try `+<ureal 10>i` / `-<ureal 10>i` using the
-        // existing decimal real lexer, then fall back to the
+        // First try `+<ureal R>i` / `-<ureal R>i` using the shared
+        // `<sign> <ureal R>` helper, then fall back to the
         // unit-imaginary `+i` / `-i` cases.
-        if let Some((end_ureal, imag_lit)) = lex_decimal_number(source, start)? {
+        if let Some((end_ureal, imag_finite)) =
+            lex_sign_ureal_for_radix(source, body_start, radix)?
+        {
             if end_ureal < len {
                 let i_ch = source[end_ureal..].chars().next().unwrap();
                 if i_ch == 'i' || i_ch == 'I' {
@@ -838,7 +872,10 @@ fn lex_complex_decimal(
                     if i_end < len {
                         let after = source[i_end..].chars().next().unwrap();
                         if !is_delimiter(after) {
-                            let span = Span { start, end: i_end };
+                            let span = Span {
+                                start: literal_start,
+                                end: i_end,
+                            };
                             return Err(ParseError::lexical(
                                 span,
                                 "<number>",
@@ -850,21 +887,16 @@ fn lex_complex_decimal(
                     let real_zero = RealRepr::Finite(FiniteRealRepr::Integer {
                         spelling: "0".to_string(),
                     });
-                    let imag_repr = match imag_lit.kind.value {
-                        NumberValue::Real(r) => r,
-                        _ => unreachable!(
-                            "decimal lexer should only produce real values for imaginary part",
-                        ),
-                    };
+                    let imag = RealRepr::Finite(imag_finite);
                     let kind = NumberLiteralKind {
-                        radix: NumberRadix::Decimal,
-                        exactness: NumberExactness::Unspecified,
+                        radix,
+                        exactness,
                         value: NumberValue::Rectangular {
                             real: real_zero,
-                            imag: imag_repr,
+                            imag,
                         },
                     };
-                    let text = &source[start..i_end];
+                    let text = &source[literal_start..i_end];
                     let literal = NumberLiteral {
                         text: text.to_string(),
                         kind,
@@ -876,7 +908,7 @@ fn lex_complex_decimal(
 
         // Fallback: unit imaginary `+i` / `-i`.
         let sign_len = ch.len_utf8();
-        let after_sign = start + sign_len;
+        let after_sign = body_start + sign_len;
         if after_sign < len {
             let i_ch = source[after_sign..].chars().next().unwrap();
             if i_ch == 'i' || i_ch == 'I' {
@@ -884,7 +916,10 @@ fn lex_complex_decimal(
                 if i_end < len {
                     let after = source[i_end..].chars().next().unwrap();
                     if !is_delimiter(after) {
-                        let span = Span { start, end: i_end };
+                        let span = Span {
+                            start: literal_start,
+                            end: i_end,
+                        };
                         return Err(ParseError::lexical(
                             span,
                             "<number>",
@@ -901,14 +936,14 @@ fn lex_complex_decimal(
                     spelling: imag_spelling.to_string(),
                 });
                 let kind = NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
+                    radix,
+                    exactness,
                     value: NumberValue::Rectangular {
                         real: real_zero,
                         imag,
                     },
                 };
-                let text = &source[start..i_end];
+                let text = &source[literal_start..i_end];
                 let literal = NumberLiteral {
                     text: text.to_string(),
                     kind,
@@ -918,34 +953,22 @@ fn lex_complex_decimal(
         }
     }
 
-    // 3. Parse the leading `<real 10>` (finite or `<infnan>`).
-    let mut real_repr: Option<RealRepr> = None;
-    let mut real_end = start;
-
-    if let Some((end, infnan)) = starts_with_infnan {
-        real_repr = Some(RealRepr::Infnan(infnan));
-        real_end = end;
-    } else if let Some((end, real_lit)) = lex_decimal_number(source, start)? {
-        match real_lit.kind.value {
-            NumberValue::Real(repr) => {
-                real_repr = Some(repr);
-                real_end = end;
-            }
-            _ => unreachable!("decimal lexer should only produce real values"),
-        }
+    // 3. Parse the leading `<real R>` (finite or `<infnan>`).
+    let (real_end, real_repr) = if let Some((end, infnan)) = starts_with_infnan {
+        (end, RealRepr::Infnan(infnan))
+    } else if let Some((end, finite)) = lex_sign_ureal_for_radix(source, body_start, radix)? {
+        (end, RealRepr::Finite(finite))
     } else {
-        // Not a decimal `<real 10>` at all.
+        // Not a `<real R>` at all.
         return Ok(None);
-    }
-
-    let real_repr = real_repr.unwrap();
+    };
 
     if real_end >= len {
         // Pure real at end of input.
-        let text = &source[start..real_end];
+        let text = &source[literal_start..real_end];
         let kind = NumberLiteralKind {
-            radix: NumberRadix::Decimal,
-            exactness: NumberExactness::Unspecified,
+            radix,
+            exactness,
             value: NumberValue::Real(real_repr),
         };
         let literal = NumberLiteral {
@@ -959,10 +982,10 @@ fn lex_complex_decimal(
 
     // If the next character is a delimiter, this is a pure real.
     if is_delimiter(tail_ch) {
-        let text = &source[start..real_end];
+        let text = &source[literal_start..real_end];
         let kind = NumberLiteralKind {
-            radix: NumberRadix::Decimal,
-            exactness: NumberExactness::Unspecified,
+            radix,
+            exactness,
             value: NumberValue::Real(real_repr),
         };
         let literal = NumberLiteral {
@@ -974,36 +997,38 @@ fn lex_complex_decimal(
 
     match tail_ch {
         '@' => {
-            // Polar form: `<real 10> @ <real 10>`.
+            // Polar form: `<real R> @ <real R>`.
             let after_at = real_end + tail_ch.len_utf8();
             if after_at >= len {
                 return Err(ParseError::Incomplete);
             }
 
-            let (end2, real2_repr) = if let Some((e2, infnan2)) = lex_infnan_body(source, after_at)
-            {
-                (e2, RealRepr::Infnan(infnan2))
-            } else if let Some((e2, lit2)) = lex_decimal_number(source, after_at)? {
-                match lit2.kind.value {
-                    NumberValue::Real(r2) => (e2, r2),
-                    _ => unreachable!("decimal lexer should only produce real values"),
-                }
-            } else {
-                let span = Span {
-                    start,
-                    end: after_at,
+            let (end2, real2_repr) =
+                if let Some((e2, infnan2)) = lex_infnan_body(source, after_at) {
+                    (e2, RealRepr::Infnan(infnan2))
+                } else if let Some((e2, finite2)) =
+                    lex_sign_ureal_for_radix(source, after_at, radix)?
+                {
+                    (e2, RealRepr::Finite(finite2))
+                } else {
+                    let span = Span {
+                        start: literal_start,
+                        end: after_at,
+                    };
+                    return Err(ParseError::lexical(
+                        span,
+                        "<number>",
+                        "invalid polar complex number; expected real after '@'",
+                    ));
                 };
-                return Err(ParseError::lexical(
-                    span,
-                    "<number>",
-                    "invalid polar complex number; expected real after '@'",
-                ));
-            };
 
             if end2 < len {
                 let after = source[end2..].chars().next().unwrap();
                 if !is_delimiter(after) {
-                    let span = Span { start, end: end2 };
+                    let span = Span {
+                        start: literal_start,
+                        end: end2,
+                    };
                     return Err(ParseError::lexical(
                         span,
                         "<number>",
@@ -1012,10 +1037,10 @@ fn lex_complex_decimal(
                 }
             }
 
-            let text = &source[start..end2];
+            let text = &source[literal_start..end2];
             let kind = NumberLiteralKind {
-                radix: NumberRadix::Decimal,
-                exactness: NumberExactness::Unspecified,
+                radix,
+                exactness,
                 value: NumberValue::Polar {
                     magnitude: real_repr,
                     angle: real2_repr,
@@ -1030,7 +1055,7 @@ fn lex_complex_decimal(
         '+' | '-' => {
             let tail_start = real_end;
 
-            // `<real 10> <infnan> i`
+            // `<real R> <infnan> i`
             if let Some((mid, infnan_imag)) = lex_infnan_body(source, tail_start) {
                 if mid >= len {
                     return Err(ParseError::Incomplete);
@@ -1041,7 +1066,10 @@ fn lex_complex_decimal(
                     if i_end < len {
                         let after = source[i_end..].chars().next().unwrap();
                         if !is_delimiter(after) {
-                            let span = Span { start, end: i_end };
+                            let span = Span {
+                                start: literal_start,
+                                end: i_end,
+                            };
                             return Err(ParseError::lexical(
                                 span,
                                 "<number>",
@@ -1052,14 +1080,14 @@ fn lex_complex_decimal(
 
                     let imag = RealRepr::Infnan(infnan_imag);
                     let kind = NumberLiteralKind {
-                        radix: NumberRadix::Decimal,
-                        exactness: NumberExactness::Unspecified,
+                        radix,
+                        exactness,
                         value: NumberValue::Rectangular {
                             real: real_repr,
                             imag,
                         },
                     };
-                    let text = &source[start..i_end];
+                    let text = &source[literal_start..i_end];
                     let literal = NumberLiteral {
                         text: text.to_string(),
                         kind,
@@ -1071,7 +1099,7 @@ fn lex_complex_decimal(
                 }
             }
 
-            // `<real 10> +/- i`
+            // `<real R> +/- i`
             let sign_len = tail_ch.len_utf8();
             let after_sign = tail_start + sign_len;
             if after_sign < len {
@@ -1081,7 +1109,10 @@ fn lex_complex_decimal(
                     if i_end < len {
                         let after = source[i_end..].chars().next().unwrap();
                         if !is_delimiter(after) {
-                            let span = Span { start, end: i_end };
+                            let span = Span {
+                                start: literal_start,
+                                end: i_end,
+                            };
                             return Err(ParseError::lexical(
                                 span,
                                 "<number>",
@@ -1095,14 +1126,14 @@ fn lex_complex_decimal(
                         spelling: imag_spelling.to_string(),
                     });
                     let kind = NumberLiteralKind {
-                        radix: NumberRadix::Decimal,
-                        exactness: NumberExactness::Unspecified,
+                        radix,
+                        exactness,
                         value: NumberValue::Rectangular {
                             real: real_repr,
                             imag,
                         },
                     };
-                    let text = &source[start..i_end];
+                    let text = &source[literal_start..i_end];
                     let literal = NumberLiteral {
                         text: text.to_string(),
                         kind,
@@ -1111,8 +1142,10 @@ fn lex_complex_decimal(
                 }
             }
 
-            // `<real 10> +/- <ureal 10> i`
-            if let Some((end_ureal, imag_lit)) = lex_decimal_number(source, tail_start)? {
+            // `<real R> +/- <ureal R> i`
+            if let Some((end_ureal, imag_finite)) =
+                lex_sign_ureal_for_radix(source, tail_start, radix)?
+            {
                 if end_ureal >= len {
                     return Err(ParseError::Incomplete);
                 }
@@ -1122,7 +1155,10 @@ fn lex_complex_decimal(
                     if i_end < len {
                         let after = source[i_end..].chars().next().unwrap();
                         if !is_delimiter(after) {
-                            let span = Span { start, end: i_end };
+                            let span = Span {
+                                start: literal_start,
+                                end: i_end,
+                            };
                             return Err(ParseError::lexical(
                                 span,
                                 "<number>",
@@ -1131,21 +1167,16 @@ fn lex_complex_decimal(
                         }
                     }
 
-                    let imag_repr = match imag_lit.kind.value {
-                        NumberValue::Real(r) => r,
-                        _ => unreachable!(
-                            "decimal lexer should only produce real values for imaginary part"
-                        ),
-                    };
+                    let imag = RealRepr::Finite(imag_finite);
                     let kind = NumberLiteralKind {
-                        radix: NumberRadix::Decimal,
-                        exactness: NumberExactness::Unspecified,
+                        radix,
+                        exactness,
                         value: NumberValue::Rectangular {
                             real: real_repr,
-                            imag: imag_repr,
+                            imag,
                         },
                     };
-                    let text = &source[start..i_end];
+                    let text = &source[literal_start..i_end];
                     let literal = NumberLiteral {
                         text: text.to_string(),
                         kind,
@@ -1153,7 +1184,7 @@ fn lex_complex_decimal(
                     return Ok(Some((i_end, literal)));
                 } else {
                     let span = Span {
-                        start,
+                        start: literal_start,
                         end: end_ureal,
                     };
                     return Err(ParseError::lexical(
@@ -1166,7 +1197,7 @@ fn lex_complex_decimal(
 
             // No valid complex tail recognized after the real part.
             let span = Span {
-                start,
+                start: literal_start,
                 end: real_end,
             };
             Err(ParseError::lexical(
@@ -1178,7 +1209,7 @@ fn lex_complex_decimal(
         _ => {
             // Not a delimiter or complex tail start: malformed number.
             let span = Span {
-                start,
+                start: literal_start,
                 end: real_end,
             };
             Err(ParseError::lexical(
@@ -1188,6 +1219,22 @@ fn lex_complex_decimal(
             ))
         }
     }
+}
+
+/// Lex a decimal `<complex 10>` or `<real 10>` starting at `start` by
+/// delegating to the radix-parametric complex helper with `R = 10` and
+/// unspecified exactness.
+fn lex_complex_decimal(
+    source: &str,
+    start: usize,
+) -> Result<Option<(usize, NumberLiteral)>, ParseError> {
+    lex_complex_with_radix(
+        source,
+        start,
+        start,
+        NumberRadix::Decimal,
+        NumberExactness::Unspecified,
+    )
 }
 
 /// Lex a decimal `<number>` that begins with one or more `#` prefixes
@@ -1294,18 +1341,10 @@ fn lex_hash_decimal_number(
     }
 
     // Delegate the `<complex 10>` body (including plain reals and
-    // `<infnan>`) to the decimal complex helper, then apply the parsed
-    // radix/exactness prefixes and widen the literal text to include
-    // those prefixes.
-    if let Some((end, mut inner_literal)) = lex_complex_decimal(source, body_start)? {
-        inner_literal.kind.radix = radix;
-        inner_literal.kind.exactness = exactness;
-        let text = &source[start..end];
-        inner_literal.text = text.to_string();
-        Ok(Some((end, inner_literal)))
-    } else {
-        Ok(None)
-    }
+    // `<infnan>`) to the radix-parametric complex helper, starting at
+    // `body_start` but using `start` as the literal beginning so the
+    // prefixes are included in spans and `text`.
+    lex_complex_with_radix(source, start, body_start, radix, exactness)
 }
 
 /// Lex a non-decimal `<number>` with radix prefixes `#b`, `#o`, or
@@ -1458,398 +1497,11 @@ fn lex_hash_nondecimal_number(
         return Err(ParseError::Incomplete);
     }
 
-    let ch = source[body_start..].chars().next().unwrap();
-    let starts_with_infnan = lex_infnan_body(source, body_start);
-
-    // 1. Pure imaginary `<infnan> i` with no explicit real part,
-    // e.g. `#b+inf.0i`.
-    if let Some((mid, infnan)) = lex_infnan_body(source, body_start) {
-        if mid < len {
-            let i_ch = source[mid..].chars().next().unwrap();
-            if i_ch == 'i' || i_ch == 'I' {
-                let i_end = mid + i_ch.len_utf8();
-                if i_end < len {
-                    let after = source[i_end..].chars().next().unwrap();
-                    if !is_delimiter(after) {
-                        let span = Span { start, end: i_end };
-                        return Err(ParseError::lexical(
-                            span,
-                            "<number>",
-                            "number literal not followed by a delimiter",
-                        ));
-                    }
-                }
-
-                let real_zero = RealRepr::Finite(FiniteRealRepr::Integer {
-                    spelling: "0".to_string(),
-                });
-                let imag = RealRepr::Infnan(infnan);
-                let kind = NumberLiteralKind {
-                    radix,
-                    exactness,
-                    value: NumberValue::Rectangular {
-                        real: real_zero,
-                        imag,
-                    },
-                };
-                let text = &source[start..i_end];
-                let literal = NumberLiteral {
-                    text: text.to_string(),
-                    kind,
-                };
-                return Ok(Some((i_end, literal)));
-            }
-        }
-        // Otherwise, treat plain `<infnan>` as `<real R>` below.
-    }
-
-    // 2. Pure imaginary forms with no explicit real part, but only
-    // when the literal does not start with `<infnan>`:
-    //
-    //   + <ureal R> i
-    //   - <ureal R> i
-    //   + i
-    //   - i
-    if (ch == '+' || ch == '-') && starts_with_infnan.is_none() {
-        // First try `+<ureal R>i` / `-<ureal R>i`.
-        if let Some((end_ureal, imag_finite)) =
-            lex_nondecimal_sign_ureal(source, body_start, radix)?
-        {
-            if end_ureal < len {
-                let i_ch = source[end_ureal..].chars().next().unwrap();
-                if i_ch == 'i' || i_ch == 'I' {
-                    let i_end = end_ureal + i_ch.len_utf8();
-                    if i_end < len {
-                        let after = source[i_end..].chars().next().unwrap();
-                        if !is_delimiter(after) {
-                            let span = Span { start, end: i_end };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<number>",
-                                "number literal not followed by a delimiter",
-                            ));
-                        }
-                    }
-
-                    let real_zero = RealRepr::Finite(FiniteRealRepr::Integer {
-                        spelling: "0".to_string(),
-                    });
-                    let imag = RealRepr::Finite(imag_finite);
-                    let kind = NumberLiteralKind {
-                        radix,
-                        exactness,
-                        value: NumberValue::Rectangular {
-                            real: real_zero,
-                            imag,
-                        },
-                    };
-                    let text = &source[start..i_end];
-                    let literal = NumberLiteral {
-                        text: text.to_string(),
-                        kind,
-                    };
-                    return Ok(Some((i_end, literal)));
-                }
-            }
-        }
-
-        // Fallback: unit imaginary `+i` / `-i`.
-        let sign_len = ch.len_utf8();
-        let after_sign = body_start + sign_len;
-        if after_sign < len {
-            let i_ch = source[after_sign..].chars().next().unwrap();
-            if i_ch == 'i' || i_ch == 'I' {
-                let i_end = after_sign + i_ch.len_utf8();
-                if i_end < len {
-                    let after = source[i_end..].chars().next().unwrap();
-                    if !is_delimiter(after) {
-                        let span = Span { start, end: i_end };
-                        return Err(ParseError::lexical(
-                            span,
-                            "<number>",
-                            "number literal not followed by a delimiter",
-                        ));
-                    }
-                }
-
-                let real_zero = RealRepr::Finite(FiniteRealRepr::Integer {
-                    spelling: "0".to_string(),
-                });
-                let imag_spelling = if ch == '-' { "-1" } else { "1" };
-                let imag = RealRepr::Finite(FiniteRealRepr::Integer {
-                    spelling: imag_spelling.to_string(),
-                });
-                let kind = NumberLiteralKind {
-                    radix,
-                    exactness,
-                    value: NumberValue::Rectangular {
-                        real: real_zero,
-                        imag,
-                    },
-                };
-                let text = &source[start..i_end];
-                let literal = NumberLiteral {
-                    text: text.to_string(),
-                    kind,
-                };
-                return Ok(Some((i_end, literal)));
-            }
-        }
-    }
-
-    // 3. Parse the leading `<real R>` (finite or `<infnan>`).
-    let (real_end, real_repr) = if let Some((end, infnan)) = starts_with_infnan {
-        (end, RealRepr::Infnan(infnan))
-    } else if let Some((end, finite)) = lex_nondecimal_sign_ureal(source, body_start, radix)? {
-        (end, RealRepr::Finite(finite))
-    } else {
-        // Not a `<real R>` at all.
-        return Ok(None);
-    };
-
-    if real_end >= len {
-        // Pure real at end of input.
-        let text = &source[start..real_end];
-        let kind = NumberLiteralKind {
-            radix,
-            exactness,
-            value: NumberValue::Real(real_repr),
-        };
-        let literal = NumberLiteral {
-            text: text.to_string(),
-            kind,
-        };
-        return Ok(Some((real_end, literal)));
-    }
-
-    let tail_ch = source[real_end..].chars().next().unwrap();
-
-    // If the next character is a delimiter, this is a pure real.
-    if is_delimiter(tail_ch) {
-        let text = &source[start..real_end];
-        let kind = NumberLiteralKind {
-            radix,
-            exactness,
-            value: NumberValue::Real(real_repr),
-        };
-        let literal = NumberLiteral {
-            text: text.to_string(),
-            kind,
-        };
-        return Ok(Some((real_end, literal)));
-    }
-
-    match tail_ch {
-        '@' => {
-            // Polar form: `<real R> @ <real R>`.
-            let after_at = real_end + tail_ch.len_utf8();
-            if after_at >= len {
-                return Err(ParseError::Incomplete);
-            }
-
-            let (end2, real2_repr) = if let Some((e2, infnan2)) = lex_infnan_body(source, after_at)
-            {
-                (e2, RealRepr::Infnan(infnan2))
-            } else if let Some((e2, finite2)) = lex_nondecimal_sign_ureal(source, after_at, radix)?
-            {
-                (e2, RealRepr::Finite(finite2))
-            } else {
-                let span = Span {
-                    start,
-                    end: after_at,
-                };
-                return Err(ParseError::lexical(
-                    span,
-                    "<number>",
-                    "invalid polar complex number; expected real after '@'",
-                ));
-            };
-
-            if end2 < len {
-                let after = source[end2..].chars().next().unwrap();
-                if !is_delimiter(after) {
-                    let span = Span { start, end: end2 };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "number literal not followed by a delimiter",
-                    ));
-                }
-            }
-
-            let text = &source[start..end2];
-            let kind = NumberLiteralKind {
-                radix,
-                exactness,
-                value: NumberValue::Polar {
-                    magnitude: real_repr,
-                    angle: real2_repr,
-                },
-            };
-            let literal = NumberLiteral {
-                text: text.to_string(),
-                kind,
-            };
-            Ok(Some((end2, literal)))
-        }
-        '+' | '-' => {
-            let tail_start = real_end;
-
-            // `<real R> <infnan> i`
-            if let Some((mid, infnan_imag)) = lex_infnan_body(source, tail_start) {
-                if mid >= len {
-                    return Err(ParseError::Incomplete);
-                }
-                let i_ch = source[mid..].chars().next().unwrap();
-                if i_ch == 'i' || i_ch == 'I' {
-                    let i_end = mid + i_ch.len_utf8();
-                    if i_end < len {
-                        let after = source[i_end..].chars().next().unwrap();
-                        if !is_delimiter(after) {
-                            let span = Span { start, end: i_end };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<number>",
-                                "number literal not followed by a delimiter",
-                            ));
-                        }
-                    }
-
-                    let imag = RealRepr::Infnan(infnan_imag);
-                    let kind = NumberLiteralKind {
-                        radix,
-                        exactness,
-                        value: NumberValue::Rectangular {
-                            real: real_repr,
-                            imag,
-                        },
-                    };
-                    let text = &source[start..i_end];
-                    let literal = NumberLiteral {
-                        text: text.to_string(),
-                        kind,
-                    };
-                    return Ok(Some((i_end, literal)));
-                } else {
-                    // We saw an `<infnan>` tail but no `i` yet.
-                    return Err(ParseError::Incomplete);
-                }
-            }
-
-            // `<real R> +/- i`
-            let sign_len = tail_ch.len_utf8();
-            let after_sign = tail_start + sign_len;
-            if after_sign < len {
-                let i_ch = source[after_sign..].chars().next().unwrap();
-                if i_ch == 'i' || i_ch == 'I' {
-                    let i_end = after_sign + i_ch.len_utf8();
-                    if i_end < len {
-                        let after = source[i_end..].chars().next().unwrap();
-                        if !is_delimiter(after) {
-                            let span = Span { start, end: i_end };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<number>",
-                                "number literal not followed by a delimiter",
-                            ));
-                        }
-                    }
-
-                    let imag_spelling = if tail_ch == '-' { "-1" } else { "1" };
-                    let imag = RealRepr::Finite(FiniteRealRepr::Integer {
-                        spelling: imag_spelling.to_string(),
-                    });
-                    let kind = NumberLiteralKind {
-                        radix,
-                        exactness,
-                        value: NumberValue::Rectangular {
-                            real: real_repr,
-                            imag,
-                        },
-                    };
-                    let text = &source[start..i_end];
-                    let literal = NumberLiteral {
-                        text: text.to_string(),
-                        kind,
-                    };
-                    return Ok(Some((i_end, literal)));
-                }
-            }
-
-            // `<real R> +/- <ureal R> i`
-            if let Some((end_ureal, imag_finite)) =
-                lex_nondecimal_sign_ureal(source, tail_start, radix)?
-            {
-                if end_ureal >= len {
-                    return Err(ParseError::Incomplete);
-                }
-                let i_ch = source[end_ureal..].chars().next().unwrap();
-                if i_ch == 'i' || i_ch == 'I' {
-                    let i_end = end_ureal + i_ch.len_utf8();
-                    if i_end < len {
-                        let after = source[i_end..].chars().next().unwrap();
-                        if !is_delimiter(after) {
-                            let span = Span { start, end: i_end };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<number>",
-                                "number literal not followed by a delimiter",
-                            ));
-                        }
-                    }
-
-                    let imag = RealRepr::Finite(imag_finite);
-                    let kind = NumberLiteralKind {
-                        radix,
-                        exactness,
-                        value: NumberValue::Rectangular {
-                            real: real_repr,
-                            imag,
-                        },
-                    };
-                    let text = &source[start..i_end];
-                    let literal = NumberLiteral {
-                        text: text.to_string(),
-                        kind,
-                    };
-                    return Ok(Some((i_end, literal)));
-                } else {
-                    let span = Span {
-                        start,
-                        end: end_ureal,
-                    };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "number literal not followed by a delimiter",
-                    ));
-                }
-            }
-
-            // No valid complex tail recognized after the real part.
-            let span = Span {
-                start,
-                end: real_end,
-            };
-            Err(ParseError::lexical(
-                span,
-                "<number>",
-                "invalid complex number syntax",
-            ))
-        }
-        _ => {
-            // Not a delimiter or complex tail start: malformed number.
-            let span = Span {
-                start,
-                end: real_end,
-            };
-            Err(ParseError::lexical(
-                span,
-                "<number>",
-                "number literal not followed by a delimiter",
-            ))
-        }
-    }
+    // Delegate the `<complex R>` body (including plain reals and
+    // `<infnan>`) to the shared radix-parametric helper, starting at
+    // `body_start` but treating `start` (the first `#`) as the
+    // beginning of the literal for spans and text.
+    lex_complex_with_radix(source, start, body_start, radix, exactness)
 }
 
 /// Lex `<sign> <ureal R>` for non-decimal radices `R = 2, 8, 16`,
