@@ -1748,1570 +1748,854 @@ fn classify_decimal_number(text: &str) -> NumberLiteralKind {
 mod tests {
     use super::*;
 
-    #[test]
-    fn lex_is_stub_for_now() {
-        // We still do not implement `<identifier>` or most punctuation
-        // tokens, so `(foo)` currently yields `ParseError::Unimplemented`.
-        let err = lex("(foo)").unwrap_err();
-        assert!(matches!(err, ParseError::Unimplemented));
+    // --- Test Infrastructure ---
+
+    struct TestCase {
+        name: &'static str,
+        input: &'static str,
+        expected: Expected,
     }
 
-    #[test]
-    fn lex_only_whitespace_and_comments_produces_no_tokens() {
-        let src = "   ; comment here\n  #| nested ; comment |#   ";
-        let tokens = lex(src).unwrap();
-        assert!(tokens.is_empty());
+    enum Expected {
+        Tokens(Vec<TokenMatcher>),
+        Error(ErrorMatcher),
+        Empty,
     }
 
-    #[test]
-    fn lex_incomplete_nested_comment_is_incomplete() {
-        let err = lex("#| unclosed nested comment").unwrap_err();
-        assert!(matches!(err, ParseError::Incomplete));
+    enum ErrorMatcher {
+        Unimplemented,
+        Incomplete,
+        Lex(&'static str), // nonterminal
     }
 
-    #[test]
-    fn lex_unknown_directive_is_lex_error() {
-        let err = lex("#!unknown-directive").unwrap_err();
-        match err {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<directive>");
-            }
-            other => panic!("expected lexical error, got: {other:?}"),
-        }
+    enum TokenMatcher {
+        Bool(bool),
+        Char(char),
+        Str(&'static str),
+        LParen,
+        RParen,
+        Quote,
+        Backquote,
+        Comma,
+        CommaAt,
+        Dot,
+        VectorStart,
+        ByteVectorStart,
+        Num(&'static str, NumCheck),
     }
 
-    #[test]
-    fn lex_fold_case_directives_are_skipped() {
-        let src = "#!fold-case\n  #!no-fold-case  ; rest is comment\n";
-        let tokens = lex(src).unwrap();
-        assert!(tokens.is_empty());
+    enum NumCheck {
+        Any, // Just check text
+        Int(&'static str),
+        Dec(&'static str),
+        Rat(&'static str),
+        RectInt(&'static str, &'static str), // real int, imag int
+        RectRat(&'static str, &'static str), // real int, imag rat
+        PolarInt(&'static str, &'static str), // mag int, ang int
+        PolarRatDec(&'static str, &'static str), // mag rat, ang dec
+        Inf(InfinityNan),
+        RectInfImag(&'static str, InfinityNan), // real int, imag inf
+
+        // Wrappers
+        Exact(Box<NumCheck>),
+        Inexact(Box<NumCheck>),
+        Radix(NumberRadix, Box<NumCheck>),
     }
 
-    #[test]
-    fn lex_parses_boolean_tokens() {
-        // `<boolean> ::= #t | #f | #true | #false`
-        let toks = lex("  #t  #FaLsE  #true #FALSE").unwrap();
-        assert_eq!(toks.len(), 4);
-
-        assert!(matches!(toks[0].value, Token::Boolean(true)));
-        assert!(matches!(toks[1].value, Token::Boolean(false)));
-        assert!(matches!(toks[2].value, Token::Boolean(true)));
-        assert!(matches!(toks[3].value, Token::Boolean(false)));
-    }
-
-    #[test]
-    fn lex_parses_character_tokens() {
-        // `<character> ::= #\ <any character>
-        //                | #\ <character name>
-        //                | #\x<hex scalar value>`
-        let toks = lex("#\\a #\\space #\\x41").unwrap();
-        assert_eq!(toks.len(), 3);
-
-        assert!(matches!(toks[0].value, Token::Character('a')));
-        assert!(matches!(toks[1].value, Token::Character(' ')));
-        assert!(matches!(toks[2].value, Token::Character('A')));
-    }
-
-    #[test]
-    fn lex_parses_punctuation_tokens() {
-        // Punctuation subset of `<token>`:
-        //   ( | ) | ' | ` | , | ,@ | . | #(
-
-        let toks = lex("( ) ' ` , ,@ . #(").unwrap();
-        assert_eq!(toks.len(), 8);
-
-        assert!(matches!(toks[0].value, Token::LParen));
-        assert!(matches!(toks[1].value, Token::RParen));
-        assert!(matches!(toks[2].value, Token::Quote));
-        assert!(matches!(toks[3].value, Token::Backquote));
-        assert!(matches!(toks[4].value, Token::Comma));
-        assert!(matches!(toks[5].value, Token::CommaAt));
-        assert!(matches!(toks[6].value, Token::Dot));
-        assert!(matches!(toks[7].value, Token::VectorStart));
-
-        let toks2 = lex("#u8(").unwrap();
-        assert_eq!(toks2.len(), 1);
-        assert!(matches!(toks2[0].value, Token::ByteVectorStart));
-    }
-
-    #[test]
-    fn lex_parses_decimal_number_tokens() {
-        let toks = lex("42 -7 3.14 .5 1e3 2.0e-2").unwrap();
-        assert_eq!(toks.len(), 6);
-
-        match &toks[0].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "42");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Integer { spelling })),
-                } = &n.kind
-                {
-                    assert_eq!(spelling, "42");
-                } else {
-                    panic!("unexpected classification for 42: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        match &toks[1].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "-7");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Integer { spelling })),
-                } = &n.kind
-                {
-                    assert_eq!(spelling, "-7");
-                } else {
-                    panic!("unexpected classification for -7: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // The remaining forms are classified as decimal reals.
-        for tok in toks.iter().skip(2) {
-            match &tok.value {
-                Token::Number(n) => {
-                    if let NumberLiteralKind {
-                        radix: NumberRadix::Decimal,
-                        exactness: NumberExactness::Unspecified,
-                        value:
-                            NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Decimal { spelling })),
-                    } = &n.kind
+    impl TestCase {
+        fn run(&self) {
+            let result = lex(self.input);
+            match &self.expected {
+                Expected::Tokens(expected_tokens) => {
+                    let tokens = result.unwrap_or_else(|e| {
+                        panic!("{}: expected tokens, got error {:?}", self.name, e)
+                    });
+                    assert_eq!(
+                        tokens.len(),
+                        expected_tokens.len(),
+                        "{}: token count mismatch",
+                        self.name
+                    );
+                    for (i, (tok, matcher)) in tokens.iter().zip(expected_tokens.iter()).enumerate()
                     {
-                        assert!(!spelling.is_empty());
-                    } else {
-                        panic!("unexpected decimal classification: {:#?}", n.kind);
+                        matcher.check(&tok.value, self.name, i);
                     }
                 }
-                other => panic!("expected number token, got: {other:?}"),
+                Expected::Error(matcher) => {
+                    let err =
+                        result.expect_err(&format!("{}: expected error, got tokens", self.name));
+                    matcher.check(&err, self.name);
+                }
+                Expected::Empty => {
+                    let tokens = result.unwrap_or_else(|e| {
+                        panic!("{}: expected success, got error {:?}", self.name, e)
+                    });
+                    assert!(tokens.is_empty(), "{}: expected empty tokens", self.name);
+                }
             }
         }
     }
 
-    #[test]
-    fn lex_incomplete_decimal_number_is_incomplete() {
-        let err = lex("1e").unwrap_err();
-        assert!(matches!(err, ParseError::Incomplete));
-
-        let err2 = lex("1.0e+").unwrap_err();
-        assert!(matches!(err2, ParseError::Incomplete));
-    }
-
-    #[test]
-    fn lex_decimal_number_requires_delimiter_and_parses_rationals() {
-        // Non-delimited decimal: "42foo" should be rejected as a malformed
-        // `<number>`.
-        let err = lex("42foo").unwrap_err();
-        match err {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        // Decimal rationals `3/4` and `-3/4` are recognized as `<number>`
-        // and classified as finite rationals.
-        let toks = lex("3/4 -3/4").unwrap();
-        assert_eq!(toks.len(), 2);
-        for t in &toks {
-            match &t.value {
-                Token::Number(n) => {
-                    assert!(n.text == "3/4" || n.text == "-3/4");
-                    if let NumberLiteralKind {
-                        radix: NumberRadix::Decimal,
-                        exactness: NumberExactness::Unspecified,
-                        value:
-                            NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Rational { spelling })),
-                    } = &n.kind
-                    {
-                        assert_eq!(spelling, &n.text);
-                    } else {
-                        panic!("unexpected rational classification: {:#?}", n.kind);
-                    }
+    impl ErrorMatcher {
+        fn check(&self, err: &ParseError, test_name: &str) {
+            match (self, err) {
+                (ErrorMatcher::Unimplemented, ParseError::Unimplemented) => {}
+                (ErrorMatcher::Incomplete, ParseError::Incomplete) => {}
+                (
+                    ErrorMatcher::Lex(nt),
+                    ParseError::Lex { nonterminal, .. },
+                ) => {
+                    assert_eq!(nt, nonterminal, "{}: error nonterminal mismatch", test_name);
                 }
-                other => panic!("expected number token, got: {other:?}"),
+                _ => panic!(
+                    "{}: error mismatch. Expected {:?}, got {:?}",
+                    test_name, self, err
+                ),
             }
-        }
-
-        // `3/` at end of input is treated as incomplete.
-        let err2 = lex("3/").unwrap_err();
-        assert!(matches!(err2, ParseError::Incomplete));
-
-        // `3/x` is a malformed rational.
-        let err3 = lex("3/x").unwrap_err();
-        match err3 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            _ => panic!("expected lexical error in <number>"),
-        }
-
-        // `1/2/3` has a valid rational prefix `1/2` but an extra
-        // '/' and trailing digits, so it must be rejected as a
-        // `<number>`.
-        let err4 = lex("1/2/3").unwrap_err();
-        match err4 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            _ => panic!("expected lexical error in <number>"),
-        }
-
-        // `0x1` looks like a C-style hexadecimal literal but is not
-        // a valid R7RS `<number>` and must be rejected.
-        let err5 = lex("0x1").unwrap_err();
-        match err5 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            _ => panic!("expected lexical error in <number>"),
         }
     }
 
-    #[test]
-    fn lex_parses_decimal_complex_numbers() {
-        // Rectangular forms: a+bi, a-bi, with various ureal 10 bodies.
-        let toks = lex("1+2i 1-3/4i 1+2.5i 1-1e3i").unwrap();
-        assert_eq!(toks.len(), 4);
-
-        // 1+2i
-        match &toks[0].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "1+2i");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Rectangular { real, imag },
-                } = &n.kind
-                {
-                    match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "1");
-                        }
-                        other => panic!("unexpected real part for 1+2i: {other:?}"),
-                    }
-                    match imag {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "+2");
-                        }
-                        other => panic!("unexpected imag part for 1+2i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for 1+2i: {:#?}", n.kind);
-                }
+    impl std::fmt::Debug for ErrorMatcher {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Unimplemented => write!(f, "Unimplemented"),
+                Self::Incomplete => write!(f, "Incomplete"),
+                Self::Lex(arg0) => f.debug_tuple("Lex").field(arg0).finish(),
             }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // 1-3/4i
-        match &toks[1].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "1-3/4i");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Rectangular { real, imag },
-                } = &n.kind
-                {
-                    match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "1");
-                        }
-                        other => panic!("unexpected real part for 1-3/4i: {other:?}"),
-                    }
-                    match imag {
-                        RealRepr::Finite(FiniteRealRepr::Rational { spelling }) => {
-                            assert_eq!(spelling, "-3/4");
-                        }
-                        other => panic!("unexpected imag part for 1-3/4i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for 1-3/4i: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // 1+2.5i and 1-1e3i: just basic shape checks.
-        for (idx, text) in ["1+2.5i", "1-1e3i"].iter().enumerate() {
-            match &toks[idx + 2].value {
-                Token::Number(n) => {
-                    assert_eq!(&n.text, text);
-                    if let NumberLiteralKind {
-                        radix: NumberRadix::Decimal,
-                        exactness: NumberExactness::Unspecified,
-                        value: NumberValue::Rectangular { .. },
-                    } = &n.kind
-                    {
-                        // ok
-                    } else {
-                        panic!("unexpected classification for {text}: {:#?}", n.kind);
-                    }
-                }
-                other => panic!("expected number token, got: {other:?}"),
-            }
-        }
-
-        // Pure imaginary forms and polar forms.
-        let toks2 = lex("+i -i +2i -3/4i 1@2 -3/4@5.0 +inf.0i 1+inf.0i").unwrap();
-        assert_eq!(toks2.len(), 8);
-
-        // +i and -i
-        for (idx, text, expected_imag) in [(0usize, "+i", "1"), (1usize, "-i", "-1")] {
-            match &toks2[idx].value {
-                Token::Number(n) => {
-                    assert_eq!(n.text, text);
-                    if let NumberLiteralKind {
-                        radix: NumberRadix::Decimal,
-                        exactness: NumberExactness::Unspecified,
-                        value: NumberValue::Rectangular { real, imag },
-                    } = &n.kind
-                    {
-                        match real {
-                            RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                                assert_eq!(spelling, "0");
-                            }
-                            other => panic!("unexpected real part for {text}: {other:?}"),
-                        }
-                        match imag {
-                            RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                                assert_eq!(spelling, expected_imag);
-                            }
-                            other => panic!("unexpected imag part for {text}: {other:?}"),
-                        }
-                    } else {
-                        panic!("unexpected classification for {text}: {:#?}", n.kind);
-                    }
-                }
-                other => panic!("expected number token, got: {other:?}"),
-            }
-        }
-
-        // +2i and -3/4i
-        match &toks2[2].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "+2i");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Rectangular { real, imag },
-                } = &n.kind
-                {
-                    match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "0");
-                        }
-                        other => panic!("unexpected real part for +2i: {other:?}"),
-                    }
-                    match imag {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "+2");
-                        }
-                        other => panic!("unexpected imag part for +2i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for +2i: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        match &toks2[3].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "-3/4i");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Rectangular { real, imag },
-                } = &n.kind
-                {
-                    match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "0");
-                        }
-                        other => panic!("unexpected real part for -3/4i: {other:?}"),
-                    }
-                    match imag {
-                        RealRepr::Finite(FiniteRealRepr::Rational { spelling }) => {
-                            assert_eq!(spelling, "-3/4");
-                        }
-                        other => panic!("unexpected imag part for -3/4i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for -3/4i: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // 1@2 and -3/4@5.0
-        match &toks2[4].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "1@2");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Polar { magnitude, angle },
-                } = &n.kind
-                {
-                    match magnitude {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "1");
-                        }
-                        other => panic!("unexpected magnitude for 1@2: {other:?}"),
-                    }
-                    match angle {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "2");
-                        }
-                        other => panic!("unexpected angle for 1@2: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for 1@2: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        match &toks2[5].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "-3/4@5.0");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Polar { magnitude, angle },
-                } = &n.kind
-                {
-                    match magnitude {
-                        RealRepr::Finite(FiniteRealRepr::Rational { spelling }) => {
-                            assert_eq!(spelling, "-3/4");
-                        }
-                        other => panic!("unexpected magnitude for -3/4@5.0: {other:?}"),
-                    }
-                    match angle {
-                        RealRepr::Finite(FiniteRealRepr::Decimal { spelling }) => {
-                            assert_eq!(spelling, "5.0");
-                        }
-                        other => panic!("unexpected angle for -3/4@5.0: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for -3/4@5.0: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // +inf.0i and 1+inf.0i
-        match &toks2[6].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "+inf.0i");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Rectangular { real, imag },
-                } = &n.kind
-                {
-                    use InfinityNan::PositiveInfinity;
-                    match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "0");
-                        }
-                        other => panic!("unexpected real part for +inf.0i: {other:?}"),
-                    }
-                    match imag {
-                        RealRepr::Infnan(k) => {
-                            assert_eq!(*k, PositiveInfinity);
-                        }
-                        other => panic!("unexpected imag part for +inf.0i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for +inf.0i: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        match &toks2[7].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "1+inf.0i");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Rectangular { real, imag },
-                } = &n.kind
-                {
-                    use InfinityNan::PositiveInfinity;
-                    match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "1");
-                        }
-                        other => panic!("unexpected real part for 1+inf.0i: {other:?}"),
-                    }
-                    match imag {
-                        RealRepr::Infnan(k) => {
-                            assert_eq!(*k, PositiveInfinity);
-                        }
-                        other => panic!("unexpected imag part for 1+inf.0i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for 1+inf.0i: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
         }
     }
 
-    #[test]
-    fn lex_parses_prefixed_decimal_numbers() {
-        // `<num 10>` with `<prefix 10>` using `#d`, `#e`, `#i`.
-        let toks = lex("#d42 #e3.0 #i-5/6 #d#e1 #e#d2").unwrap();
-        assert_eq!(toks.len(), 5);
-
-        // #d42 → integer 42, radix 10, unspecified exactness.
-        match &toks[0].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#d42");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Integer { spelling })),
-                } = &n.kind
-                {
-                    assert_eq!(spelling, "42");
-                } else {
-                    panic!("unexpected classification for #d42: {:#?}", n.kind);
+    impl TokenMatcher {
+        fn check(&self, token: &Token, test_name: &str, index: usize) {
+            match (self, token) {
+                (TokenMatcher::Bool(e), Token::Boolean(a)) => {
+                    assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
                 }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #e3.0 → decimal 3.0, radix 10, exact.
-        match &toks[1].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#e3.0");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Exact,
-                    value: NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Decimal { spelling })),
-                } = &n.kind
-                {
-                    assert_eq!(spelling, "3.0");
-                } else {
-                    panic!("unexpected classification for #e3.0: {:#?}", n.kind);
+                (TokenMatcher::Char(e), Token::Character(a)) => {
+                    assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
                 }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #i-5/6 → inexact rational -5/6, radix 10.
-        match &toks[2].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#i-5/6");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Inexact,
-                    value:
-                        NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Rational { spelling })),
-                } = &n.kind
-                {
-                    assert_eq!(spelling, "-5/6");
-                } else {
-                    panic!("unexpected classification for #i-5/6: {:#?}", n.kind);
+                (TokenMatcher::Str(e), Token::String(a)) => {
+                    assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
                 }
+                (TokenMatcher::LParen, Token::LParen) => {}
+                (TokenMatcher::RParen, Token::RParen) => {}
+                (TokenMatcher::Quote, Token::Quote) => {}
+                (TokenMatcher::Backquote, Token::Backquote) => {}
+                (TokenMatcher::Comma, Token::Comma) => {}
+                (TokenMatcher::CommaAt, Token::CommaAt) => {}
+                (TokenMatcher::Dot, Token::Dot) => {}
+                (TokenMatcher::VectorStart, Token::VectorStart) => {}
+                (TokenMatcher::ByteVectorStart, Token::ByteVectorStart) => {}
+                (TokenMatcher::Num(text, check), Token::Number(n)) => {
+                    assert_eq!(
+                        text, &n.text,
+                        "{}: token {} text mismatch",
+                        test_name, index
+                    );
+                    check.verify(&n.kind, test_name, index);
+                }
+                _ => panic!(
+                    "{}: token {} type mismatch. Expected {:?}, got {:?}",
+                    test_name, index, self, token
+                ),
             }
-            other => panic!("expected number token, got: {other:?}"),
         }
+    }
 
-        // #d#e1 and #e#d2 both combine radix and exactness prefixes
-        // in either order.
-        for (idx, expected_text, expected_spelling) in
-            [(3usize, "#d#e1", "1"), (4usize, "#e#d2", "2")]
-        {
-            match &toks[idx].value {
-                Token::Number(n) => {
-                    assert_eq!(n.text, expected_text);
-                    if let NumberLiteralKind {
-                        radix: NumberRadix::Decimal,
-                        exactness: NumberExactness::Exact,
-                        value:
-                            NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Integer { spelling })),
-                    } = &n.kind
+    impl std::fmt::Debug for TokenMatcher {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Bool(b) => f.debug_tuple("Bool").field(b).finish(),
+                Self::Char(c) => f.debug_tuple("Char").field(c).finish(),
+                Self::Str(s) => f.debug_tuple("Str").field(s).finish(),
+                Self::LParen => write!(f, "LParen"),
+                Self::RParen => write!(f, "RParen"),
+                Self::Quote => write!(f, "Quote"),
+                Self::Backquote => write!(f, "Backquote"),
+                Self::Comma => write!(f, "Comma"),
+                Self::CommaAt => write!(f, "CommaAt"),
+                Self::Dot => write!(f, "Dot"),
+                Self::VectorStart => write!(f, "VectorStart"),
+                Self::ByteVectorStart => write!(f, "ByteVectorStart"),
+                Self::Num(s, _) => f.debug_tuple("Num").field(s).finish(),
+            }
+        }
+    }
+
+    impl NumCheck {
+        fn verify(&self, kind: &NumberLiteralKind, test_name: &str, index: usize) {
+            match self {
+                NumCheck::Any => {}
+                NumCheck::Int(s) => {
+                    if let NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Integer {
+                        spelling,
+                    })) = &kind.value
                     {
-                        assert_eq!(spelling, expected_spelling);
+                        assert_eq!(
+                            spelling, s,
+                            "{}: token {} integer spelling mismatch",
+                            test_name, index
+                        );
                     } else {
                         panic!(
-                            "unexpected classification for {expected_text}: {:#?}",
-                            n.kind
+                            "{}: token {} expected Integer, got {:?}",
+                            test_name, index, kind
                         );
                     }
                 }
-                other => panic!("expected number token, got: {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn lex_parses_prefixed_decimal_complex_numbers() {
-        // `<num 10>` complex forms with `<prefix 10>` using `#d`, `#e`, `#i`.
-        let toks = lex("#d1+2i #e1-3/4i #i+2i #e1-1e3i #d+inf.0i #e1+inf.0i").unwrap();
-        assert_eq!(toks.len(), 6);
-
-        // #d1+2i → rectangular complex with unspecified exactness.
-        match &toks[0].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#d1+2i");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Rectangular { real, imag },
-                } = &n.kind
-                {
-                    match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "1");
-                        }
-                        other => panic!("unexpected real part for #d1+2i: {other:?}"),
-                    }
-                    match imag {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "+2");
-                        }
-                        other => panic!("unexpected imag part for #d1+2i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for #d1+2i: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #e1-3/4i → exact rectangular complex with rational imaginary part.
-        match &toks[1].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#e1-3/4i");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Exact,
-                    value: NumberValue::Rectangular { real, imag },
-                } = &n.kind
-                {
-                    match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "1");
-                        }
-                        other => panic!("unexpected real part for #e1-3/4i: {other:?}"),
-                    }
-                    match imag {
-                        RealRepr::Finite(FiniteRealRepr::Rational { spelling }) => {
-                            assert_eq!(spelling, "-3/4");
-                        }
-                        other => panic!("unexpected imag part for #e1-3/4i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for #e1-3/4i: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #i+2i and #e1-1e3i: just basic shape checks.
-        for (idx, text) in ["#i+2i", "#e1-1e3i"].iter().enumerate() {
-            match &toks[idx + 2].value {
-                Token::Number(n) => {
-                    assert_eq!(&n.text, text);
-                    let expected_exactness = if text.starts_with("#i") {
-                        NumberExactness::Inexact
-                    } else {
-                        NumberExactness::Exact
-                    };
-
-                    if let NumberLiteralKind {
-                        radix: NumberRadix::Decimal,
-                        exactness,
-                        value: NumberValue::Rectangular { .. },
-                    } = &n.kind
+                NumCheck::Dec(s) => {
+                    if let NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Decimal {
+                        spelling,
+                    })) = &kind.value
                     {
-                        assert_eq!(*exactness, expected_exactness);
+                        assert_eq!(
+                            spelling, s,
+                            "{}: token {} decimal spelling mismatch",
+                            test_name, index
+                        );
                     } else {
-                        panic!("unexpected classification for {text}: {:#?}", n.kind);
+                        panic!(
+                            "{}: token {} expected Decimal, got {:?}",
+                            test_name, index, kind
+                        );
                     }
                 }
-                other => panic!("expected number token, got: {other:?}"),
-            }
-        }
-
-        // Polar forms.
-        let toks2 = lex("#e1@2 #d-3/4@5.0 #b+inf.0@1 -3/4@5.0").unwrap();
-        assert_eq!(toks2.len(), 4);
-
-        // #e1@2 → exact polar complex.
-        match &toks2[0].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#e1@2");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Exact,
-                    value: NumberValue::Polar { magnitude, angle },
-                } = &n.kind
-                {
-                    match magnitude {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "1");
-                        }
-                        other => panic!("unexpected magnitude for #e1@2: {other:?}"),
+                NumCheck::Rat(s) => {
+                    if let NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Rational {
+                        spelling,
+                    })) = &kind.value
+                    {
+                        assert_eq!(
+                            spelling, s,
+                            "{}: token {} rational spelling mismatch",
+                            test_name, index
+                        );
+                    } else {
+                        panic!(
+                            "{}: token {} expected Rational, got {:?}",
+                            test_name, index, kind
+                        );
                     }
-                    match angle {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "2");
+                }
+                NumCheck::RectInt(r, i) => {
+                    if let NumberValue::Rectangular { real, imag } = &kind.value {
+                        match real {
+                            RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
+                                assert_eq!(spelling, r)
+                            }
+                            _ => {
+                                panic!("{}: token {} expected Integer real part", test_name, index)
+                            }
                         }
-                        other => panic!("unexpected angle for #e1@2: {other:?}"),
+                        match imag {
+                            RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
+                                assert_eq!(spelling, i)
+                            }
+                            _ => {
+                                panic!("{}: token {} expected Integer imag part", test_name, index)
+                            }
+                        }
+                    } else {
+                        panic!("{}: token {} expected Rectangular", test_name, index);
                     }
-                } else {
-                    panic!("unexpected classification for #e1@2: {:#?}", n.kind);
+                }
+                NumCheck::RectRat(r, i) => {
+                    if let NumberValue::Rectangular { real, imag } = &kind.value {
+                        match real {
+                            RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
+                                assert_eq!(spelling, r)
+                            }
+                            _ => {
+                                panic!("{}: token {} expected Integer real part", test_name, index)
+                            }
+                        }
+                        match imag {
+                            RealRepr::Finite(FiniteRealRepr::Rational { spelling }) => {
+                                assert_eq!(spelling, i)
+                            }
+                            _ => {
+                                panic!("{}: token {} expected Rational imag part", test_name, index)
+                            }
+                        }
+                    } else {
+                        panic!("{}: token {} expected Rectangular", test_name, index);
+                    }
+                }
+                NumCheck::PolarInt(m, a) => {
+                    if let NumberValue::Polar { magnitude, angle } = &kind.value {
+                        match magnitude {
+                            RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
+                                assert_eq!(spelling, m)
+                            }
+                            _ => {
+                                panic!("{}: token {} expected Integer magnitude", test_name, index)
+                            }
+                        }
+                        match angle {
+                            RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
+                                assert_eq!(spelling, a)
+                            }
+                            _ => panic!("{}: token {} expected Integer angle", test_name, index),
+                        }
+                    } else {
+                        panic!("{}: token {} expected Polar", test_name, index);
+                    }
+                }
+                NumCheck::PolarRatDec(m, a) => {
+                    if let NumberValue::Polar { magnitude, angle } = &kind.value {
+                        match magnitude {
+                            RealRepr::Finite(FiniteRealRepr::Rational { spelling }) => {
+                                assert_eq!(spelling, m)
+                            }
+                            _ => {
+                                panic!("{}: token {} expected Rational magnitude", test_name, index)
+                            }
+                        }
+                        match angle {
+                            RealRepr::Finite(FiniteRealRepr::Decimal { spelling }) => {
+                                assert_eq!(spelling, a)
+                            }
+                            _ => panic!("{}: token {} expected Decimal angle", test_name, index),
+                        }
+                    } else {
+                        panic!("{}: token {} expected Polar", test_name, index);
+                    }
+                }
+                NumCheck::Inf(k) => {
+                    if let NumberValue::Real(RealRepr::Infnan(val)) = &kind.value {
+                        assert_eq!(val, k, "{}: token {} infnan mismatch", test_name, index);
+                    } else {
+                        panic!("{}: token {} expected Infnan", test_name, index);
+                    }
+                }
+                NumCheck::RectInfImag(r, k) => {
+                    if let NumberValue::Rectangular { real, imag } = &kind.value {
+                        match real {
+                            RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
+                                assert_eq!(spelling, r)
+                            }
+                            _ => {
+                                panic!("{}: token {} expected Integer real part", test_name, index)
+                            }
+                        }
+                        match imag {
+                            RealRepr::Infnan(val) => assert_eq!(val, k),
+                            _ => panic!("{}: token {} expected Infnan imag part", test_name, index),
+                        }
+                    } else {
+                        panic!("{}: token {} expected Rectangular", test_name, index);
+                    }
+                }
+                NumCheck::Exact(inner) => {
+                    assert_eq!(
+                        kind.exactness,
+                        NumberExactness::Exact,
+                        "{}: token {} expected Exact",
+                        test_name,
+                        index
+                    );
+                    inner.verify(kind, test_name, index);
+                }
+                NumCheck::Inexact(inner) => {
+                    assert_eq!(
+                        kind.exactness,
+                        NumberExactness::Inexact,
+                        "{}: token {} expected Inexact",
+                        test_name,
+                        index
+                    );
+                    inner.verify(kind, test_name, index);
+                }
+                NumCheck::Radix(r, inner) => {
+                    assert_eq!(
+                        kind.radix, *r,
+                        "{}: token {} radix mismatch",
+                        test_name, index
+                    );
+                    inner.verify(kind, test_name, index);
                 }
             }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #d-3/4@5.0 → exact polar complex with rational magnitude.
-        match &toks2[1].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#d-3/4@5.0");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Polar { magnitude, angle },
-                } = &n.kind
-                {
-                    match magnitude {
-                        RealRepr::Finite(FiniteRealRepr::Rational { spelling }) => {
-                            assert_eq!(spelling, "-3/4");
-                        }
-                        other => panic!("unexpected magnitude for #d-3/4@5.0: {other:?}"),
-                    }
-                    match angle {
-                        RealRepr::Finite(FiniteRealRepr::Decimal { spelling }) => {
-                            assert_eq!(spelling, "5.0");
-                        }
-                        other => panic!("unexpected angle for #d-3/4@5.0: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for #d-3/4@5.0: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #b+inf.0@1 → binary polar with inf magnitude.
-        match &toks2[2].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#b+inf.0@1");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Binary,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Polar { magnitude, angle },
-                } = &n.kind
-                {
-                    match magnitude {
-                        RealRepr::Infnan(InfinityNan::PositiveInfinity) => {
-                            // ok
-                        }
-                        other => panic!("unexpected magnitude for #b+inf.0@1: {other:?}"),
-                    }
-                    match angle {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "1");
-                        }
-                        other => panic!("unexpected angle for #b+inf.0@1: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for #b+inf.0@1: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // -3/4@5.0 → mixed exactness polar complex with rational magnitude.
-        match &toks2[3].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "-3/4@5.0");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Polar { magnitude, angle },
-                } = &n.kind
-                {
-                    match magnitude {
-                        RealRepr::Finite(FiniteRealRepr::Rational { spelling }) => {
-                            assert_eq!(spelling, "-3/4");
-                        }
-                        other => panic!("unexpected magnitude for -3/4@5.0: {other:?}"),
-                    }
-                    match angle {
-                        RealRepr::Finite(FiniteRealRepr::Decimal { spelling }) => {
-                            assert_eq!(spelling, "5.0");
-                        }
-                        other => panic!("unexpected angle for -3/4@5.0i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for -3/4@5.0i: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
         }
     }
 
-    #[test]
-    fn lex_prefixed_decimal_number_errors() {
-        // Duplicate radix prefix: #d#d1.
-        let err = lex("#d#d1").unwrap_err();
-        match err {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        // Duplicate exactness prefix: #e#i1.
-        let err2 = lex("#e#i1").unwrap_err();
-        match err2 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        // Prefixed decimal numbers must be followed by a <delimiter>.
-        let err3 = lex("#d42foo").unwrap_err();
-        match err3 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        // Incomplete prefix with no number body.
-        let err4 = lex("#d").unwrap_err();
-        assert!(matches!(err4, ParseError::Incomplete));
-    }
+    // --- Tests ---
 
     #[test]
-    fn lex_infnan_numbers_plain_and_prefixed() {
-        // Plain `<infnan>` without prefixes.
-        let toks = lex("+inf.0 -inf.0 +nan.0 -nan.0").unwrap();
-        assert_eq!(toks.len(), 4);
-
-        let kinds: Vec<_> = toks
-            .iter()
-            .map(|t| match &t.value {
-                Token::Number(n) => &n.kind,
-                other => panic!("expected number token, got: {other:?}"),
-            })
-            .collect();
-
-        use InfinityNan::*;
-
-        let expect = [
-            ("+inf.0", PositiveInfinity),
-            ("-inf.0", NegativeInfinity),
-            ("+nan.0", PositiveNaN),
-            ("-nan.0", NegativeNaN),
+    fn run_all_tests() {
+        let cases = vec![
+            TestCase {
+                name: "stub_unimplemented",
+                input: "(foo)",
+                expected: Expected::Error(ErrorMatcher::Unimplemented),
+            },
+            TestCase {
+                name: "whitespace_comments",
+                input: "   ; comment here\n  #| nested ; comment |#   ",
+                expected: Expected::Empty,
+            },
+            TestCase {
+                name: "incomplete_nested_comment",
+                input: "#| unclosed nested comment",
+                expected: Expected::Error(ErrorMatcher::Incomplete),
+            },
+            TestCase {
+                name: "unknown_directive",
+                input: "#!unknown-directive",
+                expected: Expected::Error(ErrorMatcher::Lex("<directive>")),
+            },
+            TestCase {
+                name: "fold_case_directives",
+                input: "#!fold-case\n  #!no-fold-case  ; rest is comment\n",
+                expected: Expected::Empty,
+            },
+            TestCase {
+                name: "boolean_tokens",
+                input: "  #t  #FaLsE  #true #FALSE",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Bool(true),
+                    TokenMatcher::Bool(false),
+                    TokenMatcher::Bool(true),
+                    TokenMatcher::Bool(false),
+                ]),
+            },
+            TestCase {
+                name: "character_tokens",
+                input: "#\\a #\\space #\\x41",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Char('a'),
+                    TokenMatcher::Char(' '),
+                    TokenMatcher::Char('A'),
+                ]),
+            },
+            TestCase {
+                name: "punctuation_tokens",
+                input: "( ) ' ` , ,@ . #(",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::LParen,
+                    TokenMatcher::RParen,
+                    TokenMatcher::Quote,
+                    TokenMatcher::Backquote,
+                    TokenMatcher::Comma,
+                    TokenMatcher::CommaAt,
+                    TokenMatcher::Dot,
+                    TokenMatcher::VectorStart,
+                ]),
+            },
+            TestCase {
+                name: "bytevector_start",
+                input: "#u8(",
+                expected: Expected::Tokens(vec![TokenMatcher::ByteVectorStart]),
+            },
+            TestCase {
+                name: "decimal_numbers",
+                input: "42 -7 3.14 .5 1e3 2.0e-2",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Num("42", NumCheck::Int("42")),
+                    TokenMatcher::Num("-7", NumCheck::Int("-7")),
+                    TokenMatcher::Num("3.14", NumCheck::Dec("3.14")),
+                    TokenMatcher::Num(".5", NumCheck::Dec(".5")),
+                    TokenMatcher::Num("1e3", NumCheck::Dec("1e3")),
+                    TokenMatcher::Num("2.0e-2", NumCheck::Dec("2.0e-2")),
+                ]),
+            },
+            TestCase {
+                name: "incomplete_decimal_1",
+                input: "1e",
+                expected: Expected::Error(ErrorMatcher::Incomplete),
+            },
+            TestCase {
+                name: "incomplete_decimal_2",
+                input: "1.0e+",
+                expected: Expected::Error(ErrorMatcher::Incomplete),
+            },
+            TestCase {
+                name: "malformed_number_suffix",
+                input: "42foo",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "rationals",
+                input: "3/4 -3/4",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Num("3/4", NumCheck::Rat("3/4")),
+                    TokenMatcher::Num("-3/4", NumCheck::Rat("-3/4")),
+                ]),
+            },
+            TestCase {
+                name: "incomplete_rational",
+                input: "3/",
+                expected: Expected::Error(ErrorMatcher::Incomplete),
+            },
+            TestCase {
+                name: "malformed_rational_1",
+                input: "3/x",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "malformed_rational_2",
+                input: "1/2/3",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "invalid_hex_literal",
+                input: "0x1",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "decimal_complex",
+                input: "1+2i 1-3/4i 1+2.5i 1-1e3i",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Num("1+2i", NumCheck::RectInt("1", "+2")),
+                    TokenMatcher::Num("1-3/4i", NumCheck::RectRat("1", "-3/4")),
+                    TokenMatcher::Num("1+2.5i", NumCheck::Any),
+                    TokenMatcher::Num("1-1e3i", NumCheck::Any),
+                ]),
+            },
+            TestCase {
+                name: "pure_imaginary_and_polar",
+                input: "+i -i +2i -3/4i 1@2 -3/4@5.0 +inf.0i 1+inf.0i",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Num("+i", NumCheck::RectInt("0", "1")),
+                    TokenMatcher::Num("-i", NumCheck::RectInt("0", "-1")),
+                    TokenMatcher::Num("+2i", NumCheck::RectInt("0", "+2")),
+                    TokenMatcher::Num("-3/4i", NumCheck::RectRat("0", "-3/4")),
+                    TokenMatcher::Num("1@2", NumCheck::PolarInt("1", "2")),
+                    TokenMatcher::Num("-3/4@5.0", NumCheck::PolarRatDec("-3/4", "5.0")),
+                    TokenMatcher::Num(
+                        "+inf.0i",
+                        NumCheck::RectInfImag("0", InfinityNan::PositiveInfinity),
+                    ),
+                    TokenMatcher::Num(
+                        "1+inf.0i",
+                        NumCheck::RectInfImag("1", InfinityNan::PositiveInfinity),
+                    ),
+                ]),
+            },
+            TestCase {
+                name: "prefixed_decimal",
+                input: "#d42 #e3.0 #i-5/6 #d#e1 #e#d2",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Num("#d42", NumCheck::Int("42")),
+                    TokenMatcher::Num("#e3.0", NumCheck::Exact(Box::new(NumCheck::Dec("3.0")))),
+                    TokenMatcher::Num("#i-5/6", NumCheck::Inexact(Box::new(NumCheck::Rat("-5/6")))),
+                    TokenMatcher::Num("#d#e1", NumCheck::Exact(Box::new(NumCheck::Int("1")))),
+                    TokenMatcher::Num("#e#d2", NumCheck::Exact(Box::new(NumCheck::Int("2")))),
+                ]),
+            },
+            TestCase {
+                name: "prefixed_complex",
+                input: "#d1+2i #e1-3/4i #i+2i #e1-1e3i #d+inf.0i #e1+inf.0i",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Num("#d1+2i", NumCheck::RectInt("1", "+2")),
+                    TokenMatcher::Num(
+                        "#e1-3/4i",
+                        NumCheck::Exact(Box::new(NumCheck::RectRat("1", "-3/4"))),
+                    ),
+                    TokenMatcher::Num("#i+2i", NumCheck::Inexact(Box::new(NumCheck::Any))),
+                    TokenMatcher::Num("#e1-1e3i", NumCheck::Exact(Box::new(NumCheck::Any))),
+                    TokenMatcher::Num(
+                        "#d+inf.0i",
+                        NumCheck::RectInfImag("0", InfinityNan::PositiveInfinity),
+                    ),
+                    TokenMatcher::Num(
+                        "#e1+inf.0i",
+                        NumCheck::Exact(Box::new(NumCheck::RectInfImag(
+                            "1",
+                            InfinityNan::PositiveInfinity,
+                        ))),
+                    ),
+                ]),
+            },
+            TestCase {
+                name: "prefixed_polar",
+                input: "#e1@2 #d-3/4@5.0 #b+inf.0@1 -3/4@5.0",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Num(
+                        "#e1@2",
+                        NumCheck::Exact(Box::new(NumCheck::PolarInt("1", "2"))),
+                    ),
+                    TokenMatcher::Num("#d-3/4@5.0", NumCheck::PolarRatDec("-3/4", "5.0")),
+                    TokenMatcher::Num(
+                        "#b+inf.0@1",
+                        NumCheck::Radix(NumberRadix::Binary, Box::new(NumCheck::Any)),
+                    ), // Simplified check
+                    TokenMatcher::Num("-3/4@5.0", NumCheck::PolarRatDec("-3/4", "5.0")),
+                ]),
+            },
+            TestCase {
+                name: "prefixed_errors_1",
+                input: "#d#d1",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "prefixed_errors_2",
+                input: "#e#i1",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "prefixed_errors_3",
+                input: "#d42foo",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "prefixed_errors_4",
+                input: "#d",
+                expected: Expected::Error(ErrorMatcher::Incomplete),
+            },
+            TestCase {
+                name: "infnan_plain",
+                input: "+inf.0 -inf.0 +nan.0 -nan.0",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Num("+inf.0", NumCheck::Inf(InfinityNan::PositiveInfinity)),
+                    TokenMatcher::Num("-inf.0", NumCheck::Inf(InfinityNan::NegativeInfinity)),
+                    TokenMatcher::Num("+nan.0", NumCheck::Inf(InfinityNan::PositiveNaN)),
+                    TokenMatcher::Num("-nan.0", NumCheck::Inf(InfinityNan::NegativeNaN)),
+                ]),
+            },
+            TestCase {
+                name: "infnan_prefixed",
+                input: "#e+inf.0 #i-nan.0 #b+inf.0 #x-nan.0 #b#e+inf.0 #i#x-nan.0",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Num(
+                        "#e+inf.0",
+                        NumCheck::Exact(Box::new(NumCheck::Inf(InfinityNan::PositiveInfinity))),
+                    ),
+                    TokenMatcher::Num(
+                        "#i-nan.0",
+                        NumCheck::Inexact(Box::new(NumCheck::Inf(InfinityNan::NegativeNaN))),
+                    ),
+                    TokenMatcher::Num(
+                        "#b+inf.0",
+                        NumCheck::Radix(
+                            NumberRadix::Binary,
+                            Box::new(NumCheck::Inf(InfinityNan::PositiveInfinity)),
+                        ),
+                    ),
+                    TokenMatcher::Num(
+                        "#x-nan.0",
+                        NumCheck::Radix(
+                            NumberRadix::Hexadecimal,
+                            Box::new(NumCheck::Inf(InfinityNan::NegativeNaN)),
+                        ),
+                    ),
+                    TokenMatcher::Num(
+                        "#b#e+inf.0",
+                        NumCheck::Exact(Box::new(NumCheck::Radix(
+                            NumberRadix::Binary,
+                            Box::new(NumCheck::Inf(InfinityNan::PositiveInfinity)),
+                        ))),
+                    ),
+                    TokenMatcher::Num(
+                        "#i#x-nan.0",
+                        NumCheck::Inexact(Box::new(NumCheck::Radix(
+                            NumberRadix::Hexadecimal,
+                            Box::new(NumCheck::Inf(InfinityNan::NegativeNaN)),
+                        ))),
+                    ),
+                ]),
+            },
+            TestCase {
+                name: "nondecimal_numbers",
+                input: "#b1010 #o77 #x1f #b101/11 #xA/F #b#e1 #i#o7",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Num(
+                        "#b1010",
+                        NumCheck::Radix(NumberRadix::Binary, Box::new(NumCheck::Int("1010"))),
+                    ),
+                    TokenMatcher::Num(
+                        "#o77",
+                        NumCheck::Radix(NumberRadix::Octal, Box::new(NumCheck::Int("77"))),
+                    ),
+                    TokenMatcher::Num(
+                        "#x1f",
+                        NumCheck::Radix(NumberRadix::Hexadecimal, Box::new(NumCheck::Int("1f"))),
+                    ),
+                    TokenMatcher::Num(
+                        "#b101/11",
+                        NumCheck::Radix(NumberRadix::Binary, Box::new(NumCheck::Rat("101/11"))),
+                    ),
+                    TokenMatcher::Num(
+                        "#xA/F",
+                        NumCheck::Radix(NumberRadix::Hexadecimal, Box::new(NumCheck::Rat("A/F"))),
+                    ),
+                    TokenMatcher::Num(
+                        "#b#e1",
+                        NumCheck::Exact(Box::new(NumCheck::Radix(
+                            NumberRadix::Binary,
+                            Box::new(NumCheck::Int("1")),
+                        ))),
+                    ),
+                    TokenMatcher::Num(
+                        "#i#o7",
+                        NumCheck::Inexact(Box::new(NumCheck::Radix(
+                            NumberRadix::Octal,
+                            Box::new(NumCheck::Int("7")),
+                        ))),
+                    ),
+                ]),
+            },
+            TestCase {
+                name: "nondecimal_errors_1",
+                input: "#b102",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "nondecimal_errors_2",
+                input: "#o7/",
+                expected: Expected::Error(ErrorMatcher::Incomplete),
+            },
+            TestCase {
+                name: "nondecimal_errors_3",
+                input: "#xA/G",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "nondecimal_errors_4",
+                input: "#b#b1",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "nondecimal_errors_5",
+                input: "#i#e#b1",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "nondecimal_errors_6",
+                input: "#b1010foo",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "nondecimal_errors_7",
+                input: "#b101e10",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "nondecimal_errors_8",
+                input: "#x1.2",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "nondecimal_complex",
+                input: "#b1+10i #x1-2i #b+i #o-i #b1@10 #x1+inf.0i #b+inf.0i",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Num(
+                        "#b1+10i",
+                        NumCheck::Radix(
+                            NumberRadix::Binary,
+                            Box::new(NumCheck::RectInt("1", "+10")),
+                        ),
+                    ),
+                    TokenMatcher::Num(
+                        "#x1-2i",
+                        NumCheck::Radix(
+                            NumberRadix::Hexadecimal,
+                            Box::new(NumCheck::RectInt("1", "-2")),
+                        ),
+                    ),
+                    TokenMatcher::Num(
+                        "#b+i",
+                        NumCheck::Radix(NumberRadix::Binary, Box::new(NumCheck::RectInt("0", "1"))),
+                    ),
+                    TokenMatcher::Num(
+                        "#o-i",
+                        NumCheck::Radix(NumberRadix::Octal, Box::new(NumCheck::RectInt("0", "-1"))),
+                    ),
+                    TokenMatcher::Num(
+                        "#b1@10",
+                        NumCheck::Radix(
+                            NumberRadix::Binary,
+                            Box::new(NumCheck::PolarInt("1", "10")),
+                        ),
+                    ),
+                    TokenMatcher::Num(
+                        "#x1+inf.0i",
+                        NumCheck::Radix(
+                            NumberRadix::Hexadecimal,
+                            Box::new(NumCheck::RectInfImag("1", InfinityNan::PositiveInfinity)),
+                        ),
+                    ),
+                    TokenMatcher::Num(
+                        "#b+inf.0i",
+                        NumCheck::Radix(
+                            NumberRadix::Binary,
+                            Box::new(NumCheck::RectInfImag("0", InfinityNan::PositiveInfinity)),
+                        ),
+                    ),
+                ]),
+            },
+            TestCase {
+                name: "infnan_errors_1",
+                input: "+inf.0foo",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "infnan_errors_2",
+                input: "#e+inf.0bar",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "ambiguous_complex_1",
+                input: "1+2",
+                expected: Expected::Error(ErrorMatcher::Incomplete),
+            },
+            TestCase {
+                name: "ambiguous_complex_2",
+                input: "1+2)",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "ambiguous_complex_3",
+                input: "#e1@foo",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "ambiguous_complex_4",
+                input: "#b1@10x",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "ambiguous_complex_5",
+                input: "+inf.0x",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "ambiguous_complex_6",
+                input: "+inf.0i0",
+                expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            },
+            TestCase {
+                name: "strings_simple",
+                input: "  \"hi\"  \"a\\n\\t\\r\\b\\a\\\\\\\"\"  \"\\x41;\"",
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::Str("hi"),
+                    TokenMatcher::Str("a\n\t\r\u{8}\u{7}\\\""),
+                    TokenMatcher::Str("A"),
+                ]),
+            },
+            TestCase {
+                name: "strings_splice",
+                input: "\"foo\\\n   bar\"",
+                expected: Expected::Tokens(vec![TokenMatcher::Str("foobar")]),
+            },
+            TestCase {
+                name: "strings_incomplete",
+                input: "\"unterminated",
+                expected: Expected::Error(ErrorMatcher::Incomplete),
+            },
+            TestCase {
+                name: "strings_invalid_hex",
+                input: "\"\\xZZ;\"",
+                expected: Expected::Error(ErrorMatcher::Lex("<string>")),
+            },
+            TestCase {
+                name: "datum_comment",
+                input: "#; (foo)",
+                expected: Expected::Error(ErrorMatcher::Unimplemented),
+            },
         ];
 
-        for (i, (text, kind)) in expect.iter().enumerate() {
-            assert_eq!(
-                match &toks[i].value {
-                    Token::Number(n) => n.text.as_str(),
-                    _ => unreachable!(),
-                },
-                *text
-            );
-            if let NumberLiteralKind {
-                radix: NumberRadix::Decimal,
-                exactness: NumberExactness::Unspecified,
-                value: NumberValue::Real(RealRepr::Infnan(k)),
-            } = kinds[i]
-            {
-                assert_eq!(k, kind);
-            } else {
-                panic!(
-                    "unexpected infnan classification for {text}: {:#?}",
-                    kinds[i]
-                );
-            }
+        for case in cases {
+            case.run();
         }
-
-        // Prefixed `<infnan>` with exactness and non-decimal radices.
-        let toks2 = lex("#e+inf.0 #i-nan.0 #b+inf.0 #x-nan.0 #b#e+inf.0 #i#x-nan.0").unwrap();
-        assert_eq!(toks2.len(), 6);
-
-        // #e+inf.0 → exact decimal +inf.0.
-        match &toks2[0].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#e+inf.0");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Exact,
-                    value: NumberValue::Real(RealRepr::Infnan(k)),
-                } = &n.kind
-                {
-                    assert_eq!(*k, PositiveInfinity);
-                } else {
-                    panic!("unexpected classification for #e+inf.0: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #i-nan.0 → inexact decimal -nan.0.
-        match &toks2[1].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#i-nan.0");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Inexact,
-                    value: NumberValue::Real(RealRepr::Infnan(k)),
-                } = &n.kind
-                {
-                    assert_eq!(*k, NegativeNaN);
-                } else {
-                    panic!("unexpected classification for #i-nan.0: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #b+inf.0 → binary +inf.0, unspecified exactness.
-        match &toks2[2].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#b+inf.0");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Binary,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Real(RealRepr::Infnan(k)),
-                } = &n.kind
-                {
-                    assert_eq!(*k, PositiveInfinity);
-                } else {
-                    panic!("unexpected classification for #b+inf.0: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #x-nan.0 → hexadecimal -nan.0, unspecified exactness.
-        match &toks2[3].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#x-nan.0");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Hexadecimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Real(RealRepr::Infnan(k)),
-                } = &n.kind
-                {
-                    assert_eq!(*k, NegativeNaN);
-                } else {
-                    panic!("unexpected classification for #x-nan.0: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #b#e+inf.0 → exact binary +inf.0.
-        match &toks2[4].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#b#e+inf.0");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Binary,
-                    exactness: NumberExactness::Exact,
-                    value: NumberValue::Real(RealRepr::Infnan(k)),
-                } = &n.kind
-                {
-                    assert_eq!(*k, PositiveInfinity);
-                } else {
-                    panic!("unexpected classification for #b#e+inf.0: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #i#x-nan.0 → inexact hexadecimal -nan.0.
-        match &toks2[5].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#i#x-nan.0");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Hexadecimal,
-                    exactness: NumberExactness::Inexact,
-                    value: NumberValue::Real(RealRepr::Infnan(k)),
-                } = &n.kind
-                {
-                    assert_eq!(*k, NegativeNaN);
-                } else {
-                    panic!("unexpected classification for #i#x-nan.0: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn lex_parses_nondecimal_number_tokens() {
-        // `<num 2>`, `<num 8>`, `<num 16>` integers and rationals with
-        // optional `<exactness>` prefixes.
-        let toks = lex("#b1010 #o77 #x1f #b101/11 #xA/F #b#e1 #i#o7").unwrap();
-        assert_eq!(toks.len(), 7);
-
-        // #b1010 → binary integer 1010.
-        match &toks[0].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#b1010");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Binary,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Integer { spelling })),
-                } = &n.kind
-                {
-                    assert_eq!(spelling, "1010");
-                } else {
-                    panic!("unexpected classification for #b1010: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #o77 → octal integer 77.
-        match &toks[1].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#o77");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Octal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Integer { spelling })),
-                } = &n.kind
-                {
-                    assert_eq!(spelling, "77");
-                } else {
-                    panic!("unexpected classification for #o77: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #x1f → hexadecimal integer 1f.
-        match &toks[2].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#x1f");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Hexadecimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Integer { spelling })),
-                } = &n.kind
-                {
-                    assert_eq!(spelling, "1f");
-                } else {
-                    panic!("unexpected classification for #x1f: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #b101/11 → binary rational 101/11.
-        match &toks[3].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#b101/11");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Binary,
-                    exactness: NumberExactness::Unspecified,
-                    value:
-                        NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Rational { spelling })),
-                } = &n.kind
-                {
-                    assert_eq!(spelling, "101/11");
-                } else {
-                    panic!("unexpected classification for #b101/11: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #xA/F → hexadecimal rational A/F.
-        match &toks[4].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#xA/F");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Hexadecimal,
-                    exactness: NumberExactness::Unspecified,
-                    value:
-                        NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Rational { spelling })),
-                } = &n.kind
-                {
-                    assert_eq!(spelling, "A/F");
-                } else {
-                    panic!("unexpected classification for #xA/F: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #b#e1 → exact binary integer.
-        match &toks[5].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#b#e1");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Binary,
-                    exactness: NumberExactness::Exact,
-                    value: NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Integer { spelling })),
-                } = &n.kind
-                {
-                    assert_eq!(spelling, "1");
-                } else {
-                    panic!("unexpected classification for #b#e1: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #i#o7 → inexact octal integer.
-        match &toks[6].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#i#o7");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Octal,
-                    exactness: NumberExactness::Inexact,
-                    value: NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Integer { spelling })),
-                } = &n.kind
-                {
-                    assert_eq!(spelling, "7");
-                } else {
-                    panic!("unexpected classification for #i#o7: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn lex_nondecimal_number_errors_and_complex_placeholders() {
-        // Invalid digit for radix: #b102.
-        let err = lex("#b102").unwrap_err();
-        match err {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        // Incomplete rational: #o7/.
-        let err2 = lex("#o7/").unwrap_err();
-        assert!(matches!(err2, ParseError::Incomplete));
-
-        // Malformed rational denominator: #xA/G.
-        let err3 = lex("#xA/G").unwrap_err();
-        match err3 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        // Duplicate radix prefix in non-decimal numbers: #b#b1.
-        let err4 = lex("#b#b1").unwrap_err();
-        match err4 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        // Duplicate exactness prefix: #i#e#b1.
-        let err5 = lex("#i#e#b1").unwrap_err();
-        match err5 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        // Non-decimal numbers must also be followed by a `<delimiter>`.
-        let err6 = lex("#b1010foo").unwrap_err();
-        match err6 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        // Exponent markers and fractional points are not permitted in
-        // non-decimal reals.
-        let err7 = lex("#b101e10").unwrap_err();
-        match err7 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        let err8 = lex("#x1.2").unwrap_err();
-        match err8 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        // Non-decimal complex forms are now supported.
-        let toks = lex("#b1+10i #x1-2i #b+i #o-i #b1@10 #x1+inf.0i #b+inf.0i").unwrap();
-        assert_eq!(toks.len(), 7);
-
-        // #b1+10i → rectangular complex in binary.
-        match &toks[0].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#b1+10i");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Binary,
-                    value: NumberValue::Rectangular { real, imag },
-                    ..
-                } = &n.kind
-                {
-                    match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "1");
-                        }
-                        other => panic!("unexpected real part for #b1+10i: {other:?}"),
-                    }
-                    match imag {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "+10");
-                        }
-                        other => panic!("unexpected imag part for #b1+10i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for #b1+10i: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #x1-2i → rectangular complex in hexadecimal.
-        match &toks[1].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#x1-2i");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Hexadecimal,
-                    value: NumberValue::Rectangular { real, imag },
-                    ..
-                } = &n.kind
-                {
-                    match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "1");
-                        }
-                        other => panic!("unexpected real part for #x1-2i: {other:?}"),
-                    }
-                    match imag {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "-2");
-                        }
-                        other => panic!("unexpected imag part for #x1-2i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for #x1-2i: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #b+i and #o-i → pure imaginary with unit magnitude.
-        for (idx, expected_text, expected_imag, expected_radix) in [
-            (2usize, "#b+i", "1", NumberRadix::Binary),
-            (3usize, "#o-i", "-1", NumberRadix::Octal),
-        ] {
-            match &toks[idx].value {
-                Token::Number(n) => {
-                    assert_eq!(n.text, expected_text);
-                    if let NumberLiteralKind {
-                        radix,
-                        value: NumberValue::Rectangular { real, imag },
-                        ..
-                    } = &n.kind
-                    {
-                        assert_eq!(*radix, expected_radix);
-                        match real {
-                            RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                                assert_eq!(spelling, "0");
-                            }
-                            other => panic!("unexpected real part for {expected_text}: {other:?}"),
-                        }
-                        match imag {
-                            RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                                assert_eq!(spelling, expected_imag);
-                            }
-                            other => panic!("unexpected imag part for {expected_text}: {other:?}"),
-                        }
-                    } else {
-                        panic!(
-                            "unexpected classification for {expected_text}: {:#?}",
-                            n.kind
-                        );
-                    }
-                }
-                other => panic!("expected number token, got: {other:?}"),
-            }
-        }
-
-        // #b1@10 → polar complex in binary.
-        match &toks[4].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#b1@10");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Binary,
-                    value: NumberValue::Polar { magnitude, angle },
-                    ..
-                } = &n.kind
-                {
-                    match magnitude {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "1");
-                        }
-                        other => panic!("unexpected magnitude for #b1@10: {other:?}"),
-                    }
-                    match angle {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "10");
-                        }
-                        other => panic!("unexpected angle for #b1@10: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for #b1@10: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // #x1+inf.0i and #b+inf.0i → non-decimal `<infnan>` complexes.
-        for (idx, expected_text, expected_radix, expect_real) in [
-            (5usize, "#x1+inf.0i", NumberRadix::Hexadecimal, "1"),
-            (6usize, "#b+inf.0i", NumberRadix::Binary, "0"),
-        ] {
-            match &toks[idx].value {
-                Token::Number(n) => {
-                    assert_eq!(n.text, expected_text);
-                    if let NumberLiteralKind {
-                        radix,
-                        value: NumberValue::Rectangular { real, imag },
-                        ..
-                    } = &n.kind
-                    {
-                        use InfinityNan::PositiveInfinity;
-                        assert_eq!(*radix, expected_radix);
-                        match real {
-                            RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                                assert_eq!(spelling, expect_real);
-                            }
-                            other => panic!("unexpected real part for {expected_text}: {other:?}"),
-                        }
-                        match imag {
-                            RealRepr::Infnan(k) => {
-                                assert_eq!(*k, PositiveInfinity);
-                            }
-                            other => panic!("unexpected imag part for {expected_text}: {other:?}"),
-                        }
-                    } else {
-                        panic!(
-                            "unexpected classification for {expected_text}: {:#?}",
-                            n.kind
-                        );
-                    }
-                }
-                other => panic!("expected number token, got: {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn lex_infnan_errors_and_complex_placeholders() {
-        // Non-delimited `<infnan>` should be a lexical error.
-        let err = lex("+inf.0foo").unwrap_err();
-        match err {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        let err2 = lex("#e+inf.0bar").unwrap_err();
-        match err2 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-        // `<infnan>` complex forms are supported for both decimal and
-        // non-decimal radices.
-        let toks = lex("+inf.0i").unwrap();
-        assert_eq!(toks.len(), 1);
-        match &toks[0].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "+inf.0i");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Decimal,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Rectangular { real, imag },
-                } = &n.kind
-                {
-                    use InfinityNan::PositiveInfinity;
-                    match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "0");
-                        }
-                        other => panic!("unexpected real part for +inf.0i: {other:?}"),
-                    }
-                    match imag {
-                        RealRepr::Infnan(k) => {
-                            assert_eq!(*k, PositiveInfinity);
-                        }
-                        other => panic!("unexpected imag part for +inf.0i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for +inf.0i: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-
-        // Non-decimal `<infnan>` complexes are now supported.
-        let toks2 = lex("#b+inf.0i").unwrap();
-        assert_eq!(toks2.len(), 1);
-        match &toks2[0].value {
-            Token::Number(n) => {
-                assert_eq!(n.text, "#b+inf.0i");
-                if let NumberLiteralKind {
-                    radix: NumberRadix::Binary,
-                    exactness: NumberExactness::Unspecified,
-                    value: NumberValue::Rectangular { real, imag },
-                } = &n.kind
-                {
-                    use InfinityNan::PositiveInfinity;
-                    match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
-                            assert_eq!(spelling, "0");
-                        }
-                        other => panic!("unexpected real part for #b+inf.0i: {other:?}"),
-                    }
-                    match imag {
-                        RealRepr::Infnan(k) => {
-                            assert_eq!(*k, PositiveInfinity);
-                        }
-                        other => panic!("unexpected imag part for #b+inf.0i: {other:?}"),
-                    }
-                } else {
-                    panic!("unexpected classification for #b+inf.0i: {:#?}", n.kind);
-                }
-            }
-            other => panic!("expected number token, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn lex_rejects_ambiguous_or_malformed_complex_shapes() {
-        // "1+2" at end of input is treated as incomplete, since more
-        // characters are required to decide whether this is a complex
-        // number (e.g. "1+2i") or a malformed token.
-        let err = lex("1+2").unwrap_err();
-        assert!(matches!(err, ParseError::Incomplete));
-
-        // "1+2)" has a complete `<real 10>` prefix but no valid
-        // complex tail and thus must be rejected as a `<number>`.
-        let err2 = lex("1+2)").unwrap_err();
-        match err2 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        // Invalid polar forms: no real after '@', or a non-delimiter
-        // trailing character after the second real.
-        let err3 = lex("#e1@foo").unwrap_err();
-        match err3 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        let err4 = lex("#b1@10x").unwrap_err();
-        match err4 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        // `<infnan>` followed by a non-delimiter, with or without an
-        // imaginary suffix, must also be rejected.
-        let err5 = lex("+inf.0x").unwrap_err();
-        match err5 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-
-        let err6 = lex("+inf.0i0").unwrap_err();
-        match err6 {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<number>");
-            }
-            other => panic!("expected lexical error in <number>, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn lex_parses_string_tokens_simple_and_escapes() {
-        // Simple string and mnemonic/hex escapes.
-        let toks = lex("  \"hi\"  \"a\\n\\t\\r\\b\\a\\\\\\\"\"  \"\\x41;\"").unwrap();
-        assert_eq!(toks.len(), 3);
-
-        assert!(matches!(toks[0].value, Token::String(ref v) if v == "hi"));
-        assert!(matches!(toks[1].value, Token::String(ref v) if v == "a\n\t\r\u{8}\u{7}\\\""));
-        assert!(matches!(toks[2].value, Token::String(ref v) if v == "A"));
-    }
-
-    #[test]
-    fn lex_parses_string_with_line_splice() {
-        // Backslash-newline splice should disappear from the resulting string.
-        let toks = lex("\"foo\\\n   bar\"").unwrap();
-        assert_eq!(toks.len(), 1);
-        assert!(matches!(toks[0].value, Token::String(ref v) if v == "foobar"));
-    }
-
-    #[test]
-    fn lex_incomplete_string_is_incomplete() {
-        let err = lex("\"unterminated").unwrap_err();
-        assert!(matches!(err, ParseError::Incomplete));
-    }
-
-    #[test]
-    fn lex_invalid_string_hex_escape_is_lex_error() {
-        let err = lex("\"\\xZZ;\"").unwrap_err();
-        match err {
-            ParseError::Lex { nonterminal, .. } => {
-                assert_eq!(nonterminal, "<string>");
-            }
-            other => panic!("expected lexical error in <string>, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn lex_datum_comment_is_unimplemented() {
-        let err = lex("#; (foo)").unwrap_err();
-        assert!(matches!(err, ParseError::Unimplemented));
     }
 }
