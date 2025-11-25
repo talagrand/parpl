@@ -15,6 +15,7 @@ pub struct Syntax<T> {
 }
 
 impl<T> Syntax<T> {
+    #[inline]
     pub fn new(span: Span, value: T) -> Self {
         Self { span, value }
     }
@@ -321,242 +322,28 @@ fn parse_boolean_datum(source: &str) -> Option<bool> {
 /// allowing surrounding whitespace but requiring the entire non-space
 /// input to be exactly one string literal.
 fn parse_string_datum(source: &str) -> Result<Option<Syntax<Datum>>, ParseError> {
-    let leading_ws = source.len() - source.trim_start().len();
     let trimmed = source.trim();
-
-    let overall_span = Span {
-        start: leading_ws,
-        end: leading_ws + trimmed.len(),
-    };
-
-    if trimmed.is_empty() {
+    if !trimmed.starts_with('"') {
         return Ok(None);
     }
 
-    // Must start with opening quote.
-    let mut chars = trimmed.char_indices();
-    let (first_idx, first_ch) = match chars.next() {
-        Some(p) => p,
-        None => return Ok(None),
-    };
-    if first_ch != '"' || first_idx != 0 {
-        return Ok(None);
-    }
+    let tokens = lex::lex(source)?;
 
-    let mut result = String::new();
-    let mut pos = 1; // byte index into `trimmed`, just after opening quote
-    let bytes = trimmed.as_bytes();
-    let len = bytes.len();
-    let mut closing_quote_idx = None;
-
-    while pos < len {
-        let ch = trimmed[pos..].chars().next().unwrap();
-        let ch_len = ch.len_utf8();
-
-        match ch {
-            '"' => {
-                // End of string literal.
-                closing_quote_idx = Some(pos);
-                pos += ch_len;
-                break;
-            }
-            '\\' => {
-                // Start of an escape sequence.
-                pos += ch_len; // move past '\\'
-                if pos >= len {
-                    // Nothing after backslash: incomplete escape.
-                    return Err(ParseError::Incomplete);
-                }
-
-                let next_ch = trimmed[pos..].chars().next().unwrap();
-                let next_len = next_ch.len_utf8();
-
-                // <mnemonic escape> ::= \a | \b | \t | \n | \r
-                match next_ch {
-                    'a' => {
-                        result.push('\u{7}');
-                        pos += next_len;
-                        continue;
-                    }
-                    'b' => {
-                        result.push('\u{8}');
-                        pos += next_len;
-                        continue;
-                    }
-                    't' => {
-                        result.push('\t');
-                        pos += next_len;
-                        continue;
-                    }
-                    'n' => {
-                        result.push('\n');
-                        pos += next_len;
-                        continue;
-                    }
-                    'r' => {
-                        result.push('\r');
-                        pos += next_len;
-                        continue;
-                    }
-                    '"' => {
-                        // `\"` inside string.
-                        result.push('"');
-                        pos += next_len;
-                        continue;
-                    }
-                    '\\' => {
-                        // `\\` inside string.
-                        result.push('\\');
-                        pos += next_len;
-                        continue;
-                    }
-                    'x' => {
-                        // <inline hex escape> ::= \x<hex scalar value>;
-                        pos += next_len; // move past 'x'
-                        let mut hex_start = pos;
-                        while hex_start < len {
-                            let c = trimmed[hex_start..].chars().next().unwrap();
-                            if c.is_ascii_hexdigit() {
-                                hex_start += c.len_utf8();
-                            } else {
-                                break;
-                            }
-                        }
-
-                        if hex_start == pos {
-                            // No hex digits.
-                            return Err(ParseError::lexical(
-                                overall_span,
-                                "<string>",
-                                "expected hex digits after \\x",
-                            ));
-                        }
-
-                        if hex_start >= len {
-                            return Err(ParseError::Incomplete);
-                        }
-
-                        let end_ch = trimmed[hex_start..].chars().next().unwrap();
-                        if end_ch != ';' {
-                            return Err(ParseError::lexical(
-                                overall_span,
-                                "<string>",
-                                "missing terminating ';' in hex escape",
-                            ));
-                        }
-
-                        let hex_digits = &trimmed[pos..hex_start];
-                        let codepoint = u32::from_str_radix(hex_digits, 16).map_err(|_| {
-                            ParseError::lexical(
-                                overall_span,
-                                "<string>",
-                                "invalid hex digits in hex escape",
-                            )
-                        })?;
-                        if let Some(c) = char::from_u32(codepoint) {
-                            result.push(c);
+    if let Some(first) = tokens.first()
+        && let lex::Token::String(s) = &first.value
+    {
+        if tokens.len() == 1 {
+            return Ok(Some(Syntax::new(first.span, Datum::String(s.clone()))));
                         } else {
                             return Err(ParseError::lexical(
-                                overall_span,
-                                "<string>",
-                                "hex escape is not a valid Unicode scalar value",
-                            ));
-                        }
-
-                        pos = hex_start + end_ch.len_utf8();
-                        continue;
-                    }
-                    _ => {
-                        // Attempt the line-ending escape:
-                        // \ <intraline whitespace>* <line ending> <intraline whitespace>*
-                        let mut idx = pos;
-                        while idx < len {
-                            let c = trimmed[idx..].chars().next().unwrap();
-                            if c == ' ' || c == '\t' {
-                                idx += c.len_utf8();
-                            } else {
-                                break;
-                            }
-                        }
-
-                        if idx >= len {
-                            return Err(ParseError::Incomplete);
-                        }
-
-                        let c = trimmed[idx..].chars().next().unwrap();
-                        if c == '\n' || c == '\r' {
-                            // Consume the line ending.
-                            idx += c.len_utf8();
-                            // Handle CRLF specially: we already consumed '\r', check for '\n'.
-                            if c == '\r' && idx < len {
-                                let c2 = trimmed[idx..].chars().next().unwrap();
-                                if c2 == '\n' {
-                                    idx += c2.len_utf8();
-                                }
-                            }
-
-                            // Consume following intraline whitespace.
-                            while idx < len {
-                                let c2 = trimmed[idx..].chars().next().unwrap();
-                                if c2 == ' ' || c2 == '\t' {
-                                    idx += c2.len_utf8();
-                                } else {
-                                    break;
-                                }
-                            }
-
-                            // The whole backslash + line ending sequence contributes
-                            // nothing to the resulting string.
-                            pos = idx;
-                            continue;
-                        }
-
-                        // Unknown escape.
-                        return Err(ParseError::lexical(
-                            overall_span,
-                            "<string>",
-                            "unknown escape sequence in string literal",
-                        ));
-                    }
-                }
-            }
-            '\n' | '\r' => {
-                // Newlines are not allowed as raw string characters.
-                return Err(ParseError::lexical(
-                    overall_span,
-                    "<string>",
-                    "newline character in string literal",
-                ));
-            }
-            _ => {
-                // Any character other than '"' or '\\'.
-                result.push(ch);
-                pos += ch_len;
-            }
-        }
-    }
-
-    let closing = match closing_quote_idx {
-        Some(i) => i,
-        None => return Err(ParseError::Incomplete),
-    };
-
-    // Ensure only whitespace follows the closing quote in the trimmed input.
-    let rest = &trimmed[closing + '"'.len_utf8()..];
-    if !rest.chars().all(char::is_whitespace) {
-        return Err(ParseError::lexical(
-            overall_span,
+                tokens[1].span,
             "<string>",
             "extra characters after end of string literal",
         ));
     }
+    }
 
-    let span = Span {
-        start: leading_ws,
-        end: leading_ws + closing + '"'.len_utf8(),
-    };
-
-    Ok(Some(Syntax::new(span, Datum::String(result))))
+    Ok(None)
 }
 
 /// Expression syntax as defined in the "Expressions" section

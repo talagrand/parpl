@@ -4,7 +4,7 @@ use crate::{
 };
 use winnow::Parser;
 use winnow::ascii::{Caseless, hex_digit1, line_ending, space0, till_line_ending};
-use winnow::combinator::{alt, opt};
+use winnow::combinator::{alt, opt, preceded};
 use winnow::error::{ContextError, ErrMode, Needed, StrContext};
 use winnow::stream::{Location, Stream};
 use winnow::token::{literal, take_while};
@@ -165,6 +165,7 @@ fn winnow_backtrack<O>() -> PResult<O> {
 }
 
 /// Helper to produce an incomplete input error (REPL should prompt for more).
+#[allow(dead_code)]
 fn winnow_incomplete<O>() -> PResult<O> {
     Err(ErrMode::Incomplete(Needed::Unknown))
 }
@@ -178,6 +179,33 @@ fn winnow_incomplete_token<O>() -> PResult<O> {
     let mut ctx = ContextError::new();
     ctx.push(StrContext::Label(INCOMPLETE_TOKEN_LABEL));
     Err(ErrMode::Cut(ctx))
+}
+
+/// Wraps a parser to convert Backtrack errors into Cut errors with a specific label.
+/// If the input is empty (EOF), it returns the special IncompleteToken error instead.
+fn cut_lex_error_token<'i, O, P>(
+    mut parser: P,
+    nonterminal: &'static str,
+) -> impl Parser<WinnowInput<'i>, O, ErrMode<ContextError>>
+where
+    P: Parser<WinnowInput<'i>, O, ErrMode<ContextError>>,
+{
+    move |input: &mut WinnowInput<'i>| {
+        parser.parse_next(input).map_err(|e| match e {
+            ErrMode::Backtrack(_) => {
+                if input.is_empty() {
+                    let mut ctx = ContextError::new();
+                    ctx.push(StrContext::Label(INCOMPLETE_TOKEN_LABEL));
+                    ErrMode::Cut(ctx)
+                } else {
+                    let mut ctx = ContextError::new();
+                    ctx.push(StrContext::Label(nonterminal));
+                    ErrMode::Cut(ctx)
+                }
+            }
+            _ => e,
+        })
+    }
 }
 
 /// Helper to produce a lexical error for a given nonterminal.
@@ -395,13 +423,12 @@ fn lex_intertoken<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
 /// See R7RS-DEVIATION comment in `lex_winnow`.
 #[cold]
 fn lex_directive_body<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
-    let directive: PResult<&str> =
-        alt((literal("fold-case"), literal("no-fold-case"))).parse_next(input);
-
-    match directive {
-        Ok(_) => ensure_delimiter(input, "<directive>"),
-        Err(_) => lex_error("<directive>"),
-    }
+    cut_lex_error_token(
+        alt((literal("fold-case"), literal("no-fold-case"))),
+        "<directive>",
+    )
+    .parse_next(input)?;
+    ensure_delimiter(input, "<directive>")
 }
 
 /// Canonical punctuation parser using `winnow`.
@@ -809,9 +836,7 @@ fn lex_complex_with_radix<'i>(
             // End of input or delimiter after `<real R>`: it's a real number.
             let next_ch = match input.peek_token() {
                 None => return Ok(make_literal(NumberValue::Real(repr1))),
-                Some(ch) if is_delimiter(ch) => {
-                    return Ok(make_literal(NumberValue::Real(repr1)))
-                }
+                Some(ch) if is_delimiter(ch) => return Ok(make_literal(NumberValue::Real(repr1))),
                 Some(ch) => ch,
             };
 
@@ -832,43 +857,29 @@ fn lex_complex_with_radix<'i>(
                     // Polar: `<real R> @ <real R>`.
                     let mut probe = *input;
                     let _ = probe.next_token(); // consume '@'
-                    match lex_real_repr(&mut probe, radix) {
-                        Ok(repr2) => {
-                            ensure_delimiter(&mut probe, "<number>")?;
-                            *input = probe;
-                            return Ok(make_literal(NumberValue::Polar {
-                                magnitude: repr1,
-                                angle: repr2,
-                            }));
-                        }
-                        Err(ErrMode::Backtrack(_)) => return lex_error("<number>"),
-                        Err(e) => return Err(e),
-                    }
+                    let repr2 =
+                        cut_lex_error_token(|i: &mut _| lex_real_repr(i, radix), "<number>")
+                            .parse_next(&mut probe)?;
+
+                    ensure_delimiter(&mut probe, "<number>")?;
+                    *input = probe;
+                    return Ok(make_literal(NumberValue::Polar {
+                        magnitude: repr1,
+                        angle: repr2,
+                    }));
                 }
                 '+' | '-' => {
                     // Rectangular: `<real R> +/- <ureal R> i` or `<real R> +/- i`.
                     let mut probe = *input;
                     match lex_real_repr(&mut probe, radix) {
                         Ok(repr2) => {
-                            match probe.peek_token() {
-                                None => {
-                                    // Parsed the second number but hit EOF before 'i'.
-                                    return winnow_incomplete_token();
-                                }
-                                Some(ch2) if ch2 == 'i' || ch2 == 'I' => {
-                                    let _ = probe.next_token();
-                                    ensure_delimiter(&mut probe, "<number>")?;
-                                    *input = probe;
-                                    return Ok(make_literal(NumberValue::Rectangular {
-                                        real: repr1,
-                                        imag: repr2,
-                                    }));
-                                }
-                                _ => {
-                                    // Parsed a second real but it wasn't followed by 'i'.
-                                    return lex_error("<number>");
-                                }
-                            }
+                            cut_lex_error_token(alt(('i', 'I')), "<number>").parse_next(&mut probe)?;
+                            ensure_delimiter(&mut probe, "<number>")?;
+                            *input = probe;
+                            return Ok(make_literal(NumberValue::Rectangular {
+                                real: repr1,
+                                imag: repr2,
+                            }));
                         }
                         Err(ErrMode::Backtrack(_)) => {
                             // Fall back to `+i` / `-i` (implicit 1).
@@ -1037,80 +1048,76 @@ fn lex_string_body<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
     let mut result = String::new();
 
     loop {
-        let ch = input.peek_or_incomplete()?;
+        // Fast path: consume literal text.
+        // Strings cannot contain raw newlines, so we stop at them too.
+        let chunk: &str = take_while(0.., |c| c != '"' && c != '\\' && c != '\n' && c != '\r')
+            .parse_next(input)?;
+        result.push_str(chunk);
 
-        match ch {
+        match input.peek_or_incomplete()? {
             '"' => break,
             '\\' => {
                 let _ = input.next_token();
-
-                // Try simple single-character escapes using winnow combinator
-                if let Ok(escaped) = alt::<_, _, ContextError, _>((
-                    'a'.value('\u{7}'), // alarm (bell)
-                    'b'.value('\u{8}'), // backspace
-                    't'.value('\t'),    // tab
-                    'n'.value('\n'),    // newline
-                    'r'.value('\r'),    // carriage return
-                    '"'.value('"'),     // double quote
-                    '\\'.value('\\'),   // backslash
-                ))
-                .parse_next(input)
-                {
-                    result.push(escaped);
-                } else if input.eat('x') || input.eat('X') {
-                    // Hex escape: \xNN;
-                    let mut hex_digits = String::new();
-                    input.eat_while(&mut hex_digits, |c| c.is_ascii_hexdigit());
-
-                    if hex_digits.is_empty() {
-                        return lex_error("<string>");
-                    }
-
-                    let end_ch = input.peek_or_incomplete()?;
-
-                    if end_ch != ';' {
-                        return lex_error("<string>");
-                    }
-
-                    let _ = input.next_token();
-
-                    let codepoint = match u32::from_str_radix(&hex_digits, 16) {
-                        Ok(v) => v,
-                        Err(_) => return lex_error("<string>"),
-                    };
-
-                    match char::from_u32(codepoint) {
-                        Some(c) => result.push(c),
-                        None => return lex_error("<string>"),
-                    }
-                } else {
-                    // Possible line splice: backslash, optional spaces/tabs,
-                    // then a line ending and more spaces/tabs.
-                    let _: &str = space0.parse_next(input)?;
-
-                    let nl = input.peek_or_incomplete()?;
-
-                    if nl == '\n' || nl == '\r' {
-                        // Consume line ending (handles both LF and CRLF)
-                        let _: &str = line_ending.parse_next(input)?;
-                        // Skip following spaces/tabs on the next line.
-                        let _: &str = space0.parse_next(input)?;
-                    } else {
-                        return lex_error("<string>");
-                    }
+                if let Some(c) = lex_string_escape(input)? {
+                    result.push(c);
                 }
             }
-            '\n' | '\r' => {
-                return lex_error("<string>");
-            }
-            _ => {
-                let _ = input.next_token();
-                result.push(ch);
-            }
+            '\n' | '\r' => return lex_error("<string>"),
+            _ => unreachable!("take_while stops at quote, backslash, or newline"),
         }
     }
 
     Ok(result)
+}
+
+/// Parse the body of a hex escape sequence: `<hex digits>;`.
+/// The leading `x` has already been consumed.
+fn lex_hex_escape<'i>(input: &mut WinnowInput<'i>) -> PResult<char> {
+    let digits = cut_lex_error_token(hex_digit1, "<string>").parse_next(input)?;
+    let _ = cut_lex_error_token(';', "<string>").parse_next(input)?;
+
+    let codepoint = u32::from_str_radix(digits, 16).map_err(|_| {
+        // This should be rare given hex_digit1, but handles overflow
+        let mut ctx = ContextError::new();
+        ctx.push(StrContext::Label("<string>"));
+        ErrMode::Cut(ctx)
+    })?;
+
+    char::from_u32(codepoint).ok_or_else(|| {
+        // Invalid unicode scalar value
+        let mut ctx = ContextError::new();
+        ctx.push(StrContext::Label("<string>"));
+        ErrMode::Cut(ctx)
+    })
+}
+
+/// Parse a line splice: `\ <ws> <line ending> <ws>`.
+fn lex_line_splice<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
+    let _: &str = space0.parse_next(input)?;
+    let _: &str = line_ending.parse_next(input)?;
+    let _: &str = space0.parse_next(input)?;
+    Ok(())
+}
+
+/// Parse a single string escape sequence (after the backslash).
+fn lex_string_escape<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<char>> {
+    alt((
+        // Hex escape: \x...;
+        preceded(alt(('x', 'X')), lex_hex_escape).map(Some),
+        // Line splice: \ ... \n ... (contributes nothing to string)
+        lex_line_splice.map(|_| None),
+        // Simple escapes
+        alt((
+            'a'.value(Some('\u{7}')),
+            'b'.value(Some('\u{8}')),
+            't'.value(Some('\t')),
+            'n'.value(Some('\n')),
+            'r'.value(Some('\r')),
+            '"'.value(Some('"')),
+            '\\'.value(Some('\\')),
+        )),
+    ))
+    .parse_next(input)
 }
 
 /// Canonical `<string>` parser using `winnow`.
@@ -1323,12 +1330,12 @@ fn lex_ureal<'i>(input: &mut WinnowInput<'i>, radix: NumberRadix) -> PResult<Fin
             text.push('/');
             let _ = probe.next_token();
 
-            let _ = probe.peek_or_incomplete_token()?;
-
-            let denom_digits = probe.eat_while(&mut text, |c| is_digit_for_radix(c, radix)) > 0;
-            if !denom_digits {
-                return lex_error("<number>");
-            }
+            let digits = cut_lex_error_token(
+                take_while(1.., |c| is_digit_for_radix(c, radix)),
+                "<number>",
+            )
+            .parse_next(&mut probe)?;
+            text.push_str(digits);
 
             *input = probe;
             Ok(FiniteRealRepr::Rational { spelling: text })
@@ -2237,6 +2244,11 @@ mod tests {
                 name: "strings_invalid_hex",
                 input: "\"\\xZZ;\"",
                 expected: Expected::Error(ErrorMatcher::Lex("<string>")),
+            },
+            TestCase {
+                name: "strings_incomplete_hex",
+                input: "\"\\x",
+                expected: Expected::Error(ErrorMatcher::IncompleteToken),
             },
             TestCase {
                 name: "datum_comment",
