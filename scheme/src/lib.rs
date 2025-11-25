@@ -43,7 +43,7 @@ pub enum NumberRadix {
 /// ```text
 /// <exactness> ::= <empty> | #i | #e
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NumberExactness {
     Exact,
     Inexact,
@@ -131,6 +131,17 @@ pub struct NumberLiteralKind {
     pub radix: NumberRadix,
     pub exactness: NumberExactness,
     pub value: NumberValue,
+}
+
+impl NumberLiteralKind {
+    /// Convert to a `NumberLiteral` with an empty text field.
+    /// The text is filled in later by the lexer driver.
+    pub fn into_literal(self) -> NumberLiteral {
+        NumberLiteral {
+            text: String::new(),
+            kind: self,
+        }
+    }
 }
 
 /// A number literal, keeping the original spelling from the source.
