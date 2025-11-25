@@ -33,7 +33,7 @@ fn main() {
     // and to represent a larger codebase.
     let mut huge_source = String::new();
     // Reduced size per run, but we will run it many times
-    for _ in 0..5000 {
+    for _ in 0..500 {
         huge_source.push_str(source);
     }
 

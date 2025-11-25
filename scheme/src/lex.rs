@@ -2,6 +2,43 @@ use crate::{
     FiniteRealRepr, InfinityNan, NumberExactness, NumberLiteral, NumberLiteralKind, NumberRadix,
     NumberValue, ParseError, RealRepr, Span, Syntax,
 };
+use winnow::Parser;
+use winnow::error::{ContextError, ErrMode, Needed, StrContext};
+use winnow::stream::{Location, Stream};
+use winnow::token::{any, take, take_while};
+
+// Internal types and helpers to support the `winnow`-based lexer.
+type WinnowInput<'i> = winnow::stream::LocatingSlice<winnow::stream::Str<'i>>;
+type PResult<O> = Result<O, ErrMode<ContextError>>;
+type WinnowInnerError = ContextError;
+
+#[allow(dead_code)]
+fn winnow_err_to_parse_error(err: ErrMode<WinnowInnerError>, fallback_span: Span) -> ParseError {
+    match err {
+        ErrMode::Incomplete(_) => ParseError::Incomplete,
+        ErrMode::Cut(e) | ErrMode::Backtrack(e) => {
+            // Try to recover the most specific nonterminal label from the
+            // `ContextError`. If none is present, fall back to a generic
+            // `<token>` context.
+            let mut nonterminal = "<token>";
+            for ctx in e.context() {
+                if let StrContext::Label(label) = ctx {
+                    nonterminal = label;
+                }
+            }
+
+            // For now, we do not yet plumb precise spans from `LocatingSlice`.
+            // During the full migration we will replace `fallback_span` with
+            // spans derived from `with_span` and the input location.
+            ParseError::lexical(fallback_span, nonterminal, e.to_string())
+        }
+    }
+}
+
+/// Helper to produce a recoverable backtrack error with empty context.
+fn winnow_backtrack<O>() -> PResult<O> {
+    Err(ErrMode::Backtrack(ContextError::new()))
+}
 
 /// Lexical tokens as defined by `<token>` in `spec/syn.md`.
 ///
@@ -74,9 +111,310 @@ pub type SpannedToken = Syntax<Token>;
 /// yield an empty token list. We are gradually adding `<token>`
 /// classifications, currently `<boolean>`, `<character>`, `<string>`, and `<number>`.
 pub fn lex(source: &str) -> Result<Vec<SpannedToken>, ParseError> {
-    let mut tokens = Vec::new();
-    let mut pos = 0usize;
+    lex_winnow(source)
+}
+/// Canonical `<intertoken space>` parser using `winnow`.
+///
+/// This parser consumes zero or more `<atmosphere>` elements:
+/// whitespace, line comments, nested comments, and directives.
+fn lex_intertoken<'i>(input: &mut WinnowInput<'i>, fold_case: &mut bool) -> PResult<()> {
+    loop {
+        let Some(ch) = input.peek_token() else {
+            return Ok(());
+        };
+
+        match ch {
+            // <whitespace>
+            ' ' | '\t' | '\n' | '\r' => {
+                let _ = input.next_token();
+            }
+            // Line comment: `; ... <line ending or EOF>`
+            ';' => {
+                let _ = input.next_token();
+                while let Some(c) = input.next_token() {
+                    if c == '\n' || c == '\r' {
+                        break;
+                    }
+                }
+            }
+            // Possible nested comment or directive starting with '#'.
+            '#' => {
+                // Use a cloned cursor for lookahead so we don't
+                // consume `#` unless we recognize a comment or
+                // directive.
+                let mut probe = input.clone();
+                let _ = probe.next_token(); // consume '#'
+
+                match probe.peek_token() {
+                    // Nested comment `#| ... |#`.
+                    Some('|') => {
+                        // Commit `#|` on the real input.
+                        let _ = input.next_token();
+                        let _ = input.next_token();
+                        lex_nested_comment(input)?;
+                        continue;
+                    }
+                    // Directives starting with `#!`.
+                    Some('!') => {
+                        let _ = probe.next_token(); // consume '!'
+                        let directive_start = probe.clone();
+
+                        // Helper to test whether the stream from
+                        // `start` begins with `word`.
+                        let matches_word = |mut s: WinnowInput<'i>, word: &str| {
+                            for expected in word.chars() {
+                                match s.next_token() {
+                                    Some(c) if c == expected => {}
+                                    _ => return false,
+                                }
+                            }
+                            true
+                        };
+
+                        // Helper to enforce the R7RS rule that a
+                        // <directive> must be followed by a
+                        // <delimiter> or EOF.
+                        let check_directive_delimiter = |mut s: WinnowInput<'i>, word: &str| {
+                            for _ in word.chars() {
+                                let _ = s.next_token();
+                            }
+                            if let Some(ch) = s.peek_token() {
+                                if !is_delimiter(ch) {
+                                    let mut ctx = ContextError::new();
+                                    ctx.push(StrContext::Label("<directive>"));
+                                    return Err(ErrMode::Cut(ctx));
+                                }
+                            }
+                            Ok(())
+                        };
+
+                        if matches_word(directive_start, "fold-case") {
+                            check_directive_delimiter(directive_start, "fold-case")?;
+                            // Consume `#!fold-case` on the real input.
+                            for _ in 0..(2 + "fold-case".chars().count()) {
+                                let _ = input.next_token();
+                            }
+                            *fold_case = true;
+                            continue;
+                        }
+
+                        if matches_word(directive_start, "no-fold-case") {
+                            check_directive_delimiter(directive_start, "no-fold-case")?;
+                            // Consume `#!no-fold-case` on the real input.
+                            for _ in 0..(2 + "no-fold-case".chars().count()) {
+                                let _ = input.next_token();
+                            }
+                            *fold_case = false;
+                            continue;
+                        }
+
+                        // Any other `#!...` sequence is an unknown directive.
+                        let mut ctx = ContextError::new();
+                        ctx.push(StrContext::Label("<directive>"));
+                        return Err(ErrMode::Cut(ctx));
+                    }
+                    _ => {
+                        // Not a nested comment or directive; this
+                        // begins a real token.
+                        return Ok(());
+                    }
+                }
+            }
+            _ => {
+                // Start of a real token.
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// Canonical punctuation parser using `winnow`.
+fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
+    let start = input.current_token_start();
+
+    let ch = match input.peek_token() {
+        Some(c) => c,
+        None => return winnow_backtrack(),
+    };
+
+    let token = match ch {
+        '(' => {
+            let _ = input.next_token();
+            Token::LParen
+        }
+        ')' => {
+            let _ = input.next_token();
+            Token::RParen
+        }
+        '\'' => {
+            let _ = input.next_token();
+            Token::Quote
+        }
+        '`' => {
+            let _ = input.next_token();
+            Token::Backquote
+        }
+        ',' => {
+            let _ = input.next_token();
+            if let Some('@') = input.peek_token() {
+                let _ = input.next_token();
+                Token::CommaAt
+            } else {
+                Token::Comma
+            }
+        }
+        '#' => {
+            let _ = input.next_token();
+            match input.peek_token() {
+                Some('(') => {
+                    let _ = input.next_token();
+                    Token::VectorStart
+                }
+                Some('u') | Some('U') => {
+                    let _ = input.next_token();
+                    if let Some('8') = input.peek_token() {
+                        let _ = input.next_token();
+                        if let Some('(') = input.peek_token() {
+                            let _ = input.next_token();
+                            Token::ByteVectorStart
+                        } else {
+                            return winnow_backtrack();
+                        }
+                    } else {
+                        return winnow_backtrack();
+                    }
+                }
+                _ => {
+                    // Let other `#`-prefixed tokens handle this.
+                    return winnow_backtrack();
+                }
+            }
+        }
+        '.' => {
+            // If `.` is followed by a digit, treat this as the
+            // start of a decimal number and let the numeric
+            // lexers claim it instead of producing a `.` token.
+            let mut probe = input.clone();
+            let _ = probe.next_token(); // consume '.'
+            if let Some(next) = probe.peek_token() {
+                if next.is_ascii_digit() {
+                    return winnow_backtrack();
+                }
+            }
+
+            let _ = input.next_token();
+            Token::Dot
+        }
+        _ => return winnow_backtrack(),
+    };
+
+    let end = input.current_token_start();
+    Ok(Syntax::new(Span { start, end }, token))
+}
+
+/// Lex a single token using a `WinnowInput`, returning `Ok(None)` at EOF.
+/// This driver now uses the canonical `lex_*` parsers directly.
+fn token_with_span<'i>(
+    input: &mut WinnowInput<'i>,
+    source: &'i str,
+    fold_case: &mut bool,
+) -> Result<Option<SpannedToken>, ParseError> {
     let len = source.len();
+
+    // Skip `<intertoken space>` before each token.
+    let start_before = input.current_token_start();
+    let fallback_span_before = Span {
+        start: start_before,
+        end: len,
+    };
+
+    match lex_intertoken(input, fold_case) {
+        Ok(()) => {}
+        Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
+        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span_before)),
+    }
+
+    let start = input.current_token_start();
+    if input.peek_token().is_none() {
+        return Ok(None);
+    }
+
+    let fallback_span = Span { start, end: len };
+
+    // 1. Strings.
+    match lex_string(input) {
+        Ok(spanned) => return Ok(Some(spanned)),
+        Err(ErrMode::Backtrack(_)) => {}
+        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+    }
+
+    // 2. Characters.
+    match lex_character(input) {
+        Ok(spanned) => return Ok(Some(spanned)),
+        Err(ErrMode::Backtrack(_)) => {}
+        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+    }
+
+    // 3. Booleans.
+    match lex_boolean(input) {
+        Ok(spanned) => return Ok(Some(spanned)),
+        Err(ErrMode::Backtrack(_)) => {}
+        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+    }
+
+    // 4. Prefixed numbers (`#b`, `#x`, `#e`, `#i`, ...).
+    match lex_prefixed_number(input) {
+        Ok(mut literal) => {
+            let end = input.current_token_start();
+            let text = &source[start..end];
+            literal.text = text.to_string();
+            let span = Span { start, end };
+            return Ok(Some(Syntax::new(span, Token::Number(literal))));
+        }
+        Err(ErrMode::Backtrack(_)) => {}
+        Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
+        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+    }
+
+    // 5. Punctuation: parens, quotes, `#(`, `#u8(`, `.`, etc.
+    match lex_punctuation(input) {
+        Ok(spanned) => return Ok(Some(spanned)),
+        Err(ErrMode::Backtrack(_)) => {}
+        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+    }
+
+    // 6. Decimal `<number>` tokens (no prefixes), including complex forms.
+    let ch = input.peek_token().unwrap();
+    match ch {
+        '+' | '-' | '0'..='9' | '.' => {
+            match lex_complex_decimal(input) {
+                Ok(mut literal) => {
+                    let end = input.current_token_start();
+                    let text = &source[start..end];
+                    literal.text = text.to_string();
+                    let span = Span { start, end };
+                    Ok(Some(Syntax::new(span, Token::Number(literal))))
+                }
+                Err(ErrMode::Backtrack(_)) => {
+                    // Not a `<number>` starting here; leave to other
+                    // token classes (identifiers, etc.) once implemented.
+                    Err(ParseError::Unimplemented)
+                }
+                Err(ErrMode::Incomplete(_)) => Err(ParseError::Incomplete),
+                Err(e) => Err(winnow_err_to_parse_error(e, fallback_span)),
+            }
+        }
+        _ => {
+            // Other token classes (identifiers, etc.) are not yet implemented.
+            Err(ParseError::Unimplemented)
+        }
+    }
+}
+
+/// `winnow`-driven lexer entry point used by `lex`.
+fn lex_winnow(source: &str) -> Result<Vec<SpannedToken>, ParseError> {
+    let mut tokens = Vec::new();
+    let mut input = WinnowInput::new(source);
 
     // Track `#!fold-case` / `#!no-fold-case` directives.
     //
@@ -85,324 +423,61 @@ pub fn lex(source: &str) -> Result<Vec<SpannedToken>, ParseError> {
     // keep the reader case-sensitive with ASCII-only identifiers.
     // This errs on the side of rejecting some valid programs rather
     // than accepting invalid ones.
-    let mut _fold_case = false;
+    let mut fold_case = false;
 
-    while pos < len {
-        // Skip `<intertoken space>` before each token.
-        loop {
-            if pos >= len {
-                return Ok(tokens);
-            }
-
-            let ch = match source[pos..].chars().next() {
-                Some(c) => c,
-                None => return Ok(tokens),
-            };
-
-            match ch {
-                // <whitespace>
-                ' ' | '\t' | '\n' | '\r' => {
-                    pos += ch.len_utf8();
-                }
-                // Line comment: `; ... <line ending or EOF>`
-                ';' => {
-                    pos += ch.len_utf8();
-                    while pos < len {
-                        let c = match source[pos..].chars().next() {
-                            Some(c) => c,
-                            None => break,
-                        };
-                        pos += c.len_utf8();
-                        if c == '\n' || c == '\r' {
-                            break;
-                        }
-                    }
-                }
-                // Possible nested comment or directive starting with '#'.
-                '#' => {
-                    let hash_pos = pos;
-                    pos += ch.len_utf8();
-                    if pos >= len {
-                        // Just a solitary '#': leave it for tokenization.
-                        pos = hash_pos;
-                        break;
-                    }
-
-                    let next = source[pos..].chars().next().unwrap();
-                    match next {
-                        // `<nested comment> ::= #| <comment text> |#`
-                        '|' => {
-                            pos += next.len_utf8();
-                            pos = skip_nested_comment(source, pos)?;
-                        }
-                        // `<directive> ::= #!fold-case | #!no-fold-case`
-                        '!' => {
-                            let start = hash_pos;
-                            let text = &source[start..];
-                            if text.starts_with("#!fold-case") {
-                                _fold_case = true;
-                                pos = start + "#!fold-case".len();
-                            } else if text.starts_with("#!no-fold-case") {
-                                _fold_case = false;
-                                pos = start + "#!no-fold-case".len();
-                            } else {
-                                let span = Span { start, end: len };
-                                return Err(ParseError::lexical(
-                                    span,
-                                    "<directive>",
-                                    "unknown directive",
-                                ));
-                            }
-                        }
-                        _ => {
-                            // Not a nested comment or directive; this
-                            // begins a real token.
-                            pos = hash_pos;
-                            break;
-                        }
-                    }
-                }
-                _ => {
-                    // Start of a real token.
-                    break;
-                }
-            }
-        }
-
-        if pos >= len {
-            break;
-        }
-
-        // Token recognition.
-        let start = pos;
-
-        if let Some((end, token)) = lex_string(source, start)? {
-            tokens.push(Syntax::new(Span { start, end }, token));
-            pos = end;
-            continue;
-        }
-
-        if let Some((end, token)) = lex_character(source, start)? {
-            tokens.push(Syntax::new(Span { start, end }, token));
-            pos = end;
-            continue;
-        }
-
-        if let Some((end, token)) = lex_boolean(source, start)? {
-            tokens.push(Syntax::new(Span { start, end }, token));
-            pos = end;
-            continue;
-        }
-
-        if let Some((end, literal)) = lex_prefixed_number(source, start)? {
-            if end < len {
-                let after = source[end..].chars().next().unwrap();
-                if !is_delimiter(after) {
-                    let span = Span { start, end };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "number literal not followed by a delimiter",
-                    ));
-                }
-            }
-            tokens.push(Syntax::new(Span { start, end }, Token::Number(literal)));
-            pos = end;
-            continue;
-        }
-
-        let ch = source[pos..].chars().next().unwrap();
-        match ch {
-            '(' => {
-                let end = pos + ch.len_utf8();
-                tokens.push(Syntax::new(Span { start, end }, Token::LParen));
-                pos = end;
-                continue;
-            }
-            ')' => {
-                let end = pos + ch.len_utf8();
-                tokens.push(Syntax::new(Span { start, end }, Token::RParen));
-                pos = end;
-                continue;
-            }
-            '\'' => {
-                let end = pos + ch.len_utf8();
-                tokens.push(Syntax::new(Span { start, end }, Token::Quote));
-                pos = end;
-                continue;
-            }
-            '`' => {
-                let end = pos + ch.len_utf8();
-                tokens.push(Syntax::new(Span { start, end }, Token::Backquote));
-                pos = end;
-                continue;
-            }
-            ',' => {
-                let comma_end = pos + ch.len_utf8();
-                let mut end = comma_end;
-                if comma_end < len {
-                    let next = source[comma_end..].chars().next().unwrap();
-                    if next == '@' {
-                        end = comma_end + next.len_utf8();
-                        tokens.push(Syntax::new(Span { start, end }, Token::CommaAt));
-                        pos = end;
-                        continue;
-                    }
-                }
-                tokens.push(Syntax::new(Span { start, end }, Token::Comma));
-                pos = end;
-                continue;
-            }
-            '#' => {
-                let hash_end = pos + ch.len_utf8();
-                if hash_end < len {
-                    let next = source[hash_end..].chars().next().unwrap();
-                    if next == '(' {
-                        let end = hash_end + next.len_utf8();
-                        tokens.push(Syntax::new(Span { start, end }, Token::VectorStart));
-                        pos = end;
-                        continue;
-                    } else if next == ';' {
-                        // R7RS-DEVIATION: #; is technically a comment and should be skipped by the lexer.
-                        // However, skipping it requires parsing a full datum, which is not possible in the lexer.
-                        // We return it as a token so the parser can handle the skipping.
-                        // For now, we report Unimplemented as requested.
-                        return Err(ParseError::Unimplemented);
-                    } else if next == 'u' || next == 'U' {
-                        // Possible `#u8(` bytevector prefix.
-                        let mut p = hash_end + next.len_utf8();
-                        if p < len {
-                            let c2 = source[p..].chars().next().unwrap();
-                            if c2 == '8' {
-                                p += c2.len_utf8();
-                                if p < len {
-                                    let c3 = source[p..].chars().next().unwrap();
-                                    if c3 == '(' {
-                                        let end = p + c3.len_utf8();
-                                        tokens.push(Syntax::new(
-                                            Span { start, end },
-                                            Token::ByteVectorStart,
-                                        ));
-                                        pos = end;
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                // Other `#`-prefixed tokens (e.g. datum comments) are not
-                // implemented yet at the lexical layer.
-                return Err(ParseError::Unimplemented);
-            }
-            '+' | '-' | '0'..='9' => {
-                // `<number>` token in decimal radix (R = 10), including
-                // both real and complex forms as specified by `<complex 10>`.
-                if let Some((end, literal)) = lex_complex_decimal(source, start)? {
-                    let span = Span { start, end };
-                    tokens.push(Syntax::new(span, Token::Number(literal)));
-                    pos = end;
-                    continue;
-                } else {
-                    // Not a `<number>` starting here; leave to other
-                    // token classes (identifiers, etc.) once implemented.
-                    return Err(ParseError::Unimplemented);
-                }
-            }
-            '.' => {
-                // Either a decimal `<number>` starting with `.`, or the
-                // standalone `.` punctuation token.
-                let look = pos + ch.len_utf8();
-                if look < len {
-                    let next = source[look..].chars().next().unwrap();
-                    if next.is_ascii_digit() {
-                        if let Some((end, literal)) = lex_complex_decimal(source, start)? {
-                            let span = Span { start, end };
-                            tokens.push(Syntax::new(span, Token::Number(literal)));
-                            pos = end;
-                            continue;
-                        } else {
-                            return Err(ParseError::Unimplemented);
-                        }
-                    }
-                }
-                // Treat as `.` token.
-                let end = look;
-                tokens.push(Syntax::new(Span { start, end }, Token::Dot));
-                pos = end;
-                continue;
-            }
-            _ => {
-                // Other token classes (identifiers, etc.) are not yet implemented.
-                return Err(ParseError::Unimplemented);
-            }
+    loop {
+        match token_with_span(&mut input, source, &mut fold_case)? {
+            Some(token) => tokens.push(token),
+            None => break,
         }
     }
 
     Ok(tokens)
 }
 
-/// Skip a `<nested comment>` starting just after the initial `#|`.
+/// Canonical `<nested comment>` parser using `winnow`.
 ///
-/// Grammar reference:
+/// Grammar reference (Formal syntax / Lexical structure):
 ///
 /// ```text
-/// <nested comment> ::= #| <comment text> |#
+/// <comment> ::= ; <all subsequent characters up to a line ending>
+///             | <nested comment>
+///             | #; <intertoken space> <datum>
+///
+/// <nested comment> ::= #| <comment text>
+///                       <comment cont>* |#
+///
+/// <comment cont> ::= <nested comment> <comment text>
 /// ```
 ///
-/// Returns the byte index just after the closing `|#`, or
-/// `ParseError::Incomplete` if the input ends before the matching
-/// closing delimiter.
-fn skip_nested_comment(source: &str, mut pos: usize) -> Result<usize, ParseError> {
-    let len = source.len();
+/// This helper assumes the initial `#|` has already been consumed and
+/// stops after the matching closing `|#`, supporting arbitrary nesting.
+fn lex_nested_comment<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
     let mut depth = 1usize;
 
-    while pos < len {
-        let ch = match source[pos..].chars().next() {
+    loop {
+        let ch = match input.next_token() {
             Some(c) => c,
-            None => break,
+            None => return Err(ErrMode::Incomplete(Needed::Unknown)),
         };
 
         if ch == '#' {
-            let hash_pos = pos;
-            pos += ch.len_utf8();
-            if pos < len {
-                let next = source[pos..].chars().next().unwrap();
-                if next == '|' {
-                    // Found a new `#|`.
-                    depth += 1;
-                    pos += next.len_utf8();
-                    continue;
-                }
+            if let Some('|') = input.peek_token() {
+                let _ = input.next_token();
+                depth += 1;
+                continue;
             }
-            // Not actually starting a nested comment; just move on.
-            pos = hash_pos + ch.len_utf8();
-            continue;
         } else if ch == '|' {
-            let bar_pos = pos;
-            pos += ch.len_utf8();
-            if pos < len {
-                let next = source[pos..].chars().next().unwrap();
-                if next == '#' {
-                    // Closing `|#`.
-                    depth -= 1;
-                    pos += next.len_utf8();
-                    if depth == 0 {
-                        return Ok(pos);
-                    }
-                    continue;
+            if let Some('#') = input.peek_token() {
+                let _ = input.next_token();
+                depth -= 1;
+                if depth == 0 {
+                    return Ok(());
                 }
+                continue;
             }
-            // Not actually closing; just move on.
-            pos = bar_pos + ch.len_utf8();
-            continue;
-        } else {
-            pos += ch.len_utf8();
         }
     }
-
-    // Ran out of input before finding a matching `|#`.
-    Err(ParseError::Incomplete)
 }
 
 /// True if `ch` is a `<delimiter>` character.
@@ -417,8 +492,7 @@ fn is_delimiter(ch: char) -> bool {
     matches!(ch, ' ' | '\t' | '\n' | '\r' | '|' | '(' | ')' | '"' | ';')
 }
 
-/// Lex the `<infnan>` body starting at `start`, without any radix or
-/// exactness prefixes.
+/// Canonical `<infnan>` parser using `winnow`.
 ///
 /// Grammar reference (Formal syntax / `<number>`):
 ///
@@ -426,421 +500,376 @@ fn is_delimiter(ch: char) -> bool {
 /// <infnan> ::= +inf.0 | -inf.0 | +nan.0 | -nan.0
 /// ```
 ///
-/// Alphabetic characters in `<infnan>` are case-insensitive.
-fn lex_infnan_body(source: &str, start: usize) -> Option<(usize, InfinityNan)> {
-    let s = &source[start..];
-    if s.len() < 6 {
-        return None;
-    }
-
+/// Alphabetic characters are treated case-insensitively. Any mismatch or
+/// incomplete spelling results in a recoverable backtrack so other number
+/// forms can claim the input.
+fn lex_infnan<'i>(input: &mut WinnowInput<'i>) -> PResult<InfinityNan> {
     // All `<infnan>` spellings are 6 ASCII bytes: sign + 3 letters + ".0".
-    let candidate = &s[..6];
+    // We simply grab 6 characters and compare against the four allowed
+    // spellings, case-insensitively, just like the old helper.
+    let candidate_res: PResult<&str> = take(6usize).parse_next(input);
+    let candidate = match candidate_res {
+        Ok(s) => s,
+        Err(_) => return winnow_backtrack(),
+    };
+
     let lower = candidate.to_ascii_lowercase();
     let kind = match lower.as_str() {
         "+inf.0" => InfinityNan::PositiveInfinity,
         "-inf.0" => InfinityNan::NegativeInfinity,
         "+nan.0" => InfinityNan::PositiveNaN,
         "-nan.0" => InfinityNan::NegativeNaN,
-        _ => return None,
+        _ => return winnow_backtrack(),
     };
 
-    Some((start + 6, kind))
+    Ok(kind)
 }
 
-/// Lex `<sign> <ureal R>` for arbitrary radices `R`, where
-/// `<ureal R>` is finite (integer, rational, or, for `R = 10`,
-/// a decimal real with optional exponent). This helper delegates
-/// to the decimal or non-decimal lexers depending on `radix` and
-/// returns the `FiniteRealRepr` together with the end offset.
-fn lex_sign_ureal_for_radix(
-    source: &str,
-    start: usize,
+/// Parse `<sign> <ureal R>` for a given radix.
+///
+/// Grammar reference (Formal syntax / `<number>`):
+///
+/// ```text
+/// <real R> ::= <sign> <ureal R>
+///            | <infnan>
+///
+/// <sign> ::= <empty> | + | -
+/// ```
+///
+/// For `R = 10`, this delegates to `lex_decimal_number` and projects
+/// out a `FiniteRealRepr`; for other radices it parses an optional
+/// `<sign>` followed by `lex_nondecimal_ureal`.
+fn lex_sign_ureal_for_radix<'i>(
+    input: &mut WinnowInput<'i>,
     radix: NumberRadix,
-) -> Result<Option<(usize, FiniteRealRepr)>, ParseError> {
+) -> PResult<FiniteRealRepr> {
     match radix {
         NumberRadix::Decimal => {
-            if let Some((end, lit)) = lex_decimal_number(source, start)? {
-                match lit.kind.value {
-                    NumberValue::Real(RealRepr::Finite(finite)) => Ok(Some((end, finite))),
-                    _ => unreachable!("decimal lexer should only produce finite real values"),
+            // Delegate to the canonical decimal lexer and project out
+            // the finite real representation.
+            let mut probe = *input;
+            let literal = match lex_decimal_number(&mut probe) {
+                Ok(lit) => lit,
+                Err(e) => return Err(e),
+            };
+
+            let kind = literal.kind;
+            match kind.value {
+                NumberValue::Real(RealRepr::Finite(finite)) => {
+                    *input = probe;
+                    Ok(finite)
                 }
-            } else {
-                Ok(None)
+                _ => unreachable!("decimal lexer should only produce finite real values"),
             }
         }
-        _ => lex_nondecimal_sign_ureal(source, start, radix),
-    }
-}
+        _ => {
+            // Optional sign followed by `<ureal R>`.
+            let mut probe = *input;
+            let mut sign: Option<char> = None;
+            if let Some(ch) = probe.peek_token() {
+                if ch == '+' || ch == '-' {
+                    sign = Some(ch);
+                    let _ = probe.next_token();
+                }
+            }
 
-/// Lex a `<complex R>` or `<real R>` starting at `body_start`, with
-/// the overall literal beginning at `literal_start` (to include any
-/// prefixes in spans and `NumberLiteral.text`). This implements the
-/// generic R7RS complex grammar:
-///
-/// ```text
-/// <number>   ::= <num 2> | <num 8>
-///              | <num 10> | <num 16>
-/// <num R>    ::= <prefix R> <complex R>
-/// <complex R> ::= <real R>
-///               | <real R> @ <real R>
-///               | <real R> + <ureal R> i
-///               | <real R> - <ureal R> i
-///               | <real R> + i
-///               | <real R> - i
-///               | <real R> <infnan> i
-///               | + <ureal R> i
-///               | - <ureal R> i
-///               | <infnan> i
-///               | + i
-///               | - i
-/// <real R>   ::= <sign> <ureal R>
-///               | <infnan>
-/// ```
-fn ensure_delimiter(
-    source: &str,
-    pos: usize,
-    start: usize,
-    context: &'static str,
-) -> Result<(), ParseError> {
-    if pos < source.len() {
-        let after = source[pos..].chars().next().unwrap();
-        if !is_delimiter(after) {
-            let span = Span { start, end: pos };
-            return Err(ParseError::lexical(
-                span,
-                context,
-                "literal not followed by a delimiter",
-            ));
+            match lex_nondecimal_ureal(&mut probe, radix) {
+                Ok(mut finite) => {
+                    if let Some(s) = sign {
+                        match &mut finite {
+                            FiniteRealRepr::Integer { spelling }
+                            | FiniteRealRepr::Rational { spelling } => {
+                                spelling.insert(0, s);
+                            }
+                            FiniteRealRepr::Decimal { .. } => {
+                                // Non-decimal `<ureal R>` never produces decimals.
+                            }
+                        }
+                    }
+                    *input = probe;
+                    Ok(finite)
+                }
+                Err(e) => Err(e),
+            }
         }
     }
-    Ok(())
 }
 
-fn lex_real_repr(
-    source: &str,
-    start: usize,
-    radix: NumberRadix,
-) -> Result<Option<(usize, RealRepr)>, ParseError> {
-    if let Some((end, infnan)) = lex_infnan_body(source, start) {
-        return Ok(Some((end, RealRepr::Infnan(infnan))));
+/// Canonical `<real R>` parser using `winnow`.
+///
+/// Grammar reference (Formal syntax / `<number>`):
+///
+/// ```text
+/// <real R> ::= <sign> <ureal R>
+///            | <infnan>
+/// ```
+///
+/// This first tries `<infnan>` via `lex_infnan` and, on backtrack,
+/// falls back to `<sign> <ureal R>` via `lex_sign_ureal_for_radix`.
+fn lex_real_repr<'i>(input: &mut WinnowInput<'i>, radix: NumberRadix) -> PResult<RealRepr> {
+    let start_state = *input;
+
+    // Try `<infnan>` first.
+    match lex_infnan(input) {
+        Ok(infnan) => return Ok(RealRepr::Infnan(infnan)),
+        Err(ErrMode::Backtrack(_)) => {
+            // Not an `<infnan>`; reset and try `<sign> <ureal R>`.
+            *input = start_state;
+        }
+        Err(e) => return Err(e),
     }
 
-    if let Some((end, finite)) = lex_sign_ureal_for_radix(source, start, radix)? {
-        return Ok(Some((end, RealRepr::Finite(finite))));
-    }
-
-    Ok(None)
+    // `<sign> <ureal R>`.
+    lex_sign_ureal_for_radix(input, radix).map(RealRepr::Finite)
 }
 
-/// Lex a `<complex R>` or `<real R>` starting at `body_start`, with
-/// the overall literal beginning at `literal_start` (to include any
-/// prefixes in spans and `NumberLiteral.text`). This implements the
-/// generic R7RS complex grammar:
+/// Canonical `<complex R>` / `<real R>` parser using `winnow`.
+///
+/// This implements the R7RS number grammar for a fixed radix `R`,
+/// including real, rectangular, polar, and pure-imaginary cases:
 ///
 /// ```text
 /// <number>   ::= <num 2> | <num 8>
 ///              | <num 10> | <num 16>
 /// <num R>    ::= <prefix R> <complex R>
+///
 /// <complex R> ::= <real R>
-///               | <real R> @ <real R>
-///               | <real R> + <ureal R> i
-///               | <real R> - <ureal R> i
-///               | <real R> + i
-///               | <real R> - i
-///               | <real R> <infnan> i
-///               | + <ureal R> i
-///               | - <ureal R> i
-///               | <infnan> i
-///               | + i
-///               | - i
-/// <real R>   ::= <sign> <ureal R>
-///               | <infnan>
+///                | <real R> @ <real R>
+///                | <real R> + <ureal R> i
+///                | <real R> - <ureal R> i
+///                | <real R> + i
+///                | <real R> - i
+///                | <real R> <infnan> i
+///                | + <ureal R> i
+///                | - <ureal R> i
+///                | <infnan> i
+///                | + i
+///                | - i
+///
+/// <real R> ::= <sign> <ureal R>
+///            | <infnan>
 /// ```
-fn lex_complex_with_radix(
-    source: &str,
-    literal_start: usize,
-    body_start: usize,
+///
+/// The `<ureal R>` and `<decimal 10>` productions are implemented
+/// by `lex_nondecimal_ureal` and `lex_decimal_number` respectively.
+fn lex_complex_with_radix<'i>(
+    input: &mut WinnowInput<'i>,
     radix: NumberRadix,
     exactness: NumberExactness,
-) -> Result<Option<(usize, NumberLiteral)>, ParseError> {
-    let len = source.len();
-    if body_start >= len {
-        return Ok(None);
-    }
+) -> PResult<NumberLiteral> {
+    let start_state = *input;
 
-    // 1. Try to parse the first component as a real number.
-    // This covers `<real R>`, the real part of `<real R> @ <real R>`,
-    // and the real part of `<real R> +/- ... i`.
-    // It also covers the imaginary part of `+ <ureal R> i` if we consider
-    // the leading `+` as part of the number.
-    let first_attempt = lex_real_repr(source, body_start, radix)?;
-
-    if let Some((end1, repr1)) = first_attempt {
-        // We successfully parsed something that looks like a real number.
-        // Now check what follows.
-
-        if end1 >= len {
-            // End of input. It's a real number.
-            let text = &source[literal_start..end1];
-            let kind = NumberLiteralKind {
-                radix,
-                exactness,
-                value: NumberValue::Real(repr1),
-            };
-            return Ok(Some((
-                end1,
-                NumberLiteral {
-                    text: text.to_string(),
-                    kind,
-                },
-            )));
-        }
-
-        let next_ch = source[end1..].chars().next().unwrap();
-
-        if is_delimiter(next_ch) {
-            // It's a real number.
-            let text = &source[literal_start..end1];
-            let kind = NumberLiteralKind {
-                radix,
-                exactness,
-                value: NumberValue::Real(repr1),
-            };
-            return Ok(Some((
-                end1,
-                NumberLiteral {
-                    text: text.to_string(),
-                    kind,
-                },
-            )));
-        }
-
-        match next_ch {
-            'i' | 'I' => {
-                // It was actually a pure imaginary number: `<real R> i`
-                // e.g. `+inf.0i`, `+5i` (if `+5` was parsed as real).
-                let i_end = end1 + next_ch.len_utf8();
-                ensure_delimiter(source, i_end, literal_start, "<number>")?;
-
-                let real_zero = RealRepr::Finite(FiniteRealRepr::Integer {
-                    spelling: "0".to_string(),
-                });
-                let kind = NumberLiteralKind {
-                    radix,
-                    exactness,
-                    value: NumberValue::Rectangular {
-                        real: real_zero,
-                        imag: repr1,
-                    },
-                };
-                let text = &source[literal_start..i_end];
-                return Ok(Some((
-                    i_end,
-                    NumberLiteral {
-                        text: text.to_string(),
-                        kind,
-                    },
-                )));
-            }
-            '@' => {
-                // Polar: `<real R> @ <real R>`
-                let start2 = end1 + next_ch.len_utf8();
-                if let Some((end2, repr2)) = lex_real_repr(source, start2, radix)? {
-                    ensure_delimiter(source, end2, literal_start, "<number>")?;
+    // 1. Try to parse the first component as `<real R>`.
+    match lex_real_repr(input, radix) {
+        Ok(repr1) => {
+            match input.peek_token() {
+                None => {
+                    // End of input: it's a real number.
                     let kind = NumberLiteralKind {
                         radix,
                         exactness,
-                        value: NumberValue::Polar {
-                            magnitude: repr1,
-                            angle: repr2,
-                        },
+                        value: NumberValue::Real(repr1),
                     };
-                    let text = &source[literal_start..end2];
-                    return Ok(Some((
-                        end2,
-                        NumberLiteral {
-                            text: text.to_string(),
-                            kind,
-                        },
-                    )));
-                } else {
-                    let span = Span {
-                        start: literal_start,
-                        end: start2,
-                    };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "expected real after '@'",
-                    ));
+                    return Ok(NumberLiteral {
+                        text: String::new(),
+                        kind,
+                    });
                 }
-            }
-            '+' | '-' => {
-                // Rectangular: `<real R> + ... i` or `<real R> - ... i`
-                // The `+` or `-` starts the imaginary part.
+                Some(next_ch) if is_delimiter(next_ch) => {
+                    // Delimiter after `<real R>`: also a real number.
+                    let kind = NumberLiteralKind {
+                        radix,
+                        exactness,
+                        value: NumberValue::Real(repr1),
+                    };
+                    return Ok(NumberLiteral {
+                        text: String::new(),
+                        kind,
+                    });
+                }
+                Some(next_ch) => match next_ch {
+                    'i' | 'I' => {
+                        // Pure imaginary: `<real R> i`.
+                        let mut probe = *input;
+                        let _ = probe.next_token(); // consume 'i' / 'I'
+                        lex_ensure_number_delimiter(&mut probe)?;
 
-                // 1. Try to parse the imaginary part as a real number (including the sign).
-                // This covers `1+2i` (parsing `+2`) and `1+inf.0i` (parsing `+inf.0`).
-                if let Some((end2, repr2)) = lex_real_repr(source, end1, radix)? {
-                    if end2 >= len {
-                        // We parsed the second number but hit EOF. We need an 'i' to complete
-                        // the complex number, so this is incomplete.
-                        return Err(ParseError::Incomplete);
-                    }
-
-                    let ch2 = source[end2..].chars().next().unwrap();
-                    if ch2 == 'i' || ch2 == 'I' {
-                        let i_end = end2 + ch2.len_utf8();
-                        ensure_delimiter(source, i_end, literal_start, "<number>")?;
-
+                        let real_zero = RealRepr::Finite(FiniteRealRepr::Integer {
+                            spelling: "0".to_string(),
+                        });
                         let kind = NumberLiteralKind {
                             radix,
                             exactness,
                             value: NumberValue::Rectangular {
-                                real: repr1,
-                                imag: repr2,
+                                real: real_zero,
+                                imag: repr1,
                             },
                         };
-                        let text = &source[literal_start..i_end];
-                        return Ok(Some((
-                            i_end,
-                            NumberLiteral {
-                                text: text.to_string(),
-                                kind,
-                            },
-                        )));
-                    }
-
-                    // If we parsed a number but it wasn't followed by 'i',
-                    // e.g. `1+2` or `1+inf.0`, this is invalid complex syntax.
-                    let span = Span {
-                        start: literal_start,
-                        end: end2,
-                    };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "missing 'i' in complex number",
-                    ));
-                }
-
-                // 2. If that failed, check for `+i` / `-i` (implicit 1).
-                let sign_len = next_ch.len_utf8();
-                let after_sign = end1 + sign_len;
-
-                if after_sign < len {
-                    let after_sign_ch = source[after_sign..].chars().next().unwrap();
-                    if after_sign_ch == 'i' || after_sign_ch == 'I' {
-                        let i_end = after_sign + after_sign_ch.len_utf8();
-                        ensure_delimiter(source, i_end, literal_start, "<number>")?;
-
-                        let imag_spelling = if next_ch == '-' { "-1" } else { "1" };
-                        let imag = RealRepr::Finite(FiniteRealRepr::Integer {
-                            spelling: imag_spelling.to_string(),
+                        *input = probe;
+                        return Ok(NumberLiteral {
+                            text: String::new(),
+                            kind,
                         });
-
-                        let kind = NumberLiteralKind {
-                            radix,
-                            exactness,
-                            value: NumberValue::Rectangular { real: repr1, imag },
-                        };
-                        let text = &source[literal_start..i_end];
-                        return Ok(Some((
-                            i_end,
-                            NumberLiteral {
-                                text: text.to_string(),
-                                kind,
-                            },
-                        )));
                     }
-                }
+                    '@' => {
+                        // Polar: `<real R> @ <real R>`.
+                        let mut probe = *input;
+                        let _ = probe.next_token(); // consume '@'
+                        match lex_real_repr(&mut probe, radix) {
+                            Ok(repr2) => {
+                                lex_ensure_number_delimiter(&mut probe)?;
+                                let kind = NumberLiteralKind {
+                                    radix,
+                                    exactness,
+                                    value: NumberValue::Polar {
+                                        magnitude: repr1,
+                                        angle: repr2,
+                                    },
+                                };
+                                *input = probe;
+                                return Ok(NumberLiteral {
+                                    text: String::new(),
+                                    kind,
+                                });
+                            }
+                            Err(ErrMode::Backtrack(_)) => return lex_number_error(),
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    '+' | '-' => {
+                        // Rectangular: `<real R> +/- <ureal R> i` or `<real R> +/- i`.
+                        let mut probe = *input;
+                        match lex_real_repr(&mut probe, radix) {
+                            Ok(repr2) => {
+                                match probe.peek_token() {
+                                    None => {
+                                        // Parsed the second number but hit EOF before 'i'.
+                                        return Err(ErrMode::Incomplete(Needed::Unknown));
+                                    }
+                                    Some(ch2) if ch2 == 'i' || ch2 == 'I' => {
+                                        let _ = probe.next_token();
+                                        lex_ensure_number_delimiter(&mut probe)?;
+                                        let kind = NumberLiteralKind {
+                                            radix,
+                                            exactness,
+                                            value: NumberValue::Rectangular {
+                                                real: repr1,
+                                                imag: repr2,
+                                            },
+                                        };
+                                        *input = probe;
+                                        return Ok(NumberLiteral {
+                                            text: String::new(),
+                                            kind,
+                                        });
+                                    }
+                                    _ => {
+                                        // Parsed a second real but it wasn't followed by 'i'.
+                                        return lex_number_error();
+                                    }
+                                }
+                            }
+                            Err(ErrMode::Backtrack(_)) => {
+                                // Fall back to `+i` / `-i` (implicit 1).
+                                let mut probe2 = *input;
+                                let sign_ch = match probe2.peek_token() {
+                                    Some(c) => c,
+                                    None => return winnow_backtrack(),
+                                };
+                                let _ = probe2.next_token(); // consume '+' / '-'
+                                match probe2.peek_token() {
+                                    Some('i') | Some('I') => {
+                                        let _ = probe2.next_token();
+                                        lex_ensure_number_delimiter(&mut probe2)?;
 
-                // If neither worked, it's an error.
-                let span = Span {
-                    start: literal_start,
-                    end: after_sign,
-                };
-                return Err(ParseError::lexical(
-                    span,
-                    "<number>",
-                    "invalid imaginary part",
-                ));
-            }
-            _ => {
-                // Some other character. Error.
-                let span = Span {
-                    start: literal_start,
-                    end: end1,
-                };
-                return Err(ParseError::lexical(
-                    span,
-                    "<number>",
-                    "number literal not followed by a delimiter",
-                ));
+                                        let imag_spelling = if sign_ch == '-' { "-1" } else { "1" };
+                                        let imag = RealRepr::Finite(FiniteRealRepr::Integer {
+                                            spelling: imag_spelling.to_string(),
+                                        });
+                                        let kind = NumberLiteralKind {
+                                            radix,
+                                            exactness,
+                                            value: NumberValue::Rectangular { real: repr1, imag },
+                                        };
+                                        *input = probe2;
+                                        return Ok(NumberLiteral {
+                                            text: String::new(),
+                                            kind,
+                                        });
+                                    }
+                                    _ => return lex_number_error(),
+                                }
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    _ => {
+                        // Some other character after `<real R>`.
+                        return lex_number_error();
+                    }
+                },
             }
         }
-    }
-
-    // If `lex_real_repr` failed, we might still have `+i` or `-i` (unit imaginary)
-    // which `lex_real_repr` doesn't handle (it expects digits or infnan).
-    let ch = source[body_start..].chars().next().unwrap();
-    if ch == '+' || ch == '-' {
-        let sign_len = ch.len_utf8();
-        let after_sign = body_start + sign_len;
-        if after_sign < len {
-            let i_ch = source[after_sign..].chars().next().unwrap();
-            if i_ch == 'i' || i_ch == 'I' {
-                let i_end = after_sign + i_ch.len_utf8();
-                ensure_delimiter(source, i_end, literal_start, "<number>")?;
-
-                let real_zero = RealRepr::Finite(FiniteRealRepr::Integer {
-                    spelling: "0".to_string(),
-                });
-                let imag_spelling = if ch == '-' { "-1" } else { "1" };
-                let imag = RealRepr::Finite(FiniteRealRepr::Integer {
-                    spelling: imag_spelling.to_string(),
-                });
-
-                let kind = NumberLiteralKind {
-                    radix,
-                    exactness,
-                    value: NumberValue::Rectangular {
-                        real: real_zero,
-                        imag,
-                    },
-                };
-                let text = &source[literal_start..i_end];
-                return Ok(Some((
-                    i_end,
-                    NumberLiteral {
-                        text: text.to_string(),
-                        kind,
-                    },
-                )));
-            }
+        Err(ErrMode::Backtrack(_)) => {
+            // No `<real R>` here; reset and try `+i` / `-i` (unit imaginary).
+            *input = start_state;
         }
+        Err(e) => return Err(e),
     }
 
-    Ok(None)
+    // Handle `+i` / `-i` without an explicit real part.
+    let mut probe = *input;
+    let ch = match probe.peek_token() {
+        Some(c) => c,
+        None => return winnow_backtrack(),
+    };
+
+    if ch != '+' && ch != '-' {
+        return winnow_backtrack();
+    }
+
+    let sign_ch = ch;
+    let _ = probe.next_token(); // consume '+' / '-'
+    match probe.peek_token() {
+        Some('i') | Some('I') => {
+            let _ = probe.next_token();
+            lex_ensure_number_delimiter(&mut probe)?;
+
+            let real_zero = RealRepr::Finite(FiniteRealRepr::Integer {
+                spelling: "0".to_string(),
+            });
+            let imag_spelling = if sign_ch == '-' { "-1" } else { "1" };
+            let imag = RealRepr::Finite(FiniteRealRepr::Integer {
+                spelling: imag_spelling.to_string(),
+            });
+
+            let kind = NumberLiteralKind {
+                radix,
+                exactness,
+                value: NumberValue::Rectangular {
+                    real: real_zero,
+                    imag,
+                },
+            };
+            *input = probe;
+            return Ok(NumberLiteral {
+                text: String::new(),
+                kind,
+            });
+        }
+        _ => return winnow_backtrack(),
+    }
 }
 
-/// Lex a decimal `<complex 10>` or `<real 10>` starting at `start` by
-/// delegating to the radix-parametric complex helper with `R = 10` and
-/// unspecified exactness.
-fn lex_complex_decimal(
-    source: &str,
-    start: usize,
-) -> Result<Option<(usize, NumberLiteral)>, ParseError> {
-    lex_complex_with_radix(
-        source,
-        start,
-        start,
-        NumberRadix::Decimal,
-        NumberExactness::Unspecified,
-    )
+/// Canonical `<number>` parser for decimal radix (`<num 10>`).
+///
+/// This is a thin wrapper around `lex_complex_with_radix` with
+/// `R = 10` and unspecified exactness.
+fn lex_complex_decimal<'i>(input: &mut WinnowInput<'i>) -> PResult<NumberLiteral> {
+    lex_complex_with_radix(input, NumberRadix::Decimal, NumberExactness::Unspecified)
 }
 
-/// Lex a `<number>` with optional radix and exactness prefixes.
+/// Canonical `<number>` parser for prefixed numbers.
 ///
 /// Grammar reference (Formal syntax / `<number>`):
 ///
@@ -851,78 +880,55 @@ fn lex_complex_decimal(
 /// <num R> ::= <prefix R> <complex R>
 ///
 /// <prefix R> ::= <radix R> <exactness>
-///               | <exactness> <radix R>
+///              | <exactness> <radix R>
 ///
-/// <radix 2>  ::= #b
-/// <radix 8>  ::= #o
+/// <exactness> ::= <empty> | #i | #e
+///
+/// <radix 2> ::= #b
+/// <radix 8> ::= #o
 /// <radix 10> ::= <empty> | #d
 /// <radix 16> ::= #x
-/// <exactness> ::= <empty> | #i | #e
 /// ```
 ///
-/// This helper unifies the handling of decimal and non-decimal prefixes.
-/// It parses any valid combination of `#<radix>` and `#<exactness>`,
-/// defaults to decimal/unspecified if both are omitted, and then
-/// delegates the body to `lex_complex_with_radix`.
-///
-/// When called from `lex`, this runs after `lex_boolean` and
-/// `lex_character`, so an initial `#` that is not followed by a
-/// radix or exactness marker causes this function to return `Ok(None)`
-/// and allow other `#`-prefixed token classes to claim the input.
-/// Once at least one `<prefix R>` component has been seen, any further
-/// `#<unknown>` sequence is reported as a `<number>` lexical error in
-/// accordance with the `<prefix R>` grammar.
-fn lex_prefixed_number(
-    source: &str,
-    start: usize,
-) -> Result<Option<(usize, NumberLiteral)>, ParseError> {
-    let len = source.len();
-    let mut pos = start;
-
-    if pos >= len || !source[pos..].starts_with('#') {
-        return Ok(None);
-    }
+/// This helper parses one or more radix/exactness prefixes and then
+/// delegates to `lex_complex_with_radix` for the `<complex R>` part.
+fn lex_prefixed_number<'i>(input: &mut WinnowInput<'i>) -> PResult<NumberLiteral> {
+    let mut probe = *input;
 
     let mut radix: Option<NumberRadix> = None;
     let mut exactness: Option<NumberExactness> = None;
+    let mut saw_prefix = false;
 
-    // Consume one or two `#` prefixes.
     loop {
-        if pos >= len || !source[pos..].starts_with('#') {
+        let ch0 = match probe.peek_token() {
+            Some(c) => c,
+            None => break,
+        };
+
+        if ch0 != '#' {
             break;
         }
-        // Peek at the character after `#`.
-        let hash_pos = pos;
-        let after_hash = hash_pos + 1;
-        if after_hash >= len {
-            // `#` at end of input is incomplete, but we let the
-            // outer loop or specific handlers deal with solitary `#`
-            // if it's not a valid prefix.
-            // However, if we already parsed a prefix, `#` at EOF is incomplete.
-            if radix.is_some() || exactness.is_some() {
-                return Err(ParseError::Incomplete);
-            } else {
-                // No prefixes yet, just `#` at EOF.
-                return Ok(None);
-            }
-        }
 
-        let ch = source[after_hash..].chars().next().unwrap();
-        let lower = ch.to_ascii_lowercase();
-        let prefix_len = 1 + ch.len_utf8(); // '#' + char
+        let _ = probe.next_token(); // consume '#'
+        let after_hash = match probe.peek_token() {
+            Some(c) => c,
+            None => {
+                if radix.is_some() || exactness.is_some() {
+                    return Err(ErrMode::Incomplete(Needed::Unknown));
+                } else {
+                    return winnow_backtrack();
+                }
+            }
+        };
+
+        saw_prefix = true;
+        let lower = after_hash.to_ascii_lowercase();
+        let _ = probe.next_token(); // consume the prefix character
 
         match lower {
             'b' | 'o' | 'd' | 'x' => {
                 if radix.is_some() {
-                    let span = Span {
-                        start,
-                        end: pos + prefix_len,
-                    };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "duplicate radix prefix",
-                    ));
+                    return lex_number_error();
                 }
                 radix = Some(match lower {
                     'b' => NumberRadix::Binary,
@@ -931,73 +937,208 @@ fn lex_prefixed_number(
                     'x' => NumberRadix::Hexadecimal,
                     _ => unreachable!(),
                 });
-                pos += prefix_len;
             }
             'e' | 'i' => {
                 if exactness.is_some() {
-                    let span = Span {
-                        start,
-                        end: pos + prefix_len,
-                    };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "duplicate exactness prefix",
-                    ));
+                    return lex_number_error();
                 }
                 exactness = Some(match lower {
                     'e' => NumberExactness::Exact,
                     'i' => NumberExactness::Inexact,
                     _ => unreachable!(),
                 });
-                pos += prefix_len;
             }
             _ => {
-                // Any other character after `#`.
-                // If we have already seen a radix or exactness prefix,
-                // then this `#<unknown>` sequence is invalid in a `<number>`
-                // and we report a lexical error for `<prefix R>`.
-                //
-                // If no prefixes have been seen yet, this `#` is not part
-                // of a `<number>` prefix at all; we return `Ok(None)` so
-                // that other `#`-prefixed tokens (such as `<boolean>` or
-                // `<character>`) can handle it.
                 if radix.is_some() || exactness.is_some() {
-                    let span = Span {
-                        start,
-                        end: pos + prefix_len,
-                    };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "invalid prefix in number",
-                    ));
+                    return lex_number_error();
                 } else {
-                    // No prefixes seen yet. This `#` is not for us.
-                    return Ok(None);
+                    return winnow_backtrack();
                 }
             }
         }
     }
 
-    // If we parsed no prefixes, this is not a prefixed number.
-    if radix.is_none() && exactness.is_none() {
-        return Ok(None);
+    if !saw_prefix {
+        return winnow_backtrack();
     }
 
-    let radix = radix.unwrap_or(NumberRadix::Decimal);
-    let exactness = exactness.unwrap_or(NumberExactness::Unspecified);
+    let radix_value = radix.unwrap_or(NumberRadix::Decimal);
+    let exactness_value = exactness.unwrap_or(NumberExactness::Unspecified);
 
-    let body_start = pos;
-    if body_start >= len {
-        return Err(ParseError::Incomplete);
+    if probe.peek_token().is_none() {
+        return Err(ErrMode::Incomplete(Needed::Unknown));
     }
 
-    // Delegate the body to the generic complex helper.
-    lex_complex_with_radix(source, start, body_start, radix, exactness)
+    match lex_complex_with_radix(&mut probe, radix_value, exactness_value) {
+        Ok(literal) => {
+            *input = probe;
+            Ok(literal)
+        }
+        Err(e) => Err(e),
+    }
 }
 
-/// Lex a `<string>` token starting at `start`.
+/// Internal helper to report `<string>` lexical errors.
+fn lex_string_error<O>() -> PResult<O> {
+    let mut ctx = ContextError::new();
+    ctx.push(StrContext::Label("<string>"));
+    Err(ErrMode::Cut(ctx))
+}
+
+/// Canonical `<string element>` parser used by `<string>`.
+///
+/// Grammar reference (Formal syntax / `<string>`):
+///
+/// ```text
+/// <string> ::= " <string element>* "
+///
+/// <string element> ::= any character other than " or \
+///                     | <mnemonic escape> | \" | \\
+///                     | \ <intraline whitespace>* <line ending>
+///                       <intraline whitespace>*
+///                     | <inline hex escape>
+/// ```
+///
+/// This function assumes the opening `"` has already been consumed
+/// and stops just before the closing `"`.
+fn lex_string_body<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
+    let mut result = String::new();
+
+    loop {
+        let ch = match input.peek_token() {
+            Some(c) => c,
+            None => return Err(ErrMode::Incomplete(Needed::Unknown)),
+        };
+
+        match ch {
+            '"' => break,
+            '\\' => {
+                let _ = input.next_token();
+                let next = match input.peek_token() {
+                    Some(c) => c,
+                    None => return Err(ErrMode::Incomplete(Needed::Unknown)),
+                };
+
+                match next {
+                    'a' => {
+                        let _ = input.next_token();
+                        result.push('\u{7}');
+                    }
+                    'b' => {
+                        let _ = input.next_token();
+                        result.push('\u{8}');
+                    }
+                    't' => {
+                        let _ = input.next_token();
+                        result.push('\t');
+                    }
+                    'n' => {
+                        let _ = input.next_token();
+                        result.push('\n');
+                    }
+                    'r' => {
+                        let _ = input.next_token();
+                        result.push('\r');
+                    }
+                    '"' => {
+                        let _ = input.next_token();
+                        result.push('"');
+                    }
+                    '\\' => {
+                        let _ = input.next_token();
+                        result.push('\\');
+                    }
+                    'x' | 'X' => {
+                        let _ = input.next_token();
+                        let mut hex_digits = String::new();
+                        while let Some(c) = input.peek_token() {
+                            if c.is_ascii_hexdigit() {
+                                hex_digits.push(c);
+                                let _ = input.next_token();
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if hex_digits.is_empty() {
+                            return lex_string_error();
+                        }
+
+                        let end_ch = match input.peek_token() {
+                            Some(c) => c,
+                            None => return Err(ErrMode::Incomplete(Needed::Unknown)),
+                        };
+
+                        if end_ch != ';' {
+                            return lex_string_error();
+                        }
+
+                        let _ = input.next_token();
+
+                        let codepoint = match u32::from_str_radix(&hex_digits, 16) {
+                            Ok(v) => v,
+                            Err(_) => return lex_string_error(),
+                        };
+
+                        match char::from_u32(codepoint) {
+                            Some(c) => result.push(c),
+                            None => return lex_string_error(),
+                        }
+                    }
+                    _ => {
+                        // Possible line splice: backslash, optional spaces/tabs,
+                        // then a line ending and more spaces/tabs.
+                        loop {
+                            match input.peek_token() {
+                                Some(' ' | '\t') => {
+                                    let _ = input.next_token();
+                                }
+                                _ => break,
+                            }
+                        }
+
+                        let nl = match input.peek_token() {
+                            Some(c) => c,
+                            None => return Err(ErrMode::Incomplete(Needed::Unknown)),
+                        };
+
+                        if nl == '\n' || nl == '\r' {
+                            let first = nl;
+                            let _ = input.next_token();
+                            if first == '\r' {
+                                if let Some('\n') = input.peek_token() {
+                                    let _ = input.next_token();
+                                }
+                            }
+                            // Skip following spaces/tabs on the next line.
+                            loop {
+                                match input.peek_token() {
+                                    Some(' ' | '\t') => {
+                                        let _ = input.next_token();
+                                    }
+                                    _ => break,
+                                }
+                            }
+                        } else {
+                            return lex_string_error();
+                        }
+                    }
+                }
+            }
+            '\n' | '\r' => {
+                return lex_string_error();
+            }
+            _ => {
+                let _ = input.next_token();
+                result.push(ch);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+/// Canonical `<string>` parser using `winnow`.
 ///
 /// Grammar reference (Formal syntax / `<string>`):
 ///
@@ -1005,281 +1146,118 @@ fn lex_prefixed_number(
 /// <string> ::= " <string element>* "
 /// ```
 ///
-/// This helper implements the R7RS escape and line-splicing rules,
-/// including mnemonic escapes (`\n`, `\t`, etc.), `\x...;` hex escapes,
-/// and backslash-newline splices, and reports lexical errors using
-/// the `<string>` nonterminal.
-fn lex_string(source: &str, start: usize) -> Result<Option<(usize, Token)>, ParseError> {
-    let len = source.len();
-    let mut pos = start;
+/// The `<string element>` production itself is implemented by
+/// `lex_string_body`.
+fn lex_string<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
+    let start = input.current_token_start();
 
-    if pos >= len || !source[pos..].starts_with('"') {
-        return Ok(None);
+    match input.peek_token() {
+        Some('"') => {
+            let _ = input.next_token();
+        }
+        _ => return winnow_backtrack(),
     }
 
-    pos += 1; // skip opening quote
-    let mut result = String::new();
+    let value = lex_string_body(input)?;
 
-    loop {
-        if pos >= len {
-            return Err(ParseError::Incomplete);
-        }
-
-        let ch = source[pos..].chars().next().unwrap();
-        let ch_len = ch.len_utf8();
-
-        match ch {
-            '"' => {
-                pos += ch_len;
-                return Ok(Some((pos, Token::String(result))));
-            }
-            '\\' => {
-                pos += ch_len;
-                if pos >= len {
-                    return Err(ParseError::Incomplete);
-                }
-
-                let next_ch = source[pos..].chars().next().unwrap();
-                let next_len = next_ch.len_utf8();
-
-                match next_ch {
-                    'a' => {
-                        result.push('\u{7}');
-                        pos += next_len;
-                    }
-                    'b' => {
-                        result.push('\u{8}');
-                        pos += next_len;
-                    }
-                    't' => {
-                        result.push('\t');
-                        pos += next_len;
-                    }
-                    'n' => {
-                        result.push('\n');
-                        pos += next_len;
-                    }
-                    'r' => {
-                        result.push('\r');
-                        pos += next_len;
-                    }
-                    '"' => {
-                        result.push('"');
-                        pos += next_len;
-                    }
-                    '\\' => {
-                        result.push('\\');
-                        pos += next_len;
-                    }
-                    'x' | 'X' => {
-                        pos += next_len;
-                        let hex_start = pos;
-                        while pos < len {
-                            let c = source[pos..].chars().next().unwrap();
-                            if c.is_ascii_hexdigit() {
-                                pos += c.len_utf8();
-                            } else {
-                                break;
-                            }
-                        }
-
-                        if pos == hex_start {
-                            let span = Span { start, end: pos };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<string>",
-                                "expected hex digits after \\x",
-                            ));
-                        }
-
-                        if pos >= len {
-                            return Err(ParseError::Incomplete);
-                        }
-
-                        let end_ch = source[pos..].chars().next().unwrap();
-                        if end_ch != ';' {
-                            let span = Span { start, end: pos };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<string>",
-                                "missing terminating ';' in hex escape",
-                            ));
-                        }
-
-                        let hex_digits = &source[hex_start..pos];
-                        let codepoint = u32::from_str_radix(hex_digits, 16).map_err(|_| {
-                            let span = Span { start, end: pos };
-                            ParseError::lexical(
-                                span,
-                                "<string>",
-                                "invalid hex digits in hex escape",
-                            )
-                        })?;
-                        if let Some(c) = char::from_u32(codepoint) {
-                            result.push(c);
-                        } else {
-                            let span = Span { start, end: pos };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<string>",
-                                "hex escape is not a valid Unicode scalar value",
-                            ));
-                        }
-                        pos += end_ch.len_utf8();
-                    }
-                    _ => {
-                        let mut idx = pos;
-                        while idx < len {
-                            let c = source[idx..].chars().next().unwrap();
-                            if c == ' ' || c == '\t' {
-                                idx += c.len_utf8();
-                            } else {
-                                break;
-                            }
-                        }
-
-                        if idx >= len {
-                            return Err(ParseError::Incomplete);
-                        }
-
-                        let c = source[idx..].chars().next().unwrap();
-                        if c == '\n' || c == '\r' {
-                            idx += c.len_utf8();
-                            if c == '\r' && idx < len {
-                                let c2 = source[idx..].chars().next().unwrap();
-                                if c2 == '\n' {
-                                    idx += c2.len_utf8();
-                                }
-                            }
-                            while idx < len {
-                                let c2 = source[idx..].chars().next().unwrap();
-                                if c2 == ' ' || c2 == '\t' {
-                                    idx += c2.len_utf8();
-                                } else {
-                                    break;
-                                }
-                            }
-                            pos = idx;
-                        } else {
-                            let span = Span { start, end: idx };
-                            return Err(ParseError::lexical(
-                                span,
-                                "<string>",
-                                "unknown escape sequence in string literal",
-                            ));
-                        }
-                    }
-                }
-            }
-            '\n' | '\r' => {
-                let span = Span {
-                    start,
-                    end: pos + ch_len,
-                };
-                return Err(ParseError::lexical(
-                    span,
-                    "<string>",
-                    "newline character in string literal",
-                ));
-            }
-            _ => {
-                result.push(ch);
-                pos += ch_len;
-            }
-        }
+    match input.next_token() {
+        Some('"') => {}
+        None => return Err(ErrMode::Incomplete(Needed::Unknown)),
+        _ => return lex_string_error(),
     }
+
+    let end = input.current_token_start();
+    Ok(Syntax::new(Span { start, end }, Token::String(value)))
 }
 
-/// Lex a `<character>` token starting at `start`.
+/// Internal helper to report `<character>` lexical errors.
+fn lex_character_error<O>() -> PResult<O> {
+    let mut ctx = ContextError::new();
+    ctx.push(StrContext::Label("<character>"));
+    Err(ErrMode::Cut(ctx))
+}
+
+/// Canonical `<character>` parser using `winnow`.
 ///
 /// Grammar reference (Formal syntax / `<character>`):
 ///
 /// ```text
-/// <character> ::= #\\ <any character>
-///               | #\\ <character name>
-///               | #\\x<hex scalar value>
+/// <character> ::= #\ <any character>
+///               | #\ <character name>
+///               | #\x<hex scalar value>
+///
+/// <character name> ::= alarm | backspace | delete
+///                    | escape | newline | null | return | space | tab
 /// ```
 ///
-/// This helper accepts the R7RS named characters and `#\\x` hex
+/// This helper accepts the R7RS named characters and `#\x` hex
 /// scalar values and reports lexical errors using the `<character>`
 /// nonterminal.
-fn lex_character(source: &str, start: usize) -> Result<Option<(usize, Token)>, ParseError> {
-    let len = source.len();
-    let mut pos = start;
+fn lex_character<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
+    let start = input.current_token_start();
 
-    if pos >= len || !source[pos..].starts_with("#\\") {
-        return Ok(None);
+    // Expect leading "#\" prefix using lookahead so that we don't
+    // consume input on mismatch (for example, `#t` / `#f` booleans).
+    let mut probe = input.clone();
+    match (probe.next_token(), probe.peek_token()) {
+        (Some('#'), Some('\\')) => {
+            // Commit the prefix on the real input.
+            let _ = input.next_token();
+            let _ = input.next_token();
+        }
+        // `#` at end-of-input followed by missing `\\` is an
+        // incomplete `<character>` token.
+        (Some('#'), None) => return Err(ErrMode::Incomplete(Needed::Unknown)),
+        _ => return winnow_backtrack(),
     }
-    pos += 2; // skip "#\"
 
-    if pos >= len {
-        return Err(ParseError::Incomplete);
-    }
+    // At least one character must follow `#\`.
+    let c1: char = any.parse_next(input)?;
 
-    let c1 = source[pos..].chars().next().unwrap();
-    let value_char;
-
-    if c1 == 'x' || c1 == 'X' {
-        let hex_start = pos + c1.len_utf8();
-        let mut hex_pos = hex_start;
-        while hex_pos < len {
-            let c = source[hex_pos..].chars().next().unwrap();
+    let value_char = if c1 == 'x' || c1 == 'X' {
+        // Potential `#\x<hex scalar value>` form.
+        let mut hex_digits = String::new();
+        while let Some(c) = input.peek_token() {
             if c.is_ascii_hexdigit() {
-                hex_pos += c.len_utf8();
+                hex_digits.push(c);
+                let _ = input.next_token();
             } else {
                 break;
             }
         }
 
-        if hex_pos > hex_start {
-            let hex_digits = &source[hex_start..hex_pos];
-            let codepoint = u32::from_str_radix(hex_digits, 16).map_err(|_| {
-                let span = Span {
-                    start,
-                    end: hex_pos,
-                };
-                ParseError::lexical(
-                    span,
-                    "<character>",
-                    "invalid hex digits in character literal",
-                )
-            })?;
-            value_char = match char::from_u32(codepoint) {
-                Some(c) => c,
-                None => {
-                    let span = Span {
-                        start,
-                        end: hex_pos,
-                    };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<character>",
-                        "hex scalar value is not a valid Unicode scalar value",
-                    ));
-                }
+        if !hex_digits.is_empty() {
+            let codepoint = match u32::from_str_radix(&hex_digits, 16) {
+                Ok(v) => v,
+                Err(_) => return lex_character_error(),
             };
-            pos = hex_pos;
+
+            match char::from_u32(codepoint) {
+                Some(ch) => ch,
+                None => return lex_character_error(),
+            }
         } else {
-            // No hex digits, treat as character 'x' or 'X'
-            value_char = c1;
-            pos += c1.len_utf8();
+            // No hex digits: treat as the literal character 'x' / 'X'.
+            c1
         }
     } else if c1.is_ascii_alphabetic() {
-        let name_start = pos;
-        while pos < len {
-            let c = source[pos..].chars().next().unwrap();
+        // Possible named character like `space`, `newline`, etc.
+        let mut name = String::new();
+        name.push(c1);
+        while let Some(c) = input.peek_token() {
             if c.is_ascii_alphabetic() {
-                pos += c.len_utf8();
+                name.push(c);
+                let _ = input.next_token();
             } else {
                 break;
             }
         }
-        let name = &source[name_start..pos];
 
         if name.len() == c1.len_utf8() {
-            value_char = c1;
+            // Single alphabetic character like `#\a`.
+            c1
         } else {
-            value_char = match name {
+            match name.as_str() {
                 "alarm" => '\u{7}',
                 "backspace" => '\u{8}',
                 "delete" => '\u{7F}',
@@ -1289,27 +1267,29 @@ fn lex_character(source: &str, start: usize) -> Result<Option<(usize, Token)>, P
                 "return" => '\r',
                 "space" => ' ',
                 "tab" => '\t',
-                _ => {
-                    let span = Span { start, end: pos };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<character>",
-                        "unknown character name",
-                    ));
-                }
-            };
+                _ => return lex_character_error(),
+            }
         }
     } else {
-        value_char = c1;
-        pos += c1.len_utf8();
+        // Any other single character after `#\`.
+        c1
+    };
+
+    // Enforce delimiter after the `<character>` token.
+    if let Some(ch) = input.peek_token() {
+        if !is_delimiter(ch) {
+            return lex_character_error();
+        }
     }
 
-    ensure_delimiter(source, pos, start, "<character>")?;
-
-    Ok(Some((pos, Token::Character(value_char))))
+    let end = input.current_token_start();
+    Ok(Syntax::new(
+        Span { start, end },
+        Token::Character(value_char),
+    ))
 }
 
-/// Lex a `<boolean>` token starting at `start`.
+/// Lex a `<boolean>` token using a `WinnowInput`.
 ///
 /// Grammar reference (Formal syntax / `<boolean>`):
 ///
@@ -1319,141 +1299,149 @@ fn lex_character(source: &str, start: usize) -> Result<Option<(usize, Token)>, P
 ///
 /// This helper is consulted before `<number>` prefix handling so that
 /// `#t` / `#f` and their long forms are always recognized as booleans.
-fn lex_boolean(source: &str, start: usize) -> Result<Option<(usize, Token)>, ParseError> {
-    let len = source.len();
-    let mut pos = start;
+fn lex_boolean<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
+    let start = input.current_token_start();
 
-    if pos >= len || !source[pos..].starts_with('#') {
-        return Ok(None);
-    }
+    // Use a probing cursor so that we only commit to a `<boolean>`
+    // token when the full spelling matches `#t`, `#f`, `#true`, or
+    // `#false` with a proper delimiter. On mismatch, we backtrack
+    // without consuming any input so other `#`-prefixed token kinds
+    // can claim the sequence.
+    let mut probe = *input;
 
-    let after_hash = pos + 1;
-    if after_hash >= len {
-        return Ok(None);
-    }
-
-    let c = source[after_hash..].chars().next().unwrap();
-    let lower_c = c.to_ascii_lowercase();
-    if lower_c != 't' && lower_c != 'f' {
-        return Ok(None);
-    }
-
-    let word_start = after_hash;
-    pos = word_start;
-    while pos < len {
-        let c = source[pos..].chars().next().unwrap();
-        if c.is_ascii_alphabetic() {
-            pos += c.len_utf8();
-        } else {
-            break;
+    match probe.peek_token() {
+        Some('#') => {
+            let _ = probe.next_token();
         }
+        _ => return winnow_backtrack(),
     }
 
-    let ident = &source[word_start..pos];
-    let lower = ident.to_ascii_lowercase();
-    let value = match lower.as_str() {
-        "t" | "true" => Some(true),
-        "f" | "false" => Some(false),
-        _ => None,
+    // Bare `#` at EOF is treated as "no boolean here" rather than an
+    // incomplete token, matching the previous semantics.
+    if probe.peek_token().is_none() {
+        return winnow_backtrack();
+    }
+
+    // Parse 1+ alphabetic characters for the boolean identifier.
+    let ident_res: PResult<&str> =
+        take_while(1.., |c: char| c.is_ascii_alphabetic()).parse_next(&mut probe);
+    let ident = match ident_res {
+        Ok(s) => s,
+        Err(ErrMode::Backtrack(_)) | Err(ErrMode::Incomplete(_)) => {
+            return winnow_backtrack();
+        }
+        Err(e) => return Err(e),
     };
 
-    if let Some(b) = value {
-        ensure_delimiter(source, pos, start, "<boolean>")?;
-        Ok(Some((pos, Token::Boolean(b))))
-    } else {
-        Ok(None)
-    }
-}
+    let lower = ident.to_ascii_lowercase();
+    let value = match lower.as_str() {
+        "t" | "true" => true,
+        "f" | "false" => false,
+        // Any other spelling (e.g. "foo") is not a boolean; backtrack
+        // so that other `#`-prefixed token kinds can claim the input.
+        _ => return winnow_backtrack(),
+    };
 
-/// Lex `<sign> <ureal R>` for non-decimal radices `R = 2, 8, 16`,
-/// where `<ureal R>` is either an integer `<uinteger R>` or a rational
-/// `<uinteger R>/<uinteger R>`. The optional sign, if present, is
-/// preserved in the resulting `FiniteRealRepr` spelling.
-fn lex_nondecimal_sign_ureal(
-    source: &str,
-    start: usize,
-    radix: NumberRadix,
-) -> Result<Option<(usize, FiniteRealRepr)>, ParseError> {
-    let len = source.len();
-    let mut pos = start;
-
-    if pos >= len {
-        return Ok(None);
-    }
-
-    // Optional sign.
-    let first = source[pos..].chars().next().unwrap();
-    if first == '+' || first == '-' {
-        pos += first.len_utf8();
-        if pos >= len {
-            // Only a sign: not a number.
-            return Ok(None);
+    // Enforce delimiter: the next character, if any, must be a
+    // `<delimiter>`; otherwise this is a `<boolean>` lexical error.
+    if let Some(ch) = probe.peek_token() {
+        if !is_delimiter(ch) {
+            let mut ctx = ContextError::new();
+            ctx.push(StrContext::Label("<boolean>"));
+            return Err(ErrMode::Cut(ctx));
         }
     }
 
+    // Commit the successfully parsed boolean by updating the real
+    // input cursor to the probe's position.
+    *input = probe;
+    let end = input.current_token_start();
+    Ok(Syntax::new(Span { start, end }, Token::Boolean(value)))
+}
+
+/// Canonical non-decimal `<ureal R>` parser using `winnow`.
+///
+/// Grammar reference (Formal syntax / `<number>`):
+///
+/// ```text
+/// <ureal R> ::= <uinteger R>
+///              | <uinteger R> / <uinteger R>
+///              | <decimal R>
+/// ```
+///
+/// This helper implements the `<uinteger R>` and
+/// `<uinteger R> / <uinteger R>` alternatives for `R = 2, 8, 16`,
+/// without any leading sign. The caller is responsible for handling
+/// the optional `<sign>` and delimiter checks at the `<real R>` /
+/// `<number>` level; the `<decimal 10>` case is handled separately
+/// by `lex_decimal_number`.
+fn lex_nondecimal_ureal<'i>(
+    input: &mut WinnowInput<'i>,
+    radix: NumberRadix,
+) -> PResult<FiniteRealRepr> {
+    let mut probe = *input;
+    let mut text = String::new();
     let mut saw_digit = false;
 
-    while pos < len {
-        let c = source[pos..].chars().next().unwrap();
+    // `<uinteger R>` numerator: at least one digit.
+    while let Some(c) = probe.peek_token() {
         if is_digit_for_radix(c, radix) {
             saw_digit = true;
-            pos += c.len_utf8();
+            text.push(c);
+            let _ = probe.next_token();
         } else {
             break;
         }
     }
 
     if !saw_digit {
-        return Ok(None);
+        return winnow_backtrack();
     }
 
     let mut is_rational = false;
 
-    if pos < len {
-        let c = source[pos..].chars().next().unwrap();
+    // Optional `/ <uinteger R>` denominator.
+    if let Some(c) = probe.peek_token() {
         if c == '/' {
             is_rational = true;
-            pos += c.len_utf8();
-            if pos >= len {
+            text.push(c);
+            let _ = probe.next_token();
+
+            if probe.peek_token().is_none() {
                 // E.g. "#b1/" at end of input.
-                return Err(ParseError::Incomplete);
+                return Err(ErrMode::Incomplete(Needed::Unknown));
             }
 
             let mut denom_digits = false;
-            while pos < len {
-                let c2 = source[pos..].chars().next().unwrap();
+            while let Some(c2) = probe.peek_token() {
                 if is_digit_for_radix(c2, radix) {
                     denom_digits = true;
-                    pos += c2.len_utf8();
+                    text.push(c2);
+                    let _ = probe.next_token();
                 } else {
                     break;
                 }
             }
 
             if !denom_digits {
-                let span = Span { start, end: pos };
-                return Err(ParseError::lexical(
-                    span,
-                    "<number>",
-                    "invalid rational number; expected digits after '/'",
-                ));
+                // "3/" followed by a non-digit, e.g. "3/x".
+                return lex_number_error();
             }
         }
     }
 
-    let end = pos;
-    let spelling = &source[start..end];
     let finite = if is_rational {
         FiniteRealRepr::Rational {
-            spelling: spelling.to_string(),
+            spelling: text.clone(),
         }
     } else {
         FiniteRealRepr::Integer {
-            spelling: spelling.to_string(),
+            spelling: text.clone(),
         }
     };
 
-    Ok(Some((end, finite)))
+    *input = probe;
+    Ok(finite)
 }
 
 fn is_digit_for_radix(ch: char, radix: NumberRadix) -> bool {
@@ -1465,7 +1453,23 @@ fn is_digit_for_radix(ch: char, radix: NumberRadix) -> bool {
     }
 }
 
-/// Lex a decimal (radix 10) `<number>` starting at `start`.
+/// Internal helper to report `<number>` lexical errors.
+fn lex_number_error<O>() -> PResult<O> {
+    let mut ctx = ContextError::new();
+    ctx.push(StrContext::Label("<number>"));
+    Err(ErrMode::Cut(ctx))
+}
+
+fn lex_ensure_number_delimiter<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
+    if let Some(ch) = input.peek_token() {
+        if !is_delimiter(ch) {
+            return lex_number_error();
+        }
+    }
+    Ok(())
+}
+
+/// Canonical `<decimal 10>` parser using `winnow`.
 ///
 /// Recognizes the subset of the `<number>` grammar corresponding to
 /// real decimal numbers without prefixes:
@@ -1483,98 +1487,93 @@ fn is_digit_for_radix(ch: char, radix: NumberRadix) -> bool {
 /// ```
 ///
 /// Note: This helper is intentionally limited to radix-10 real
-/// numbers (integers, decimals, `3/4` rationals, and exponent
-/// forms) without `#b/#o/#d/#x` prefixes or complex numbers
-/// (`1+2i`, `+i`, etc.). Prefixes and complex forms for all
-/// radices are handled at the `<number>` level by
-/// `lex_complex_decimal` for unprefixed decimal numbers and by
-/// `lex_prefixed_number`/`lex_complex_with_radix` for prefixed
-/// forms, so the overall `<number>` lexer is R7RS-conformant.
-fn lex_decimal_number(
-    source: &str,
-    start: usize,
-) -> Result<Option<(usize, NumberLiteral)>, ParseError> {
-    let len = source.len();
-    let mut pos = start;
+/// components; radix and exactness prefixes are handled at the
+/// `<prefix R>` / `lex_prefixed_number` layer.
+fn lex_decimal_number<'i>(input: &mut WinnowInput<'i>) -> PResult<NumberLiteral> {
+    // Work on a copy so we can backtrack cleanly if this
+    // does not match a decimal number at all.
+    let mut probe = *input;
+    let mut text = String::new();
+    let mut saw_digit = false;
 
     // Optional sign.
-    if pos < len {
-        let ch = source[pos..].chars().next().unwrap();
+    if let Some(ch) = probe.peek_token() {
         if ch == '+' || ch == '-' {
-            pos += ch.len_utf8();
+            text.push(ch);
+            let _ = probe.next_token();
         }
     }
 
-    if pos >= len {
-        // Only a sign, no digits: not a number.
-        return Ok(None);
-    }
-
-    let mut saw_digit = false;
-    let first = source[pos..].chars().next().unwrap();
+    let first = match probe.peek_token() {
+        Some(c) => c,
+        None => return winnow_backtrack(),
+    };
 
     if first == '.' {
         // `.digits+` decimal form (no rationals here).
-        pos += first.len_utf8();
-        if pos >= len {
-            return Ok(None);
+        text.push(first);
+        let _ = probe.next_token();
+
+        // Only '.' (or sign + '.') is not a decimal number.
+        if probe.peek_token().is_none() {
+            return winnow_backtrack();
         }
-        while pos < len {
-            let c = source[pos..].chars().next().unwrap();
+
+        while let Some(c) = probe.peek_token() {
             if c.is_ascii_digit() {
                 saw_digit = true;
-                pos += c.len_utf8();
+                text.push(c);
+                let _ = probe.next_token();
             } else {
                 break;
             }
         }
         if !saw_digit {
             // No digits after '.'
-            return Ok(None);
+            return winnow_backtrack();
         }
 
         // Optional exponent part for `.digits+`.
-        if pos < len {
-            let c = source[pos..].chars().next().unwrap();
+        if let Some(c) = probe.peek_token() {
             if c == 'e' || c == 'E' {
-                pos += c.len_utf8();
-                if pos >= len {
-                    // ".5e" at end of input.
-                    return Err(ParseError::Incomplete);
-                }
+                text.push(c);
+                let _ = probe.next_token();
 
-                let sign_ch = source[pos..].chars().next().unwrap();
-                if sign_ch == '+' || sign_ch == '-' {
-                    pos += sign_ch.len_utf8();
-                    if pos >= len {
-                        // ".5e+" at end of input.
-                        return Err(ParseError::Incomplete);
+                let sign_or_digit = match probe.peek_token() {
+                    Some(ch) => ch,
+                    None => return Err(ErrMode::Incomplete(Needed::Unknown)),
+                };
+
+                if sign_or_digit == '+' || sign_or_digit == '-' {
+                    text.push(sign_or_digit);
+                    let _ = probe.next_token();
+                    if probe.peek_token().is_none() {
+                        return Err(ErrMode::Incomplete(Needed::Unknown));
                     }
                 }
 
                 let mut exp_digits = false;
-                while pos < len {
-                    let c2 = source[pos..].chars().next().unwrap();
+                while let Some(c2) = probe.peek_token() {
                     if c2.is_ascii_digit() {
                         exp_digits = true;
-                        pos += c2.len_utf8();
+                        text.push(c2);
+                        let _ = probe.next_token();
                     } else {
                         break;
                     }
                 }
                 if !exp_digits {
-                    // `.5e` or `.5e+` without digits.
-                    return Err(ParseError::Incomplete);
+                    return Err(ErrMode::Incomplete(Needed::Unknown));
                 }
             }
         }
     } else if first.is_ascii_digit() {
         // Leading digits of `<uinteger 10>`.
-        while pos < len {
-            let c = source[pos..].chars().next().unwrap();
+        while let Some(c) = probe.peek_token() {
             if c.is_ascii_digit() {
                 saw_digit = true;
-                pos += c.len_utf8();
+                text.push(c);
+                let _ = probe.next_token();
             } else {
                 break;
             }
@@ -1582,23 +1581,23 @@ fn lex_decimal_number(
 
         // At this point we may have a rational `a/b`, a decimal
         // `a.b`, or a plain integer `a`.
-        if pos < len {
-            let c = source[pos..].chars().next().unwrap();
+        if let Some(c) = probe.peek_token() {
             if c == '/' {
                 // Potential rational `<uinteger 10> / <uinteger 10>`.
-                pos += c.len_utf8();
-                if pos >= len {
+                text.push(c);
+                let _ = probe.next_token();
+                if probe.peek_token().is_none() {
                     // "3/" at end of input.
-                    return Err(ParseError::Incomplete);
+                    return Err(ErrMode::Incomplete(Needed::Unknown));
                 }
 
                 // Denominator must be `<uinteger 10>`.
                 let mut denom_digits = false;
-                while pos < len {
-                    let c2 = source[pos..].chars().next().unwrap();
+                while let Some(c2) = probe.peek_token() {
                     if c2.is_ascii_digit() {
                         denom_digits = true;
-                        pos += c2.len_utf8();
+                        text.push(c2);
+                        let _ = probe.next_token();
                     } else {
                         break;
                     }
@@ -1606,114 +1605,101 @@ fn lex_decimal_number(
 
                 if !denom_digits {
                     // "3/" followed by a non-digit, e.g. "3/x".
-                    let span = Span { start, end: pos };
-                    return Err(ParseError::lexical(
-                        span,
-                        "<number>",
-                        "invalid rational number; expected digits after '/'",
-                    ));
+                    return lex_number_error();
                 }
 
                 // Rationals do not allow a decimal point or exponent
                 // after the denominator, so we are done here.
             } else if c == '.' {
                 // Decimal with fractional part: `digits '.' digits*`.
-                pos += c.len_utf8();
-                while pos < len {
-                    let c2 = source[pos..].chars().next().unwrap();
+                text.push(c);
+                let _ = probe.next_token();
+                while let Some(c2) = probe.peek_token() {
                     if c2.is_ascii_digit() {
-                        pos += c2.len_utf8();
+                        text.push(c2);
+                        let _ = probe.next_token();
                     } else {
                         break;
                     }
                 }
 
                 // Optional exponent part for `digits '.' digits*`.
-                if pos < len {
-                    let c2 = source[pos..].chars().next().unwrap();
+                if let Some(c2) = probe.peek_token() {
                     if c2 == 'e' || c2 == 'E' {
-                        pos += c2.len_utf8();
-                        if pos >= len {
-                            // "1.e" at end of input.
-                            return Err(ParseError::Incomplete);
+                        text.push(c2);
+                        let _ = probe.next_token();
+                        if probe.peek_token().is_none() {
+                            return Err(ErrMode::Incomplete(Needed::Unknown));
                         }
 
-                        let sign_ch = source[pos..].chars().next().unwrap();
+                        let sign_ch = probe.peek_token().unwrap();
                         if sign_ch == '+' || sign_ch == '-' {
-                            pos += sign_ch.len_utf8();
-                            if pos >= len {
-                                // "1.e+" at end of input.
-                                return Err(ParseError::Incomplete);
+                            text.push(sign_ch);
+                            let _ = probe.next_token();
+                            if probe.peek_token().is_none() {
+                                return Err(ErrMode::Incomplete(Needed::Unknown));
                             }
                         }
 
                         let mut exp_digits = false;
-                        while pos < len {
-                            let c3 = source[pos..].chars().next().unwrap();
+                        while let Some(c3) = probe.peek_token() {
                             if c3.is_ascii_digit() {
                                 exp_digits = true;
-                                pos += c3.len_utf8();
+                                text.push(c3);
+                                let _ = probe.next_token();
                             } else {
                                 break;
                             }
                         }
                         if !exp_digits {
-                            // `1.e` or `1.e+` without digits.
-                            return Err(ParseError::Incomplete);
+                            return Err(ErrMode::Incomplete(Needed::Unknown));
                         }
                     }
                 }
             } else if c == 'e' || c == 'E' {
                 // Exponent part for pure integer: `digits [eE][sign]digits+`.
-                pos += c.len_utf8();
-                if pos >= len {
-                    // "1e" at end of input.
-                    return Err(ParseError::Incomplete);
+                text.push(c);
+                let _ = probe.next_token();
+                if probe.peek_token().is_none() {
+                    return Err(ErrMode::Incomplete(Needed::Unknown));
                 }
 
-                let sign_ch = source[pos..].chars().next().unwrap();
+                let sign_ch = probe.peek_token().unwrap();
                 if sign_ch == '+' || sign_ch == '-' {
-                    pos += sign_ch.len_utf8();
-                    if pos >= len {
-                        // "1e+" at end of input.
-                        return Err(ParseError::Incomplete);
+                    text.push(sign_ch);
+                    let _ = probe.next_token();
+                    if probe.peek_token().is_none() {
+                        return Err(ErrMode::Incomplete(Needed::Unknown));
                     }
                 }
 
                 let mut exp_digits = false;
-                while pos < len {
-                    let c2 = source[pos..].chars().next().unwrap();
+                while let Some(c2) = probe.peek_token() {
                     if c2.is_ascii_digit() {
                         exp_digits = true;
-                        pos += c2.len_utf8();
+                        text.push(c2);
+                        let _ = probe.next_token();
                     } else {
                         break;
                     }
                 }
                 if !exp_digits {
-                    // `1e` or `1e+` without digits.
-                    return Err(ParseError::Incomplete);
+                    return Err(ErrMode::Incomplete(Needed::Unknown));
                 }
             }
         }
     } else {
         // Does not look like a decimal number.
-        return Ok(None);
+        return winnow_backtrack();
     }
 
     if !saw_digit {
-        return Ok(None);
+        return winnow_backtrack();
     }
 
-    let text = &source[start..pos];
-    let kind = classify_decimal_number(text);
-    Ok(Some((
-        pos,
-        NumberLiteral {
-            text: text.to_string(),
-            kind,
-        },
-    )))
+    let kind = classify_decimal_number(&text);
+    *input = probe;
+    Ok(NumberLiteral { text, kind })
 }
 
 fn classify_decimal_number(text: &str) -> NumberLiteralKind {
@@ -2144,6 +2130,16 @@ mod tests {
                 name: "fold_case_directives",
                 input: "#!fold-case\n  #!no-fold-case  ; rest is comment\n",
                 expected: Expected::Empty,
+            },
+            TestCase {
+                name: "directive_requires_delimiter_1",
+                input: "#!fold-caseX",
+                expected: Expected::Error(ErrorMatcher::Lex("<directive>")),
+            },
+            TestCase {
+                name: "directive_requires_delimiter_2",
+                input: "#!no-fold-caseX",
+                expected: Expected::Error(ErrorMatcher::Lex("<directive>")),
             },
             TestCase {
                 name: "boolean_tokens",
