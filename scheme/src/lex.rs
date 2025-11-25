@@ -3,17 +3,15 @@ use crate::{
     NumberValue, ParseError, RealRepr, Span, Syntax,
 };
 use winnow::Parser;
-use winnow::ascii::{Caseless, hex_digit1};
-use winnow::combinator::alt;
+use winnow::ascii::{Caseless, hex_digit1, line_ending, space0, till_line_ending};
+use winnow::combinator::{alt, opt};
 use winnow::error::{ContextError, ErrMode, Needed, StrContext};
 use winnow::stream::{Location, Stream};
-#[allow(unused_imports)]
-use winnow::token::literal;
+use winnow::token::{literal, take_while};
 
 // Internal types and helpers to support the `winnow`-based lexer.
 type WinnowInput<'i> = winnow::stream::LocatingSlice<winnow::stream::Str<'i>>;
 type PResult<O> = Result<O, ErrMode<ContextError>>;
-type WinnowInnerError = ContextError;
 
 // --- Idiomatic helper trait for cleaner character consumption ---
 
@@ -34,10 +32,6 @@ trait InputExt {
     /// Consume characters while the predicate holds, pushing them to `buf`.
     /// Returns the number of characters consumed.
     fn eat_while(&mut self, buf: &mut String, predicate: impl Fn(char) -> bool) -> usize;
-
-    /// Skip characters while the predicate holds.
-    /// Returns the number of characters skipped.
-    fn skip_while(&mut self, predicate: impl Fn(char) -> bool) -> usize;
 
     /// Peek at the next character, returning an incomplete error if at EOF.
     /// Use for REPL-continuable constructs (strings, nested comments).
@@ -97,20 +91,6 @@ impl InputExt for WinnowInput<'_> {
     }
 
     #[inline]
-    fn skip_while(&mut self, predicate: impl Fn(char) -> bool) -> usize {
-        let mut count = 0;
-        while let Some(c) = self.peek_token() {
-            if predicate(c) {
-                let _ = self.next_token();
-                count += 1;
-            } else {
-                break;
-            }
-        }
-        count
-    }
-
-    #[inline]
     fn peek_or_incomplete(&mut self) -> PResult<char> {
         self.peek_token()
             .ok_or(ErrMode::Incomplete(Needed::Unknown))
@@ -150,8 +130,7 @@ impl InputExt for WinnowInput<'_> {
 /// Sentinel label used to distinguish `IncompleteToken` from `Incomplete`.
 const INCOMPLETE_TOKEN_LABEL: &str = "__incomplete_token__";
 
-#[allow(dead_code)]
-fn winnow_err_to_parse_error(err: ErrMode<WinnowInnerError>, fallback_span: Span) -> ParseError {
+fn winnow_err_to_parse_error(err: ErrMode<ContextError>, fallback_span: Span) -> ParseError {
     match err {
         ErrMode::Incomplete(_) => ParseError::Incomplete,
         ErrMode::Cut(e) | ErrMode::Backtrack(e) => {
@@ -233,7 +212,7 @@ fn try_parse_unit_imaginary<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<c
         return Ok(None);
     };
     if probe.eat_if(|c| c == 'i' || c == 'I').is_some() {
-        lex_ensure_number_delimiter(&mut probe)?;
+        ensure_delimiter(&mut probe, "<number>")?;
         *input = probe;
         Ok(Some(sign_ch))
     } else {
@@ -354,50 +333,46 @@ pub fn lex(source: &str) -> Result<Vec<SpannedToken>, ParseError> {
 ///
 /// This parser consumes zero or more `<atmosphere>` elements:
 /// whitespace, line comments, nested comments, and directives.
-fn lex_intertoken<'i>(input: &mut WinnowInput<'i>, fold_case: &mut bool) -> PResult<()> {
+///
+/// Uses a manual loop for efficiency with `take_while` for the fast paths.
+fn lex_intertoken<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
     loop {
+        // Fast path: consume runs of whitespace at once
+        let _: &str =
+            take_while(0.., |c| matches!(c, ' ' | '\t' | '\n' | '\r')).parse_next(input)?;
+
         let Some(ch) = input.peek_token() else {
             return Ok(());
         };
 
         match ch {
-            // <whitespace>
-            ' ' | '\t' | '\n' | '\r' => {
-                let _ = input.next_token();
-            }
             // Line comment: `; ... <line ending or EOF>`
             ';' => {
                 let _ = input.next_token();
-                while let Some(c) = input.next_token() {
-                    if c == '\n' || c == '\r' {
-                        break;
-                    }
-                }
+                let _: &str = till_line_ending.parse_next(input)?;
+                // Consume the line ending if present
+                let _: Option<&str> = opt(line_ending).parse_next(input)?;
             }
             // Possible nested comment or directive starting with '#'.
             '#' => {
-                // Use a copied cursor for lookahead so we don't
-                // consume `#` unless we recognize a comment or
-                // directive.
+                // Peek at the next character to decide.
                 let mut probe = *input;
                 let _ = probe.next_token(); // consume '#'
 
                 match probe.peek_token() {
                     // Nested comment `#| ... |#`.
                     Some('|') => {
-                        // Commit `#|` on the real input.
+                        // Commit both characters and parse the rest
                         let _ = input.next_token();
                         let _ = input.next_token();
-                        lex_nested_comment(input)?;
-                        continue;
+                        lex_nested_comment_body(input)?;
                     }
                     // Directives starting with `#!`.
                     Some('!') => {
-                        // Commit `#!` on the real input.
+                        // Commit both characters and parse the directive
                         let _ = input.next_token();
                         let _ = input.next_token();
-                        *fold_case = lex_directive(input)?;
-                        continue;
+                        lex_directive_body(input)?;
                     }
                     _ => {
                         // Not a nested comment or directive; this
@@ -416,23 +391,15 @@ fn lex_intertoken<'i>(input: &mut WinnowInput<'i>, fold_case: &mut bool) -> PRes
 
 /// Parse a directive word after `#!` has been consumed.
 ///
-/// Returns `true` for `fold-case`, `false` for `no-fold-case`.
+/// NOTE: We validate these directives but ignore their semantics.
+/// See R7RS-DEVIATION comment in `lex_winnow`.
 #[cold]
-fn lex_directive<'i>(input: &mut WinnowInput<'i>) -> PResult<bool> {
-    let directive: PResult<bool> = alt((
-        literal("fold-case").map(|_| true),
-        literal("no-fold-case").map(|_| false),
-    ))
-    .parse_next(input);
+fn lex_directive_body<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
+    let directive: PResult<&str> =
+        alt((literal("fold-case"), literal("no-fold-case"))).parse_next(input);
 
     match directive {
-        Ok(new_fold_case) => {
-            // Enforce delimiter per R7RS.
-            if input.peek_token().is_some_and(|ch| !is_delimiter(ch)) {
-                return lex_error("<directive>");
-            }
-            Ok(new_fold_case)
-        }
+        Ok(_) => ensure_delimiter(input, "<directive>"),
         Err(_) => lex_error("<directive>"),
     }
 }
@@ -514,7 +481,6 @@ fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
 fn token_with_span<'i>(
     input: &mut WinnowInput<'i>,
     source: &'i str,
-    fold_case: &mut bool,
 ) -> Result<Option<SpannedToken>, ParseError> {
     let len = source.len();
 
@@ -525,7 +491,7 @@ fn token_with_span<'i>(
         end: len,
     };
 
-    match lex_intertoken(input, fold_case) {
+    match lex_intertoken(input) {
         Ok(()) => {}
         Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
         Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span_before)),
@@ -563,8 +529,7 @@ fn token_with_span<'i>(
     match lex_prefixed_number(input) {
         Ok(mut literal) => {
             let end = input.current_token_start();
-            let text = &source[start..end];
-            literal.text = text.to_string();
+            literal.text = source[start..end].to_string();
             let span = Span { start, end };
             return Ok(Some(Syntax::new(span, Token::Number(literal))));
         }
@@ -590,8 +555,7 @@ fn token_with_span<'i>(
             match lex_complex_decimal(input) {
                 Ok(mut literal) => {
                     let end = input.current_token_start();
-                    let text = &source[start..end];
-                    literal.text = text.to_string();
+                    literal.text = source[start..end].to_string();
                     let span = Span { start, end };
                     Ok(Some(Syntax::new(span, Token::Number(literal))))
                 }
@@ -616,40 +580,30 @@ fn lex_winnow(source: &str) -> Result<Vec<SpannedToken>, ParseError> {
     let mut tokens = Vec::new();
     let mut input = WinnowInput::new(source);
 
-    // Track `#!fold-case` / `#!no-fold-case` directives.
-    //
-    // R7RS-DEVIATION: Although we recognize these directives
-    // lexically, we deliberately ignore their semantics for now and
-    // keep the reader case-sensitive with ASCII-only identifiers.
-    // This errs on the side of rejecting some valid programs rather
-    // than accepting invalid ones.
-    let mut fold_case = false;
+    // R7RS-DEVIATION: We recognize `#!fold-case` / `#!no-fold-case`
+    // directives lexically (and validate them), but deliberately
+    // ignore their semantics. This keeps the reader case-sensitive
+    // with ASCII-only identifiers, erring on the side of rejecting
+    // some valid programs rather than accepting invalid ones.
 
-    while let Some(token) = token_with_span(&mut input, source, &mut fold_case)? {
+    while let Some(token) = token_with_span(&mut input, source)? {
         tokens.push(token);
     }
 
     Ok(tokens)
 }
 
-/// Canonical `<nested comment>` parser using `winnow`.
+/// Parse the body of a nested comment after `#|` has been consumed.
 ///
 /// Grammar reference (Formal syntax / Lexical structure):
 ///
 /// ```text
-/// <comment> ::= ; <all subsequent characters up to a line ending>
-///             | <nested comment>
-///             | #; <intertoken space> <datum>
-///
 /// <nested comment> ::= #| <comment text>
 ///                       <comment cont>* |#
 ///
 /// <comment cont> ::= <nested comment> <comment text>
 /// ```
-///
-/// This helper assumes the initial `#|` has already been consumed and
-/// stops after the matching closing `|#`, supporting arbitrary nesting.
-fn lex_nested_comment<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
+fn lex_nested_comment_body<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
     let mut depth = 1usize;
 
     loop {
@@ -678,6 +632,19 @@ fn lex_nested_comment<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
 /// ```
 fn is_delimiter(ch: char) -> bool {
     matches!(ch, ' ' | '\t' | '\n' | '\r' | '|' | '(' | ')' | '"' | ';')
+}
+
+/// Ensure the next character is a delimiter (or EOF).
+///
+/// Many tokens in Scheme must be followed by a delimiter. This helper
+/// checks that condition and returns an error with the given nonterminal
+/// label if violated.
+#[inline]
+fn ensure_delimiter<'i>(input: &mut WinnowInput<'i>, nonterminal: &'static str) -> PResult<()> {
+    if input.peek_token().is_some_and(|ch| !is_delimiter(ch)) {
+        return lex_error(nonterminal);
+    }
+    Ok(())
 }
 
 /// Create an integer `RealRepr` from a spelling string.
@@ -840,17 +807,20 @@ fn lex_complex_with_radix<'i>(
     match lex_real_repr(input, radix) {
         Ok(repr1) => {
             // End of input or delimiter after `<real R>`: it's a real number.
-            let next_ch = input.peek_token();
-            if next_ch.is_none() || next_ch.is_some_and(is_delimiter) {
-                return Ok(make_literal(NumberValue::Real(repr1)));
-            }
+            let next_ch = match input.peek_token() {
+                None => return Ok(make_literal(NumberValue::Real(repr1))),
+                Some(ch) if is_delimiter(ch) => {
+                    return Ok(make_literal(NumberValue::Real(repr1)))
+                }
+                Some(ch) => ch,
+            };
 
-            match next_ch.unwrap() {
+            match next_ch {
                 'i' | 'I' => {
                     // Pure imaginary: `<real R> i`.
                     let mut probe = *input;
                     let _ = probe.next_token(); // consume 'i' / 'I'
-                    lex_ensure_number_delimiter(&mut probe)?;
+                    ensure_delimiter(&mut probe, "<number>")?;
 
                     *input = probe;
                     return Ok(make_literal(NumberValue::Rectangular {
@@ -864,7 +834,7 @@ fn lex_complex_with_radix<'i>(
                     let _ = probe.next_token(); // consume '@'
                     match lex_real_repr(&mut probe, radix) {
                         Ok(repr2) => {
-                            lex_ensure_number_delimiter(&mut probe)?;
+                            ensure_delimiter(&mut probe, "<number>")?;
                             *input = probe;
                             return Ok(make_literal(NumberValue::Polar {
                                 magnitude: repr1,
@@ -887,7 +857,7 @@ fn lex_complex_with_radix<'i>(
                                 }
                                 Some(ch2) if ch2 == 'i' || ch2 == 'I' => {
                                     let _ = probe.next_token();
-                                    lex_ensure_number_delimiter(&mut probe)?;
+                                    ensure_delimiter(&mut probe, "<number>")?;
                                     *input = probe;
                                     return Ok(make_literal(NumberValue::Rectangular {
                                         real: repr1,
@@ -1116,19 +1086,15 @@ fn lex_string_body<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
                 } else {
                     // Possible line splice: backslash, optional spaces/tabs,
                     // then a line ending and more spaces/tabs.
-                    input.skip_while(|c| c == ' ' || c == '\t');
+                    let _: &str = space0.parse_next(input)?;
 
                     let nl = input.peek_or_incomplete()?;
 
                     if nl == '\n' || nl == '\r' {
-                        let first = nl;
-                        let _ = input.next_token();
-                        // Handle CRLF
-                        if first == '\r' && input.peek_token() == Some('\n') {
-                            let _ = input.next_token();
-                        }
+                        // Consume line ending (handles both LF and CRLF)
+                        let _: &str = line_ending.parse_next(input)?;
                         // Skip following spaces/tabs on the next line.
-                        input.skip_while(|c| c == ' ' || c == '\t');
+                        let _: &str = space0.parse_next(input)?;
                     } else {
                         return lex_error("<string>");
                     }
@@ -1247,9 +1213,7 @@ fn lex_character<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
     };
 
     // Enforce delimiter after the `<character>` token.
-    if input.peek_token().is_some_and(|ch| !is_delimiter(ch)) {
-        return lex_error("<character>");
-    }
+    ensure_delimiter(input, "<character>")?;
 
     let end = input.current_token_start();
     Ok(Syntax::new(
@@ -1292,9 +1256,7 @@ fn lex_boolean<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
 
     // Enforce delimiter: the next character, if any, must be a
     // `<delimiter>`; otherwise this is a `<boolean>` lexical error.
-    if probe.peek_token().is_some_and(|ch| !is_delimiter(ch)) {
-        return lex_error("<boolean>");
-    }
+    ensure_delimiter(&mut probe, "<boolean>")?;
 
     // Commit the successfully parsed boolean by updating the real
     // input cursor to the probe's position.
@@ -1406,13 +1368,6 @@ fn is_digit_for_radix(ch: char, radix: NumberRadix) -> bool {
         NumberRadix::Decimal => ch.is_ascii_digit(),
         NumberRadix::Hexadecimal => ch.is_ascii_hexdigit(),
     }
-}
-
-fn lex_ensure_number_delimiter<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
-    if input.peek_token().is_some_and(|ch| !is_delimiter(ch)) {
-        return lex_error("<number>");
-    }
-    Ok(())
 }
 
 #[cfg(test)]

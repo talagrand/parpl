@@ -183,6 +183,15 @@ pub enum ParseError {
     #[error("input is incomplete; more data required")]
     Incomplete,
 
+    /// The input ends in the middle of a token (e.g., `#\`, `1e+`, `3/`).
+    ///
+    /// Unlike `Incomplete`, this indicates an incomplete token rather than
+    /// an incomplete multi-line construct. In a REPL context, this is
+    /// typically a user error rather than a prompt-for-more signal.
+    /// In a streaming context, this still means more input is needed.
+    #[error("incomplete token; input ends mid-token")]
+    IncompleteToken,
+
     /// A lexical error detected while recognizing a particular
     /// nonterminal (for example, `<string>` or `<identifier>`).
     #[error("lexical error in {nonterminal} at {span:?}: {message}")]
@@ -281,11 +290,7 @@ pub fn parse_datum(source: &str) -> Result<Syntax<Datum>, ParseError> {
 /// `<intertoken space>`.
 fn parse_boolean_datum(source: &str) -> Option<bool> {
     let trimmed = source.trim();
-    if !trimmed.starts_with('#') {
-        return None;
-    }
-
-    let rest = &trimmed[1..];
+    let rest = trimmed.strip_prefix('#')?;
     let lower = rest.to_ascii_lowercase();
     match lower.as_str() {
         "t" | "true" => Some(true),
