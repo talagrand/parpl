@@ -7,7 +7,6 @@ use winnow::ascii::{Caseless, hex_digit1};
 use winnow::combinator::alt;
 use winnow::error::{ContextError, ErrMode, Needed, StrContext};
 use winnow::stream::{Location, Stream};
-use winnow::token::any;
 #[allow(unused_imports)]
 use winnow::token::literal;
 
@@ -41,13 +40,23 @@ trait InputExt {
     fn skip_while(&mut self, predicate: impl Fn(char) -> bool) -> usize;
 
     /// Peek at the next character, returning an incomplete error if at EOF.
+    /// Use for REPL-continuable constructs (strings, nested comments).
     fn peek_or_incomplete(&mut self) -> PResult<char>;
+
+    /// Peek at the next character, returning an incomplete-token error if at EOF.
+    /// Use for mid-token EOF (e.g., after `#\`, `1e+`, `3/`).
+    fn peek_or_incomplete_token(&mut self) -> PResult<char>;
 
     /// Peek at the next character, returning a backtrack error if at EOF.
     fn peek_or_backtrack(&mut self) -> PResult<char>;
 
     /// Consume and return the next character, returning an incomplete error if at EOF.
+    /// Use for REPL-continuable constructs (strings, nested comments).
     fn next_or_incomplete(&mut self) -> PResult<char>;
+
+    /// Consume and return the next character, returning an incomplete-token error if at EOF.
+    /// Use for mid-token EOF (e.g., after `#\`).
+    fn next_or_incomplete_token(&mut self) -> PResult<char>;
 }
 
 impl InputExt for WinnowInput<'_> {
@@ -108,6 +117,15 @@ impl InputExt for WinnowInput<'_> {
     }
 
     #[inline]
+    fn peek_or_incomplete_token(&mut self) -> PResult<char> {
+        self.peek_token().ok_or_else(|| {
+            let mut ctx = ContextError::new();
+            ctx.push(StrContext::Label(INCOMPLETE_TOKEN_LABEL));
+            ErrMode::Cut(ctx)
+        })
+    }
+
+    #[inline]
     fn peek_or_backtrack(&mut self) -> PResult<char> {
         self.peek_token()
             .ok_or_else(|| ErrMode::Backtrack(ContextError::new()))
@@ -118,13 +136,32 @@ impl InputExt for WinnowInput<'_> {
         self.next_token()
             .ok_or(ErrMode::Incomplete(Needed::Unknown))
     }
+
+    #[inline]
+    fn next_or_incomplete_token(&mut self) -> PResult<char> {
+        self.next_token().ok_or_else(|| {
+            let mut ctx = ContextError::new();
+            ctx.push(StrContext::Label(INCOMPLETE_TOKEN_LABEL));
+            ErrMode::Cut(ctx)
+        })
+    }
 }
+
+/// Sentinel label used to distinguish `IncompleteToken` from `Incomplete`.
+const INCOMPLETE_TOKEN_LABEL: &str = "__incomplete_token__";
 
 #[allow(dead_code)]
 fn winnow_err_to_parse_error(err: ErrMode<WinnowInnerError>, fallback_span: Span) -> ParseError {
     match err {
         ErrMode::Incomplete(_) => ParseError::Incomplete,
         ErrMode::Cut(e) | ErrMode::Backtrack(e) => {
+            // Check for the special incomplete-token sentinel.
+            for ctx in e.context() {
+                if let StrContext::Label(INCOMPLETE_TOKEN_LABEL) = ctx {
+                    return ParseError::IncompleteToken;
+                }
+            }
+
             // Try to recover the most specific nonterminal label from the
             // `ContextError`. If none is present, fall back to a generic
             // `<token>` context.
@@ -148,9 +185,20 @@ fn winnow_backtrack<O>() -> PResult<O> {
     Err(ErrMode::Backtrack(ContextError::new()))
 }
 
-/// Helper to produce an incomplete input error.
+/// Helper to produce an incomplete input error (REPL should prompt for more).
 fn winnow_incomplete<O>() -> PResult<O> {
     Err(ErrMode::Incomplete(Needed::Unknown))
+}
+
+/// Helper to produce an incomplete token error (mid-token EOF).
+///
+/// Unlike `winnow_incomplete`, this indicates the input ended in the middle
+/// of a token (e.g., `#\`, `1e+`, `3/`). In a REPL, this is typically a user
+/// error rather than a prompt-for-more signal.
+fn winnow_incomplete_token<O>() -> PResult<O> {
+    let mut ctx = ContextError::new();
+    ctx.push(StrContext::Label(INCOMPLETE_TOKEN_LABEL));
+    Err(ErrMode::Cut(ctx))
 }
 
 /// Helper to produce a lexical error for a given nonterminal.
@@ -215,15 +263,15 @@ fn parse_exponent_suffix<'i>(input: &mut WinnowInput<'i>, text: &mut String) -> 
     };
     text.push(e);
 
-    let sign_or_digit = input.peek_or_incomplete()?;
+    let sign_or_digit = input.peek_or_incomplete_token()?;
     if sign_or_digit == '+' || sign_or_digit == '-' {
         text.push(sign_or_digit);
         let _ = input.next_token();
-        let _ = input.peek_or_incomplete()?;
+        let _ = input.peek_or_incomplete_token()?;
     }
 
     if input.eat_while(text, |c| c.is_ascii_digit()) == 0 {
-        return winnow_incomplete();
+        return winnow_incomplete_token();
     }
 
     Ok(())
@@ -835,7 +883,7 @@ fn lex_complex_with_radix<'i>(
                             match probe.peek_token() {
                                 None => {
                                     // Parsed the second number but hit EOF before 'i'.
-                                    return winnow_incomplete();
+                                    return winnow_incomplete_token();
                                 }
                                 Some(ch2) if ch2 == 'i' || ch2 == 'I' => {
                                     let _ = probe.next_token();
@@ -936,7 +984,8 @@ fn lex_prefixed_number<'i>(input: &mut WinnowInput<'i>) -> PResult<NumberLiteral
             Some(c) => c,
             None => {
                 if radix.is_some() || exactness.is_some() {
-                    return winnow_incomplete();
+                    // Already saw a prefix like `#b`, then another `#` at EOF.
+                    return winnow_incomplete_token();
                 } else {
                     return winnow_backtrack();
                 }
@@ -987,7 +1036,7 @@ fn lex_prefixed_number<'i>(input: &mut WinnowInput<'i>) -> PResult<NumberLiteral
     let radix_value = radix.unwrap_or(NumberRadix::Decimal);
     let exactness_value = exactness.unwrap_or(NumberExactness::Unspecified);
 
-    let _ = probe.peek_or_incomplete()?;
+    let _ = probe.peek_or_incomplete_token()?;
 
     match lex_complex_with_radix(&mut probe, radix_value, exactness_value) {
         Ok(literal) => {
@@ -1157,12 +1206,12 @@ fn lex_character<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
         }
         // `#` at end-of-input followed by missing `\\` is an
         // incomplete `<character>` token.
-        (Some('#'), None) => return winnow_incomplete(),
+        (Some('#'), None) => return winnow_incomplete_token(),
         _ => return winnow_backtrack(),
     }
 
     // At least one character must follow `#\`.
-    let c1: char = any.parse_next(input)?;
+    let c1 = input.next_or_incomplete_token()?;
 
     let value_char = if c1.eq_ignore_ascii_case(&'x') {
         // Potential `#\x<hex scalar value>` form.
@@ -1312,7 +1361,7 @@ fn lex_ureal<'i>(input: &mut WinnowInput<'i>, radix: NumberRadix) -> PResult<Fin
             text.push('/');
             let _ = probe.next_token();
 
-            let _ = probe.peek_or_incomplete()?;
+            let _ = probe.peek_or_incomplete_token()?;
 
             let denom_digits = probe.eat_while(&mut text, |c| is_digit_for_radix(c, radix)) > 0;
             if !denom_digits {
@@ -1387,6 +1436,7 @@ mod tests {
     enum ErrorMatcher {
         Unimplemented,
         Incomplete,
+        IncompleteToken,
         Lex(&'static str), // nonterminal
     }
 
@@ -1463,6 +1513,7 @@ mod tests {
             match (self, err) {
                 (ErrorMatcher::Unimplemented, ParseError::Unimplemented) => {}
                 (ErrorMatcher::Incomplete, ParseError::Incomplete) => {}
+                (ErrorMatcher::IncompleteToken, ParseError::IncompleteToken) => {}
                 (ErrorMatcher::Lex(nt), ParseError::Lex { nonterminal, .. }) => {
                     assert_eq!(nt, nonterminal, "{}: error nonterminal mismatch", test_name);
                 }
@@ -1479,6 +1530,7 @@ mod tests {
             match self {
                 Self::Unimplemented => write!(f, "Unimplemented"),
                 Self::Incomplete => write!(f, "Incomplete"),
+                Self::IncompleteToken => write!(f, "IncompleteToken"),
                 Self::Lex(arg0) => f.debug_tuple("Lex").field(arg0).finish(),
             }
         }
@@ -1758,6 +1810,21 @@ mod tests {
                 expected: Expected::Error(ErrorMatcher::Incomplete),
             },
             TestCase {
+                name: "incomplete_character_prefix",
+                input: r#"#\"#,
+                expected: Expected::Error(ErrorMatcher::IncompleteToken),
+            },
+            TestCase {
+                name: "incomplete_hash_only",
+                input: "#",
+                expected: Expected::Error(ErrorMatcher::IncompleteToken),
+            },
+            TestCase {
+                name: "incomplete_double_prefix",
+                input: "#b#",
+                expected: Expected::Error(ErrorMatcher::IncompleteToken),
+            },
+            TestCase {
                 name: "unknown_directive",
                 input: "#!unknown-directive",
                 expected: Expected::Error(ErrorMatcher::Lex("<directive>")),
@@ -1830,12 +1897,12 @@ mod tests {
             TestCase {
                 name: "incomplete_decimal_1",
                 input: "1e",
-                expected: Expected::Error(ErrorMatcher::Incomplete),
+                expected: Expected::Error(ErrorMatcher::IncompleteToken),
             },
             TestCase {
                 name: "incomplete_decimal_2",
                 input: "1.0e+",
-                expected: Expected::Error(ErrorMatcher::Incomplete),
+                expected: Expected::Error(ErrorMatcher::IncompleteToken),
             },
             TestCase {
                 name: "malformed_number_suffix",
@@ -1853,7 +1920,7 @@ mod tests {
             TestCase {
                 name: "incomplete_rational",
                 input: "3/",
-                expected: Expected::Error(ErrorMatcher::Incomplete),
+                expected: Expected::Error(ErrorMatcher::IncompleteToken),
             },
             TestCase {
                 name: "malformed_rational_1",
@@ -1969,7 +2036,7 @@ mod tests {
             TestCase {
                 name: "prefixed_errors_4",
                 input: "#d",
-                expected: Expected::Error(ErrorMatcher::Incomplete),
+                expected: Expected::Error(ErrorMatcher::IncompleteToken),
             },
             TestCase {
                 name: "infnan_plain",
@@ -2071,7 +2138,7 @@ mod tests {
             TestCase {
                 name: "nondecimal_errors_2",
                 input: "#o7/",
-                expected: Expected::Error(ErrorMatcher::Incomplete),
+                expected: Expected::Error(ErrorMatcher::IncompleteToken),
             },
             TestCase {
                 name: "nondecimal_errors_3",
@@ -2165,7 +2232,7 @@ mod tests {
             TestCase {
                 name: "ambiguous_complex_1",
                 input: "1+2",
-                expected: Expected::Error(ErrorMatcher::Incomplete),
+                expected: Expected::Error(ErrorMatcher::IncompleteToken),
             },
             TestCase {
                 name: "ambiguous_complex_2",
