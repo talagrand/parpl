@@ -334,13 +334,13 @@ fn parse_string_datum(source: &str) -> Result<Option<Syntax<Datum>>, ParseError>
     {
         if tokens.len() == 1 {
             return Ok(Some(Syntax::new(first.span, Datum::String(s.clone()))));
-                        } else {
-                            return Err(ParseError::lexical(
+        } else {
+            return Err(ParseError::lexical(
                 tokens[1].span,
-            "<string>",
-            "extra characters after end of string literal",
-        ));
-    }
+                "<string>",
+                "extra characters after end of string literal",
+            ));
+        }
     }
 
     Ok(None)

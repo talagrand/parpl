@@ -767,20 +767,70 @@ fn lex_sign_ureal_for_radix<'i>(
 /// This first tries `<infnan>` via `lex_infnan` and, on backtrack,
 /// falls back to `<sign> <ureal R>` via `lex_sign_ureal_for_radix`.
 fn lex_real_repr<'i>(input: &mut WinnowInput<'i>, radix: NumberRadix) -> PResult<RealRepr> {
-    let start_state = *input;
+    let start = *input;
 
-    // Try `<infnan>` first.
-    match lex_infnan(input) {
-        Ok(infnan) => return Ok(RealRepr::Infnan(infnan)),
-        Err(ErrMode::Backtrack(_)) => {
-            // Not an `<infnan>`; reset and try `<sign> <ureal R>`.
-            *input = start_state;
+    // Check for sign
+    let sign = input.eat_if(|c| c == '+' || c == '-');
+
+    // Check for inf/nan
+    // Must start with i/I or n/N (after sign)
+    // Note: if no sign, can't be infnan (grammar: +inf.0 | -inf.0 ...)
+    if let (Some(s), Some(c)) = (sign, input.peek_token()) {
+        match c {
+            'i' | 'I' => {
+                let mut probe = *input;
+                let res: Result<&str, ErrMode<ContextError>> =
+                    Caseless("inf.0").parse_next(&mut probe);
+                if res.is_ok() {
+                    *input = probe;
+                    return Ok(RealRepr::Infnan(if s == '+' {
+                        InfinityNan::PositiveInfinity
+                    } else {
+                        InfinityNan::NegativeInfinity
+                    }));
+                }
+            }
+            'n' | 'N' => {
+                let mut probe = *input;
+                let res: Result<&str, ErrMode<ContextError>> =
+                    Caseless("nan.0").parse_next(&mut probe);
+                if res.is_ok() {
+                    *input = probe;
+                    return Ok(RealRepr::Infnan(if s == '+' {
+                        InfinityNan::PositiveNaN
+                    } else {
+                        InfinityNan::NegativeNaN
+                    }));
+                }
+            }
+            _ => {}
         }
-        Err(e) => return Err(e),
     }
 
-    // `<sign> <ureal R>`.
-    lex_sign_ureal_for_radix(input, radix).map(RealRepr::Finite)
+    // Not infnan. Try ureal.
+    // If we consumed a sign, we need to pass it to ureal or handle it.
+    // lex_ureal parses unsigned real.
+
+    match lex_ureal(input, radix) {
+        Ok(mut finite) => {
+            if let Some(s) = sign {
+                match &mut finite {
+                    FiniteRealRepr::Integer { spelling }
+                    | FiniteRealRepr::Rational { spelling }
+                    | FiniteRealRepr::Decimal { spelling } => {
+                        spelling.insert(0, s);
+                    }
+                }
+            }
+            Ok(RealRepr::Finite(finite))
+        }
+        Err(ErrMode::Backtrack(_)) => {
+            // If ureal failed, we need to backtrack the sign too.
+            *input = start;
+            Err(ErrMode::Backtrack(ContextError::new()))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Canonical `<complex R>` / `<real R>` parser using `winnow`.
@@ -1241,24 +1291,24 @@ fn lex_character<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
 /// `#t` / `#f` and their long forms are always recognized as booleans.
 fn lex_boolean<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
     let start = input.current_token_start();
-
-    // Use a probing cursor so that we only commit to a `<boolean>`
-    // token when the full spelling matches `#t`, `#f`, `#true`, or
-    // `#false` with a proper delimiter. On mismatch, we backtrack
-    // without consuming any input so other `#`-prefixed token kinds
-    // can claim the sequence.
     let mut probe = *input;
 
-    let value = match alt::<_, _, ContextError, _>((
-        Caseless("#true").value(true),
-        Caseless("#false").value(false),
-        Caseless("#t").value(true),
-        Caseless("#f").value(false),
-    ))
-    .parse_next(&mut probe)
-    {
-        Ok(v) => v,
-        Err(_) => return winnow_backtrack(),
+    if !probe.eat('#') {
+        return winnow_backtrack();
+    }
+
+    let value = match probe.next_token() {
+        Some('t') | Some('T') => {
+            // Check for optional "rue"
+            let _: Result<&str, ErrMode<ContextError>> = Caseless("rue").parse_next(&mut probe);
+            true
+        }
+        Some('f') | Some('F') => {
+            // Check for optional "alse"
+            let _: Result<&str, ErrMode<ContextError>> = Caseless("alse").parse_next(&mut probe);
+            false
+        }
+        _ => return winnow_backtrack(),
     };
 
     // Enforce delimiter: the next character, if any, must be a

@@ -6,3 +6,12 @@ edition = "2024"
 [dependencies]
 thiserror = "1"
 winnow = "0.7.13"
+
+
+
+[profile.release]
+# Optimize for size
+#opt-level = "z"     # Optimize for size instead of speed
+lto = true          # Enable Link Time Optimization
+codegen-units = 1   # Reduce parallel code generation
+strip = true        # Remove debug symbols
