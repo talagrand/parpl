@@ -240,7 +240,11 @@ fn try_parse_unit_imaginary<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<c
         return Ok(None);
     };
     if probe.eat_if(|c| c == 'i' || c == 'I').is_some() {
-        ensure_delimiter(&mut probe, "<number>")?;
+        // Must be followed by delimiter or EOF for this to be `+i` / `-i`.
+        // If not, it could be an identifier like `+if`, so return None.
+        if probe.peek_token().is_some_and(|ch| !is_delimiter(ch)) {
+            return Ok(None);
+        }
         *input = probe;
         Ok(Some(sign_ch))
     } else {
@@ -325,10 +329,22 @@ pub enum Token {
     Dot,
     /// `#;` (datum comment prefix)
     ///
-    /// Note: This is a deviation from R7RS, which treats `#; <datum>` as
-    /// intertoken space. Since the lexer cannot parse `<datum>`, it yields
-    /// this token so the parser can perform the skipping.
+    /// R7RS-DEVIATION: Datum comments handled at parser level, not lexer.
+    /// See R7RS-DEVIATIONS.md §3 for full details.
+    ///
+    /// R7RS treats `#; <datum>` as intertoken space (i.e., the lexer should
+    /// skip the `#;` and the following datum). However, determining what
+    /// constitutes a `<datum>` requires a full parser—the lexer alone cannot
+    /// know where the datum ends.
+    ///
+    /// Our approach: The lexer emits `Token::DatumComment` when it sees `#;`,
+    /// and the parser is responsible for consuming and discarding the next
+    /// datum. This keeps the lexer simple and context-free.
     DatumComment,
+    /// `#n=` (label definition)
+    LabelDef(u64),
+    /// `#n#` (label reference)
+    LabelRef(u64),
 }
 
 /// A single token paired with its source span.
@@ -417,7 +433,13 @@ fn lex_intertoken<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
     }
 }
 
-/// Parse a directive word after `#!` has been consumed.
+/// Parse a `<directive>` word after `#!` has been consumed.
+///
+/// Grammar reference (spec/syn.md / Lexical structure):
+///
+/// ```text
+/// <directive> ::= #!fold-case | #!no-fold-case
+/// ```
 ///
 /// NOTE: We validate these directives but ignore their semantics.
 /// See R7RS-DEVIATION comment in `lex_winnow`.
@@ -432,6 +454,12 @@ fn lex_directive_body<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
 }
 
 /// Canonical punctuation parser using `winnow`.
+///
+/// Grammar reference (spec/syn.md / `<token>`):
+///
+/// ```text
+/// ( | ) | #( | #u8( | ' | ` | , | ,@ | .
+/// ```
 fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
     let start = input.current_token_start();
 
@@ -477,6 +505,35 @@ fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
                         return winnow_backtrack();
                     }
                 }
+                Some(';') => {
+                    // Datum comment prefix - emit token for parser to handle
+                    let _ = input.next_token();
+                    Token::DatumComment
+                }
+                Some(c) if c.is_ascii_digit() => {
+                    // Label definition `#n=` or reference `#n#`
+                    let mut probe = *input;
+                    let mut text = String::new();
+                    if probe.eat_while(&mut text, |c| c.is_ascii_digit()) > 0 {
+                        match probe.peek_token() {
+                            Some('=') => {
+                                let _ = probe.next_token();
+                                *input = probe;
+                                let n = text.parse::<u64>().unwrap(); // Safe because we only ate digits
+                                Token::LabelDef(n)
+                            }
+                            Some('#') => {
+                                let _ = probe.next_token();
+                                *input = probe;
+                                let n = text.parse::<u64>().unwrap();
+                                Token::LabelRef(n)
+                            }
+                            _ => return winnow_backtrack(),
+                        }
+                    } else {
+                        return winnow_backtrack();
+                    }
+                }
                 _ => {
                     // Let other `#`-prefixed tokens handle this.
                     return winnow_backtrack();
@@ -487,10 +544,25 @@ fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
             // If `.` is followed by a digit, treat this as the
             // start of a decimal number and let the numeric
             // lexers claim it instead of producing a `.` token.
+            // If `.` is followed by another `.`, it could be `...` (identifier).
             let mut probe = *input;
             let _ = probe.next_token(); // consume '.'
-            if probe.peek_token().is_some_and(|c| c.is_ascii_digit()) {
-                return winnow_backtrack();
+            match probe.peek_token() {
+                Some(c) if c.is_ascii_digit() => {
+                    // Decimal number like `.5`
+                    return winnow_backtrack();
+                }
+                Some('.') => {
+                    // Could be `...` - let identifier parser handle it
+                    return winnow_backtrack();
+                }
+                Some(c) if is_dot_subsequent(c) => {
+                    // Could be `.foo` - let identifier parser handle it
+                    return winnow_backtrack();
+                }
+                _ => {
+                    // Just a single `.` - this is Token::Dot
+                }
             }
 
             let _ = input.next_token();
@@ -584,22 +656,33 @@ fn token_with_span<'i>(
                     let end = input.current_token_start();
                     literal.text = source[start..end].to_string();
                     let span = Span { start, end };
-                    Ok(Some(Syntax::new(span, Token::Number(literal))))
+                    return Ok(Some(Syntax::new(span, Token::Number(literal))));
                 }
                 Err(ErrMode::Backtrack(_)) => {
-                    // Not a `<number>` starting here; leave to other
-                    // token classes (identifiers, etc.) once implemented.
-                    Err(ParseError::Unimplemented)
+                    // Not a `<number>` starting here; try as identifier
+                    // (e.g., `+` or `-` alone, or peculiar identifiers)
                 }
-                Err(ErrMode::Incomplete(_)) => Err(ParseError::Incomplete),
-                Err(e) => Err(winnow_err_to_parse_error(e, fallback_span)),
+                Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
+                Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
             }
         }
-        _ => {
-            // Other token classes (identifiers, etc.) are not yet implemented.
-            Err(ParseError::Unimplemented)
-        }
+        _ => {}
     }
+
+    // 7. Identifiers (including peculiar identifiers like `+`, `-`, `...`).
+    match lex_identifier(input) {
+        Ok(spanned) => return Ok(Some(spanned)),
+        Err(ErrMode::Backtrack(_)) => {}
+        Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
+        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+    }
+
+    // No token matched - this is an error
+    Err(ParseError::lexical(
+        fallback_span,
+        "<token>",
+        format!("unexpected character: {:?}", ch),
+    ))
 }
 
 /// `winnow`-driven lexer entry point used by `lex`.
@@ -607,11 +690,13 @@ fn lex_winnow(source: &str) -> Result<Vec<SpannedToken>, ParseError> {
     let mut tokens = Vec::new();
     let mut input = WinnowInput::new(source);
 
-    // R7RS-DEVIATION: We recognize `#!fold-case` / `#!no-fold-case`
-    // directives lexically (and validate them), but deliberately
-    // ignore their semantics. This keeps the reader case-sensitive
-    // with ASCII-only identifiers, erring on the side of rejecting
-    // some valid programs rather than accepting invalid ones.
+    // R7RS-DEVIATION: Fold-case directives recognized but ignored.
+    // See R7RS-DEVIATIONS.md §2 for full details.
+    //
+    // We recognize `#!fold-case` / `#!no-fold-case` directives lexically
+    // (and validate them), but deliberately ignore their semantics.
+    // The reader remains case-sensitive throughout. Identifiers `FOO`
+    // and `foo` are treated as distinct.
 
     while let Some(token) = token_with_span(&mut input, source)? {
         tokens.push(token);
@@ -661,6 +746,132 @@ fn is_delimiter(ch: char) -> bool {
     matches!(ch, ' ' | '\t' | '\n' | '\r' | '|' | '(' | ')' | '"' | ';')
 }
 
+// --- Identifier character classification ---
+//
+// The R7RS spec allows Unicode characters with specific general categories
+// in identifiers. Rust's stdlib doesn't expose Unicode general categories
+// directly, but we can approximate using the available methods.
+//
+// R7RS-DEVIATION: Conservative Unicode identifier support.
+// See R7RS-DEVIATIONS.md §1 for full details.
+//
+// Allowed categories per R7RS:
+//   Lu, Ll, Lt, Lm, Lo - Letters (covered by is_alphabetic())
+//   Mn, Mc, Me - Marks (NOT in subsequent initial, Mc/Me not in initial)
+//   Nd, Nl, No - Numbers (Nd not in initial)
+//   Pd, Pc, Po, Sc, Sm, Sk, So - Punctuation/Symbols
+//   Co - Private Use
+//   U+200C, U+200D - Zero-width joiner/non-joiner
+//
+// Rust stdlib limitations - we can only detect:
+//   - is_alphabetic() → Lu, Ll, Lt, Lm, Lo, Nl
+//   - is_numeric() → Nd, Nl, No
+//
+// We CANNOT detect: Mn, Mc, Me, Pd, Pc, Po, Sc, Sm, Sk, So, Co, U+200C/D
+//
+// Consequence: We reject some valid R7RS identifiers (those using marks,
+// symbols, or private-use characters) but never accept invalid ones.
+
+/// Check if a character is an ASCII `<letter>`.
+#[inline]
+fn is_ascii_letter(ch: char) -> bool {
+    ch.is_ascii_alphabetic()
+}
+
+/// Check if a character is an ASCII `<special initial>`.
+///
+/// ```text
+/// <special initial> ::= ! | $ | % | & | * | / | : | < | =
+///                     | > | ? | ^ | _ | ~
+/// ```
+#[inline]
+fn is_special_initial(ch: char) -> bool {
+    matches!(
+        ch,
+        '!' | '$' | '%' | '&' | '*' | '/' | ':' | '<' | '=' | '>' | '?' | '^' | '_' | '~'
+    )
+}
+
+/// Check if a character is an ASCII `<initial>`.
+///
+/// ```text
+/// <initial> ::= <letter> | <special initial>
+/// ```
+#[inline]
+fn is_ascii_initial(ch: char) -> bool {
+    is_ascii_letter(ch) || is_special_initial(ch)
+}
+
+/// Check if a character is a Unicode character valid as an identifier initial.
+///
+/// Per R7RS, Unicode characters with categories Lu, Ll, Lt, Lm, Lo, Mn, Nl, No,
+/// Pd, Pc, Po, Sc, Sm, Sk, So, Co are allowed, but NOT Nd, Mc, Me as initial.
+///
+/// We use `is_alphabetic()` which covers Lu, Ll, Lt, Lm, Lo, Nl.
+/// This is conservative - we reject valid chars we can't verify.
+#[inline]
+fn is_unicode_initial(ch: char) -> bool {
+    // Must be non-ASCII (ASCII handled separately)
+    !ch.is_ascii() && ch.is_alphabetic()
+}
+
+/// Check if a character is valid as `<initial>` (first char of identifier).
+#[inline]
+fn is_initial(ch: char) -> bool {
+    is_ascii_initial(ch) || is_unicode_initial(ch)
+}
+
+/// Check if a character is an ASCII `<digit>`.
+#[inline]
+fn is_ascii_digit_char(ch: char) -> bool {
+    ch.is_ascii_digit()
+}
+
+/// Check if a character is a `<special subsequent>`.
+///
+/// ```text
+/// <special subsequent> ::= <explicit sign> | . | @
+/// ```
+#[inline]
+fn is_special_subsequent(ch: char) -> bool {
+    matches!(ch, '+' | '-' | '.' | '@')
+}
+
+/// Check if a character is valid as `<subsequent>`.
+///
+/// ```text
+/// <subsequent> ::= <initial> | <digit> | <special subsequent>
+/// ```
+///
+/// For Unicode, we allow is_alphanumeric() which includes Nd (digits).
+#[inline]
+fn is_subsequent(ch: char) -> bool {
+    is_initial(ch)
+        || is_ascii_digit_char(ch)
+        || is_special_subsequent(ch)
+        || (!ch.is_ascii() && ch.is_alphanumeric())
+}
+
+/// Check if a character is a `<sign subsequent>`.
+///
+/// ```text
+/// <sign subsequent> ::= <initial> | <explicit sign> | @
+/// ```
+#[inline]
+fn is_sign_subsequent(ch: char) -> bool {
+    is_initial(ch) || matches!(ch, '+' | '-' | '@')
+}
+
+/// Check if a character is a `<dot subsequent>`.
+///
+/// ```text
+/// <dot subsequent> ::= <sign subsequent> | .
+/// ```
+#[inline]
+fn is_dot_subsequent(ch: char) -> bool {
+    is_sign_subsequent(ch) || ch == '.'
+}
+
 /// Ensure the next character is a delimiter (or EOF).
 ///
 /// Many tokens in Scheme must be followed by a delimiter. This helper
@@ -697,64 +908,6 @@ fn named_character(name: &str) -> Option<char> {
     })
 }
 
-/// Canonical `<infnan>` parser using `winnow`.
-///
-/// Grammar reference (Formal syntax / `<number>`):
-///
-/// ```text
-/// <infnan> ::= +inf.0 | -inf.0 | +nan.0 | -nan.0
-/// ```
-///
-/// Alphabetic characters are treated case-insensitively. Any mismatch or
-/// incomplete spelling results in a recoverable backtrack so other number
-/// forms can claim the input.
-fn lex_infnan<'i>(input: &mut WinnowInput<'i>) -> PResult<InfinityNan> {
-    alt((
-        Caseless("+inf.0").value(InfinityNan::PositiveInfinity),
-        Caseless("-inf.0").value(InfinityNan::NegativeInfinity),
-        Caseless("+nan.0").value(InfinityNan::PositiveNaN),
-        Caseless("-nan.0").value(InfinityNan::NegativeNaN),
-    ))
-    .parse_next(input)
-}
-
-/// Parse `<sign> <ureal R>` for a given radix.
-///
-/// Grammar reference (Formal syntax / `<number>`):
-///
-/// ```text
-/// <real R> ::= <sign> <ureal R>
-///            | <infnan>
-///
-/// <sign> ::= <empty> | + | -
-/// ```
-///
-/// This parses an optional sign followed by `<ureal R>` via `lex_ureal`.
-fn lex_sign_ureal_for_radix<'i>(
-    input: &mut WinnowInput<'i>,
-    radix: NumberRadix,
-) -> PResult<FiniteRealRepr> {
-    let mut probe = *input;
-    let sign = probe.eat_if(|ch| ch == '+' || ch == '-');
-
-    match lex_ureal(&mut probe, radix) {
-        Ok(mut finite) => {
-            if let Some(s) = sign {
-                match &mut finite {
-                    FiniteRealRepr::Integer { spelling }
-                    | FiniteRealRepr::Rational { spelling }
-                    | FiniteRealRepr::Decimal { spelling } => {
-                        spelling.insert(0, s);
-                    }
-                }
-            }
-            *input = probe;
-            Ok(finite)
-        }
-        Err(e) => Err(e),
-    }
-}
-
 /// Canonical `<real R>` parser using `winnow`.
 ///
 /// Grammar reference (Formal syntax / `<number>`):
@@ -764,8 +917,8 @@ fn lex_sign_ureal_for_radix<'i>(
 ///            | <infnan>
 /// ```
 ///
-/// This first tries `<infnan>` via `lex_infnan` and, on backtrack,
-/// falls back to `<sign> <ureal R>` via `lex_sign_ureal_for_radix`.
+/// This first tries `<infnan>` and, on backtrack,
+/// falls back to `<sign> <ureal R>`.
 fn lex_real_repr<'i>(input: &mut WinnowInput<'i>, radix: NumberRadix) -> PResult<RealRepr> {
     let start = *input;
 
@@ -923,7 +1076,8 @@ fn lex_complex_with_radix<'i>(
                     let mut probe = *input;
                     match lex_real_repr(&mut probe, radix) {
                         Ok(repr2) => {
-                            cut_lex_error_token(alt(('i', 'I')), "<number>").parse_next(&mut probe)?;
+                            cut_lex_error_token(alt(('i', 'I')), "<number>")
+                                .parse_next(&mut probe)?;
                             ensure_delimiter(&mut probe, "<number>")?;
                             *input = probe;
                             return Ok(make_literal(NumberValue::Rectangular {
@@ -1199,6 +1353,274 @@ fn lex_string<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
     Ok(Syntax::new(Span { start, end }, Token::String(value)))
 }
 
+// --- Identifier Lexer ---
+
+/// Parse a hex escape inside a vertical-line delimited identifier.
+/// The leading `\x` has been consumed; parse `<hex digits>;`.
+fn lex_identifier_hex_escape<'i>(input: &mut WinnowInput<'i>) -> PResult<char> {
+    let digits = cut_lex_error_token(hex_digit1, "<identifier>").parse_next(input)?;
+    let _ = cut_lex_error_token(';', "<identifier>").parse_next(input)?;
+
+    let codepoint = u32::from_str_radix(digits, 16).map_err(|_| {
+        let mut ctx = ContextError::new();
+        ctx.push(StrContext::Label("<identifier>"));
+        ErrMode::Cut(ctx)
+    })?;
+
+    char::from_u32(codepoint).ok_or_else(|| {
+        let mut ctx = ContextError::new();
+        ctx.push(StrContext::Label("<identifier>"));
+        ErrMode::Cut(ctx)
+    })
+}
+
+/// Parse a `<symbol element>` inside a vertical-line delimited identifier.
+///
+/// ```text
+/// <symbol element> ::= any character other than <vertical line> or \
+///                    | <inline hex escape> | <mnemonic escape> | \|
+/// ```
+fn lex_symbol_element<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<char>> {
+    let ch = input.peek_or_incomplete()?;
+
+    match ch {
+        '|' => Ok(None), // End of symbol - don't consume
+        '\\' => {
+            let _ = input.next_token();
+            let escape_ch = input.next_or_incomplete()?;
+            match escape_ch {
+                'x' | 'X' => Ok(Some(lex_identifier_hex_escape(input)?)),
+                'a' => Ok(Some('\u{7}')),
+                'b' => Ok(Some('\u{8}')),
+                't' => Ok(Some('\t')),
+                'n' => Ok(Some('\n')),
+                'r' => Ok(Some('\r')),
+                '|' => Ok(Some('|')),
+                '\\' => Ok(Some('\\')),
+                _ => lex_error("<identifier>"),
+            }
+        }
+        _ => {
+            let _ = input.next_token();
+            Ok(Some(ch))
+        }
+    }
+}
+
+/// Parse a vertical-line delimited identifier: `|<symbol element>*|`.
+/// The opening `|` has already been consumed.
+fn lex_vertical_line_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
+    let mut result = String::new();
+
+    while let Some(ch) = lex_symbol_element(input)? {
+        result.push(ch);
+    }
+
+    // Consume the closing `|`
+    if !input.eat('|') {
+        return winnow_incomplete();
+    }
+
+    Ok(result)
+}
+
+/// Parse a `<peculiar identifier>`.
+///
+/// ```text
+/// <peculiar identifier> ::= <explicit sign>
+///                         | <explicit sign> <sign subsequent> <subsequent>*
+///                         | <explicit sign> . <dot subsequent> <subsequent>*
+///                         | . <dot subsequent> <subsequent>*
+/// ```
+///
+/// IMPORTANT: This must NOT match `+i`, `-i`, or `<infnan>` which are numbers.
+/// We handle this by checking for these cases and backtracking.
+fn lex_peculiar_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
+    let start = *input;
+    let mut result = String::new();
+
+    let first = input.peek_or_backtrack()?;
+
+    match first {
+        '+' | '-' => {
+            result.push(first);
+            let _ = input.next_token();
+
+            // Check what follows
+            match input.peek_token() {
+                None => {
+                    // Just `+` or `-` alone - valid peculiar identifier
+                    Ok(result)
+                }
+                Some(ch) if is_delimiter(ch) => {
+                    // `+` or `-` followed by delimiter - valid
+                    Ok(result)
+                }
+                Some('.') => {
+                    // `<explicit sign> . <dot subsequent> <subsequent>*`
+                    result.push('.');
+                    let _ = input.next_token();
+
+                    // Must have <dot subsequent>
+                    let ds = input.peek_or_backtrack().map_err(|_| {
+                        *input = start;
+                        ErrMode::Backtrack(ContextError::new())
+                    })?;
+
+                    if !is_dot_subsequent(ds) {
+                        *input = start;
+                        return winnow_backtrack();
+                    }
+                    result.push(ds);
+                    let _ = input.next_token();
+
+                    // Consume remaining <subsequent>*
+                    input.eat_while(&mut result, is_subsequent);
+                    Ok(result)
+                }
+                Some(ch) if is_sign_subsequent(ch) => {
+                    // Check for `+i`, `-i` which are numbers, not identifiers
+                    if (ch == 'i' || ch == 'I')
+                        && input
+                            .peek_token()
+                            .map(|c| c == 'i' || c == 'I')
+                            .unwrap_or(false)
+                    {
+                        // Peek ahead after the 'i'
+                        let mut probe = *input;
+                        let _ = probe.next_token(); // consume 'i'
+                        match probe.peek_token() {
+                            None => {
+                                // This is `+i` or `-i` - a number, not identifier
+                                *input = start;
+                                return winnow_backtrack();
+                            }
+                            Some(c) if is_delimiter(c) => {
+                                // This is `+i` or `-i` - a number, not identifier
+                                *input = start;
+                                return winnow_backtrack();
+                            }
+                            _ => {
+                                // Something follows - could be `+if` etc., valid identifier
+                            }
+                        }
+                    }
+
+                    // Check for infnan: +inf.0, -inf.0, +nan.0, -nan.0
+                    if ch == 'i' || ch == 'I' || ch == 'n' || ch == 'N' {
+                        let mut probe = *input;
+                        let res: Result<&str, ErrMode<ContextError>> =
+                            alt((Caseless("inf.0"), Caseless("nan.0"))).parse_next(&mut probe);
+                        if res.is_ok() {
+                            // Check if followed by delimiter
+                            match probe.peek_token() {
+                                None => {
+                                    // This is infnan - a number
+                                    *input = start;
+                                    return winnow_backtrack();
+                                }
+                                Some(c) if is_delimiter(c) => {
+                                    // This is infnan - a number
+                                    *input = start;
+                                    return winnow_backtrack();
+                                }
+                                _ => {
+                                    // Something follows - continue as identifier
+                                }
+                            }
+                        }
+                    }
+
+                    // `<explicit sign> <sign subsequent> <subsequent>*`
+                    result.push(ch);
+                    let _ = input.next_token();
+
+                    // Consume remaining <subsequent>*
+                    input.eat_while(&mut result, is_subsequent);
+                    Ok(result)
+                }
+                _ => {
+                    // Invalid character after sign
+                    *input = start;
+                    winnow_backtrack()
+                }
+            }
+        }
+        '.' => {
+            // `. <dot subsequent> <subsequent>*`
+            result.push('.');
+            let _ = input.next_token();
+
+            // Must have <dot subsequent>
+            let ds = input.peek_or_backtrack().map_err(|_| {
+                *input = start;
+                ErrMode::Backtrack(ContextError::new())
+            })?;
+
+            if !is_dot_subsequent(ds) {
+                *input = start;
+                return winnow_backtrack();
+            }
+
+            // Check for `...` which is a valid peculiar identifier
+            // but also check it's not just `.` followed by a number
+            if ds == '.' {
+                // Continue - this could be `...` or `..<subsequent>*`
+            }
+
+            result.push(ds);
+            let _ = input.next_token();
+
+            // Consume remaining <subsequent>*
+            input.eat_while(&mut result, is_subsequent);
+            Ok(result)
+        }
+        _ => winnow_backtrack(),
+    }
+}
+
+/// Canonical `<identifier>` parser.
+///
+/// Grammar reference:
+///
+/// ```text
+/// <identifier> ::= <initial> <subsequent>*
+///                 | <vertical line> <symbol element>* <vertical line>
+///                 | <peculiar identifier>
+/// ```
+fn lex_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
+    let start = input.current_token_start();
+
+    let first = input.peek_or_backtrack()?;
+
+    let name = match first {
+        // Vertical-line delimited identifier
+        '|' => {
+            let _ = input.next_token();
+            lex_vertical_line_identifier(input)?
+        }
+        // Regular identifier: <initial> <subsequent>*
+        ch if is_initial(ch) => {
+            let mut name = String::new();
+            name.push(ch);
+            let _ = input.next_token();
+            input.eat_while(&mut name, is_subsequent);
+            name
+        }
+        // Peculiar identifier (starts with +, -, or .)
+        '+' | '-' | '.' => lex_peculiar_identifier(input)?,
+        _ => return winnow_backtrack(),
+    };
+
+    // Identifiers not starting with `|` must be followed by delimiter or EOF
+    if first != '|' {
+        ensure_delimiter(input, "<identifier>")?;
+    }
+
+    let end = input.current_token_start();
+    Ok(Syntax::new(Span { start, end }, Token::Identifier(name)))
+}
+
 /// Canonical `<character>` parser using `winnow`.
 ///
 /// Grammar reference (Formal syntax / `<character>`):
@@ -1446,7 +1868,6 @@ mod tests {
     }
 
     enum ErrorMatcher {
-        Unimplemented,
         Incomplete,
         IncompleteToken,
         Lex(&'static str), // nonterminal
@@ -1456,6 +1877,7 @@ mod tests {
         Bool(bool),
         Char(char),
         Str(&'static str),
+        Ident(&'static str),
         LParen,
         RParen,
         Quote,
@@ -1465,6 +1887,7 @@ mod tests {
         Dot,
         VectorStart,
         ByteVectorStart,
+        DatumComment,
         Num(&'static str, NumCheck),
     }
 
@@ -1523,7 +1946,6 @@ mod tests {
     impl ErrorMatcher {
         fn check(&self, err: &ParseError, test_name: &str) {
             match (self, err) {
-                (ErrorMatcher::Unimplemented, ParseError::Unimplemented) => {}
                 (ErrorMatcher::Incomplete, ParseError::Incomplete) => {}
                 (ErrorMatcher::IncompleteToken, ParseError::IncompleteToken) => {}
                 (ErrorMatcher::Lex(nt), ParseError::Lex { nonterminal, .. }) => {
@@ -1540,7 +1962,6 @@ mod tests {
     impl std::fmt::Debug for ErrorMatcher {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                Self::Unimplemented => write!(f, "Unimplemented"),
                 Self::Incomplete => write!(f, "Incomplete"),
                 Self::IncompleteToken => write!(f, "IncompleteToken"),
                 Self::Lex(arg0) => f.debug_tuple("Lex").field(arg0).finish(),
@@ -1560,6 +1981,9 @@ mod tests {
                 (TokenMatcher::Str(e), Token::String(a)) => {
                     assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
                 }
+                (TokenMatcher::Ident(e), Token::Identifier(a)) => {
+                    assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
+                }
                 (TokenMatcher::LParen, Token::LParen) => {}
                 (TokenMatcher::RParen, Token::RParen) => {}
                 (TokenMatcher::Quote, Token::Quote) => {}
@@ -1569,6 +1993,7 @@ mod tests {
                 (TokenMatcher::Dot, Token::Dot) => {}
                 (TokenMatcher::VectorStart, Token::VectorStart) => {}
                 (TokenMatcher::ByteVectorStart, Token::ByteVectorStart) => {}
+                (TokenMatcher::DatumComment, Token::DatumComment) => {}
                 (TokenMatcher::Num(text, check), Token::Number(n)) => {
                     assert_eq!(
                         text, &n.text,
@@ -1591,6 +2016,7 @@ mod tests {
                 Self::Bool(b) => f.debug_tuple("Bool").field(b).finish(),
                 Self::Char(c) => f.debug_tuple("Char").field(c).finish(),
                 Self::Str(s) => f.debug_tuple("Str").field(s).finish(),
+                Self::Ident(s) => f.debug_tuple("Ident").field(s).finish(),
                 Self::LParen => write!(f, "LParen"),
                 Self::RParen => write!(f, "RParen"),
                 Self::Quote => write!(f, "Quote"),
@@ -1600,6 +2026,7 @@ mod tests {
                 Self::Dot => write!(f, "Dot"),
                 Self::VectorStart => write!(f, "VectorStart"),
                 Self::ByteVectorStart => write!(f, "ByteVectorStart"),
+                Self::DatumComment => write!(f, "DatumComment"),
                 Self::Num(s, _) => f.debug_tuple("Num").field(s).finish(),
             }
         }
@@ -1807,9 +2234,157 @@ mod tests {
     fn run_all_tests() {
         let cases = vec![
             TestCase {
-                name: "stub_unimplemented",
+                name: "simple_identifier_call",
                 input: "(foo)",
-                expected: Expected::Error(ErrorMatcher::Unimplemented),
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::LParen,
+                    TokenMatcher::Ident("foo"),
+                    TokenMatcher::RParen,
+                ]),
+            },
+            // --- Identifier Tests ---
+            TestCase {
+                name: "identifier_simple",
+                input: "hello",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("hello")]),
+            },
+            TestCase {
+                name: "identifier_with_digits",
+                input: "foo123",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("foo123")]),
+            },
+            TestCase {
+                name: "identifier_special_initial",
+                input: "!important",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("!important")]),
+            },
+            TestCase {
+                name: "identifier_all_special_initials",
+                input: "!$%&*/:<=>?^_~",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("!$%&*/:<=>?^_~")]),
+            },
+            TestCase {
+                name: "identifier_with_special_subsequent",
+                input: "foo+bar",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("foo+bar")]),
+            },
+            TestCase {
+                name: "identifier_kebab_case",
+                input: "my-identifier",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("my-identifier")]),
+            },
+            TestCase {
+                name: "identifier_question_mark",
+                input: "null?",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("null?")]),
+            },
+            TestCase {
+                name: "identifier_arrow",
+                input: "->string",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("->string")]),
+            },
+            TestCase {
+                name: "identifier_dots",
+                input: "...",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("...")]),
+            },
+            TestCase {
+                name: "identifier_plus",
+                input: "+",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("+")]),
+            },
+            TestCase {
+                name: "identifier_minus",
+                input: "-",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("-")]),
+            },
+            TestCase {
+                name: "identifier_plus_word",
+                input: "+foo",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("+foo")]),
+            },
+            TestCase {
+                name: "identifier_minus_word",
+                input: "-bar",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("-bar")]),
+            },
+            TestCase {
+                name: "identifier_if_not_plusi",
+                input: "+if",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("+if")]),
+            },
+            TestCase {
+                name: "identifier_vertical_line",
+                input: "|hello world|",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("hello world")]),
+            },
+            TestCase {
+                name: "identifier_vertical_line_escape",
+                input: r"|hello\|pipe|",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("hello|pipe")]),
+            },
+            TestCase {
+                name: "identifier_vertical_line_newline_escape",
+                input: "|hello\\nworld|",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("hello\nworld")]),
+            },
+            TestCase {
+                name: "identifier_vertical_line_hex_escape",
+                input: r"|hello\x41;world|",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("helloAworld")]),
+            },
+            TestCase {
+                name: "identifier_unicode",
+                input: "λ",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("λ")]),
+            },
+            TestCase {
+                name: "identifier_unicode_mixed",
+                input: "α-beta",
+                expected: Expected::Tokens(vec![TokenMatcher::Ident("α-beta")]),
+            },
+            // Numbers that should NOT be identifiers
+            TestCase {
+                name: "not_identifier_plusi",
+                input: "+i",
+                expected: Expected::Tokens(vec![TokenMatcher::Num("+i", NumCheck::Any)]),
+            },
+            TestCase {
+                name: "not_identifier_minusi",
+                input: "-i",
+                expected: Expected::Tokens(vec![TokenMatcher::Num("-i", NumCheck::Any)]),
+            },
+            TestCase {
+                name: "not_identifier_plus_inf",
+                input: "+inf.0",
+                expected: Expected::Tokens(vec![TokenMatcher::Num(
+                    "+inf.0",
+                    NumCheck::Inf(InfinityNan::PositiveInfinity),
+                )]),
+            },
+            TestCase {
+                name: "not_identifier_minus_inf",
+                input: "-inf.0",
+                expected: Expected::Tokens(vec![TokenMatcher::Num(
+                    "-inf.0",
+                    NumCheck::Inf(InfinityNan::NegativeInfinity),
+                )]),
+            },
+            TestCase {
+                name: "not_identifier_plus_nan",
+                input: "+nan.0",
+                expected: Expected::Tokens(vec![TokenMatcher::Num(
+                    "+nan.0",
+                    NumCheck::Inf(InfinityNan::PositiveNaN),
+                )]),
+            },
+            TestCase {
+                name: "not_identifier_minus_nan",
+                input: "-nan.0",
+                expected: Expected::Tokens(vec![TokenMatcher::Num(
+                    "-nan.0",
+                    NumCheck::Inf(InfinityNan::NegativeNaN),
+                )]),
             },
             TestCase {
                 name: "whitespace_comments",
@@ -1877,7 +2452,7 @@ mod tests {
             },
             TestCase {
                 name: "punctuation_tokens",
-                input: "( ) ' ` , ,@ . #(",
+                input: "( ) ' ` , ,@ . #( #u8(",
                 expected: Expected::Tokens(vec![
                     TokenMatcher::LParen,
                     TokenMatcher::RParen,
@@ -1887,6 +2462,7 @@ mod tests {
                     TokenMatcher::CommaAt,
                     TokenMatcher::Dot,
                     TokenMatcher::VectorStart,
+                    TokenMatcher::ByteVectorStart,
                 ]),
             },
             TestCase {
@@ -2303,7 +2879,25 @@ mod tests {
             TestCase {
                 name: "datum_comment",
                 input: "#; (foo)",
-                expected: Expected::Error(ErrorMatcher::Unimplemented),
+                // The lexer emits DatumComment token; the parser handles skipping.
+                // Here we verify the lexer produces: DatumComment, LParen, Ident, RParen
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::DatumComment,
+                    TokenMatcher::LParen,
+                    TokenMatcher::Ident("foo"),
+                    TokenMatcher::RParen,
+                ]),
+            },
+            TestCase {
+                name: "datum_comment_simple",
+                input: "#; foo bar",
+                // Lexer sees: DatumComment, Ident("foo"), Ident("bar")
+                // Parser would skip "foo", leaving "bar"
+                expected: Expected::Tokens(vec![
+                    TokenMatcher::DatumComment,
+                    TokenMatcher::Ident("foo"),
+                    TokenMatcher::Ident("bar"),
+                ]),
             },
         ];
 
