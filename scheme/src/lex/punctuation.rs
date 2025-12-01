@@ -8,9 +8,9 @@ use crate::{
 };
 use winnow::stream::{Location, Stream};
 
-/// Canonical punctuation parser using `winnow`.
+/// Canonical punctuation parser.
 ///
-/// Grammar reference (spec/syn.md / `<token>`):
+/// Grammar reference (`syn.tex` / `<token>`):
 ///
 /// ```text
 /// ( | ) | #( | #u8( | ' | ` | , | ,@ | .

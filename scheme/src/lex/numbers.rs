@@ -13,7 +13,7 @@ use crate::{
 };
 use winnow::{
     Parser,
-    ascii::Caseless,
+    ascii::{Caseless, digit1},
     combinator::alt,
     error::{ContextError, ErrMode},
     stream::Stream,
@@ -22,7 +22,7 @@ use winnow::{
 
 /// Parse `+i` or `-i` (unit imaginary), returning the sign character on success.
 ///
-/// Grammar reference (spec/syn.md, `<complex R>` production):
+/// Grammar reference (`syn.tex`, `<complex R>` production):
 ///
 /// ```text
 /// <complex R> ::= ...
@@ -86,14 +86,13 @@ fn parse_exponent_suffix<'i>(input: &mut WinnowInput<'i>, text: &mut String) -> 
         let _ = input.peek_or_incomplete_token()?;
     }
 
-    if input.eat_while(text, |c| c.is_ascii_digit()) == 0 {
-        return winnow_incomplete_token();
-    }
+    let digits: &str = cut_lex_error_token(digit1, "<number>").parse_next(input)?;
+    text.push_str(digits);
 
     Ok(())
 }
 
-/// Canonical `<real R>` parser using `winnow`.
+/// Canonical `<real R>` parser.
 ///
 /// Grammar reference (Formal syntax / `<number>`):
 ///
@@ -171,7 +170,7 @@ fn lex_real_repr<'i>(input: &mut WinnowInput<'i>, radix: NumberRadix) -> PResult
     }
 }
 
-/// Canonical `<complex R>` / `<real R>` parser using `winnow`.
+/// Canonical `<complex R>` / `<real R>` parser.
 ///
 /// This implements the R7RS number grammar for a fixed radix `R`,
 /// including real, rectangular, polar, and pure-imaginary cases:
@@ -230,7 +229,27 @@ fn lex_complex_with_radix<'i>(
 
             match next_ch {
                 'i' | 'I' => {
-                    // Pure imaginary: `<real R> i`.
+                    // Pure imaginary without an explicit real part:
+                    // `+<ureal R> i`, `-<ureal R> i`, or `<infnan> i`.
+                    //
+                    // The R7RS grammar does *not* allow bare `2i` (no sign),
+                    // so we only accept this branch when the parsed `<real R>`
+                    // carried an explicit sign or is an `<infnan>`.
+                    let allow_pure_imag = match &repr1 {
+                        RealRepr::Infnan(_) => true,
+                        RealRepr::Finite(finite) => match finite {
+                            FiniteRealRepr::Integer { spelling }
+                            | FiniteRealRepr::Rational { spelling }
+                            | FiniteRealRepr::Decimal { spelling } => {
+                                spelling.starts_with('+') || spelling.starts_with('-')
+                            }
+                        },
+                    };
+
+                    if !allow_pure_imag {
+                        return lex_error("<number>");
+                    }
+
                     let mut probe = *input;
                     let _ = probe.next_token(); // consume 'i' / 'I'
                     ensure_delimiter(&mut probe, "<number>")?;
@@ -417,7 +436,7 @@ pub(crate) fn lex_prefixed_number<'i>(input: &mut WinnowInput<'i>) -> PResult<Nu
     }
 }
 
-/// Canonical `<ureal R>` parser using `winnow`.
+/// Canonical `<ureal R>` parser.
 ///
 /// Grammar reference (Formal syntax / `<number>`):
 ///

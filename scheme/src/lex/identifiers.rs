@@ -185,7 +185,6 @@ fn lex_symbol_element<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<char>> 
                 'n' => Ok(Some('\n')),
                 'r' => Ok(Some('\r')),
                 '|' => Ok(Some('|')),
-                '\\' => Ok(Some('\\')),
                 _ => lex_error("<identifier>"),
             }
         }

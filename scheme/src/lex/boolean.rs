@@ -11,7 +11,7 @@ use super::{
 };
 use crate::ast::{Span, Syntax};
 
-/// Lex a `<boolean>` token using a `WinnowInput`.
+/// Lex a `<boolean>` token from the input stream.
 ///
 /// Grammar reference (Formal syntax / `<boolean>`):
 ///

@@ -17,18 +17,20 @@ use winnow::{
     token::take_while,
 };
 
-/// Look up a named character (case-insensitive).
+/// Look up a named character (case-sensitive).
+///
+/// R7RS §7.1.1: "Case is significant in ... <character name>"
 fn named_character(name: &str) -> Option<char> {
-    Some(match () {
-        _ if name.eq_ignore_ascii_case("alarm") => '\u{7}',
-        _ if name.eq_ignore_ascii_case("backspace") => '\u{8}',
-        _ if name.eq_ignore_ascii_case("delete") => '\u{7F}',
-        _ if name.eq_ignore_ascii_case("escape") => '\u{1B}',
-        _ if name.eq_ignore_ascii_case("newline") => '\n',
-        _ if name.eq_ignore_ascii_case("null") => '\0',
-        _ if name.eq_ignore_ascii_case("return") => '\r',
-        _ if name.eq_ignore_ascii_case("space") => ' ',
-        _ if name.eq_ignore_ascii_case("tab") => '\t',
+    Some(match name {
+        "alarm" => '\u{7}',
+        "backspace" => '\u{8}',
+        "delete" => '\u{7F}',
+        "escape" => '\u{1B}',
+        "newline" => '\n',
+        "null" => '\0',
+        "return" => '\r',
+        "space" => ' ',
+        "tab" => '\t',
         _ => return None,
     })
 }
@@ -117,7 +119,7 @@ fn lex_string_escape<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<char>> {
     .parse_next(input)
 }
 
-/// Canonical `<string>` parser using `winnow`.
+/// Canonical `<string>` parser.
 ///
 /// Grammar reference (Formal syntax / `<string>`):
 ///
@@ -146,7 +148,7 @@ pub(crate) fn lex_string<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToke
     Ok(Syntax::new(Span { start, end }, Token::String(value)))
 }
 
-/// Canonical `<character>` parser using `winnow`.
+/// Canonical `<character>` parser.
 ///
 /// Grammar reference (Formal syntax / `<character>`):
 ///

@@ -29,6 +29,8 @@ enum TokenMatcher {
     Char(char),
     Str(&'static str),
     Ident(&'static str),
+    LabelDef(u64),
+    LabelRef(u64),
     LParen,
     RParen,
     Quote,
@@ -133,6 +135,12 @@ impl TokenMatcher {
             (TokenMatcher::Ident(e), Token::Identifier(a)) => {
                 assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
             }
+            (TokenMatcher::LabelDef(e), Token::LabelDef(a)) => {
+                assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
+            }
+            (TokenMatcher::LabelRef(e), Token::LabelRef(a)) => {
+                assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
+            }
             (TokenMatcher::LParen, Token::LParen) => {}
             (TokenMatcher::RParen, Token::RParen) => {}
             (TokenMatcher::Quote, Token::Quote) => {}
@@ -166,6 +174,8 @@ impl std::fmt::Debug for TokenMatcher {
             Self::Char(c) => f.debug_tuple("Char").field(c).finish(),
             Self::Str(s) => f.debug_tuple("Str").field(s).finish(),
             Self::Ident(s) => f.debug_tuple("Ident").field(s).finish(),
+            Self::LabelDef(n) => f.debug_tuple("LabelDef").field(n).finish(),
+            Self::LabelRef(n) => f.debug_tuple("LabelRef").field(n).finish(),
             Self::LParen => write!(f, "LParen"),
             Self::RParen => write!(f, "RParen"),
             Self::Quote => write!(f, "Quote"),
@@ -376,246 +386,25 @@ impl NumCheck {
 
 // --- Tests ---
 
-#[test]
-fn run_all_tests() {
-    let cases = vec![
-        TestCase {
-            name: "simple_identifier_call",
-            input: "(foo)",
-            expected: Expected::Tokens(vec![
-                TokenMatcher::LParen,
-                TokenMatcher::Ident("foo"),
-                TokenMatcher::RParen,
-            ]),
-        },
-        // --- Identifier Tests ---
-        TestCase {
-            name: "identifier_simple",
-            input: "hello",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("hello")]),
-        },
-        TestCase {
-            name: "identifier_with_digits",
-            input: "foo123",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("foo123")]),
-        },
-        TestCase {
-            name: "identifier_special_initial",
-            input: "!important",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("!important")]),
-        },
-        TestCase {
-            name: "identifier_all_special_initials",
-            input: "!$%&*/:<=>?^_~",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("!$%&*/:<=>?^_~")]),
-        },
-        TestCase {
-            name: "identifier_with_special_subsequent",
-            input: "foo+bar",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("foo+bar")]),
-        },
-        TestCase {
-            name: "identifier_kebab_case",
-            input: "my-identifier",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("my-identifier")]),
-        },
-        TestCase {
-            name: "identifier_question_mark",
-            input: "null?",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("null?")]),
-        },
-        TestCase {
-            name: "identifier_arrow",
-            input: "->string",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("->string")]),
-        },
-        TestCase {
-            name: "identifier_dots",
-            input: "...",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("...")]),
-        },
-        TestCase {
-            name: "identifier_plus",
-            input: "+",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("+")]),
-        },
-        TestCase {
-            name: "identifier_minus",
-            input: "-",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("-")]),
-        },
-        TestCase {
-            name: "identifier_plus_word",
-            input: "+foo",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("+foo")]),
-        },
-        TestCase {
-            name: "identifier_minus_word",
-            input: "-bar",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("-bar")]),
-        },
-        TestCase {
-            name: "identifier_if_not_plusi",
-            input: "+if",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("+if")]),
-        },
-        TestCase {
-            name: "identifier_vertical_line",
-            input: "|hello world|",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("hello world")]),
-        },
-        TestCase {
-            name: "identifier_vertical_line_escape",
-            input: r"|hello\|pipe|",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("hello|pipe")]),
-        },
-        TestCase {
-            name: "identifier_vertical_line_newline_escape",
-            input: "|hello\\nworld|",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("hello\nworld")]),
-        },
-        TestCase {
-            name: "identifier_vertical_line_hex_escape",
-            input: r"|hello\x41;world|",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("helloAworld")]),
-        },
-        TestCase {
-            name: "identifier_unicode",
-            input: "λ",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("λ")]),
-        },
-        TestCase {
-            name: "identifier_unicode_mixed",
-            input: "α-beta",
-            expected: Expected::Tokens(vec![TokenMatcher::Ident("α-beta")]),
-        },
-        // Numbers that should NOT be identifiers
-        TestCase {
-            name: "not_identifier_plusi",
-            input: "+i",
-            expected: Expected::Tokens(vec![TokenMatcher::Num("+i", NumCheck::Any)]),
-        },
-        TestCase {
-            name: "not_identifier_minusi",
-            input: "-i",
-            expected: Expected::Tokens(vec![TokenMatcher::Num("-i", NumCheck::Any)]),
-        },
-        TestCase {
-            name: "not_identifier_plus_inf",
-            input: "+inf.0",
-            expected: Expected::Tokens(vec![TokenMatcher::Num(
-                "+inf.0",
-                NumCheck::Inf(InfinityNan::PositiveInfinity),
-            )]),
-        },
-        TestCase {
-            name: "not_identifier_minus_inf",
-            input: "-inf.0",
-            expected: Expected::Tokens(vec![TokenMatcher::Num(
-                "-inf.0",
-                NumCheck::Inf(InfinityNan::NegativeInfinity),
-            )]),
-        },
-        TestCase {
-            name: "not_identifier_plus_nan",
-            input: "+nan.0",
-            expected: Expected::Tokens(vec![TokenMatcher::Num(
-                "+nan.0",
-                NumCheck::Inf(InfinityNan::PositiveNaN),
-            )]),
-        },
-        TestCase {
-            name: "not_identifier_minus_nan",
-            input: "-nan.0",
-            expected: Expected::Tokens(vec![TokenMatcher::Num(
-                "-nan.0",
-                NumCheck::Inf(InfinityNan::NegativeNaN),
-            )]),
-        },
-        TestCase {
-            name: "whitespace_comments",
-            input: "   ; comment here\n  #| nested ; comment |#   ",
-            expected: Expected::Empty,
-        },
-        TestCase {
-            name: "incomplete_nested_comment",
-            input: "#| unclosed nested comment",
-            expected: Expected::Error(ErrorMatcher::Incomplete),
-        },
-        TestCase {
-            name: "incomplete_character_prefix",
-            input: r#"#\"#,
-            expected: Expected::Error(ErrorMatcher::IncompleteToken),
-        },
-        TestCase {
-            name: "incomplete_hash_only",
-            input: "#",
-            expected: Expected::Error(ErrorMatcher::IncompleteToken),
-        },
-        TestCase {
-            name: "incomplete_double_prefix",
-            input: "#b#",
-            expected: Expected::Error(ErrorMatcher::IncompleteToken),
-        },
-        TestCase {
-            name: "unknown_directive",
-            input: "#!unknown-directive",
-            expected: Expected::Error(ErrorMatcher::Lex("<directive>")),
-        },
-        TestCase {
-            name: "fold_case_directives",
-            input: "#!fold-case\n  #!no-fold-case  ; rest is comment\n",
-            expected: Expected::Empty,
-        },
-        TestCase {
-            name: "directive_requires_delimiter_1",
-            input: "#!fold-caseX",
-            expected: Expected::Error(ErrorMatcher::Lex("<directive>")),
-        },
-        TestCase {
-            name: "directive_requires_delimiter_2",
-            input: "#!no-fold-caseX",
-            expected: Expected::Error(ErrorMatcher::Lex("<directive>")),
-        },
-        TestCase {
-            name: "boolean_tokens",
-            input: "  #t  #FaLsE  #true #FALSE",
-            expected: Expected::Tokens(vec![
-                TokenMatcher::Bool(true),
-                TokenMatcher::Bool(false),
-                TokenMatcher::Bool(true),
-                TokenMatcher::Bool(false),
-            ]),
-        },
-        TestCase {
-            name: "character_tokens",
-            input: "#\\a #\\space #\\x41",
-            expected: Expected::Tokens(vec![
-                TokenMatcher::Char('a'),
-                TokenMatcher::Char(' '),
-                TokenMatcher::Char('A'),
-            ]),
-        },
-        TestCase {
-            name: "punctuation_tokens",
-            input: "( ) ' ` , ,@ . #( #u8(",
-            expected: Expected::Tokens(vec![
-                TokenMatcher::LParen,
-                TokenMatcher::RParen,
-                TokenMatcher::Quote,
-                TokenMatcher::Backquote,
-                TokenMatcher::Comma,
-                TokenMatcher::CommaAt,
-                TokenMatcher::Dot,
-                TokenMatcher::VectorStart,
-                TokenMatcher::ByteVectorStart,
-            ]),
-        },
-        TestCase {
-            name: "bytevector_start",
-            input: "#u8(",
-            expected: Expected::Tokens(vec![TokenMatcher::ByteVectorStart]),
-        },
+fn number_test_cases() -> Vec<TestCase> {
+    vec![
+        // Number grammar coverage (`syn.tex`, `<number>` section):
+        //
+        //   <ureal R>       -> covered by: decimal_numbers, rationals, nondecimal_numbers
+        //   <real R>        -> covered by: decimal_numbers, infnan_plain, infnan_prefixed
+        //   <complex R>     -> covered by: decimal_complex, decimal_complex_unit_imaginary_with_real,
+        //                        pure_imaginary_and_polar, nondecimal_complex_unit_imaginary_with_real,
+        //                        prefixed_complex, prefixed_polar, nondecimal_complex
+        //   error cases     -> covered by: malformed_number_suffix, malformed_rational_*,
+        //                        invalid_hex_literal, nondecimal_errors_*, infnan_errors_*,
+        //                        ambiguous_complex_*, pure_imaginary_signless_*_invalid,
+        //                        number_invalid_exponent_space, number_incomplete_exponent_eof
+        //
+        // This block of tests is intended to track the R7RS numeric
+        // productions closely: for each production we have at least one
+        // positive and (where sensible) one negative example. Some
+        // implementation-specific edge cases and deviations are also
+        // exercised and called out in individual test names/comments.
         TestCase {
             name: "decimal_numbers",
             input: "42 -7 3.14 .5 1e3 2.0e-2",
@@ -682,6 +471,14 @@ fn run_all_tests() {
             ]),
         },
         TestCase {
+            name: "decimal_complex_unit_imaginary_with_real",
+            input: "1+i 1-i",
+            expected: Expected::Tokens(vec![
+                TokenMatcher::Num("1+i", NumCheck::RectInt("1", "1")),
+                TokenMatcher::Num("1-i", NumCheck::RectInt("1", "-1")),
+            ]),
+        },
+        TestCase {
             name: "pure_imaginary_and_polar",
             input: "+i -i +2i -3/4i 1@2 -3/4@5.0 +inf.0i 1+inf.0i",
             expected: Expected::Tokens(vec![
@@ -700,6 +497,86 @@ fn run_all_tests() {
                     NumCheck::RectInfImag("1", InfinityNan::PositiveInfinity),
                 ),
             ]),
+        },
+        TestCase {
+            name: "complex_double_sign_invalid_1",
+            input: "1+-2i",
+            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+        },
+        TestCase {
+            name: "complex_double_sign_invalid_2",
+            input: "1-+2i",
+            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+        },
+        TestCase {
+            name: "complex_double_sign_invalid_3",
+            input: "1--2i",
+            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+        },
+        TestCase {
+            name: "complex_double_sign_invalid_4",
+            input: "1++2i",
+            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+        },
+        TestCase {
+            name: "complex_infnan_valid",
+            input: "1+inf.0i 1-inf.0i 1+nan.0i",
+            expected: Expected::Tokens(vec![
+                TokenMatcher::Num(
+                    "1+inf.0i",
+                    NumCheck::RectInfImag("1", InfinityNan::PositiveInfinity),
+                ),
+                TokenMatcher::Num(
+                    "1-inf.0i",
+                    NumCheck::RectInfImag("1", InfinityNan::NegativeInfinity),
+                ),
+                TokenMatcher::Num(
+                    "1+nan.0i",
+                    NumCheck::RectInfImag("1", InfinityNan::PositiveNaN),
+                ),
+            ]),
+        },
+        TestCase {
+            name: "complex_infnan_double_sign_invalid",
+            input: "1+-inf.0i",
+            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+        },
+        TestCase {
+            name: "nondecimal_complex_unit_imaginary_with_real",
+            input: "#b1+i #x1-i",
+            expected: Expected::Tokens(vec![
+                TokenMatcher::Num(
+                    "#b1+i",
+                    NumCheck::Radix(NumberRadix::Binary, Box::new(NumCheck::RectInt("1", "1"))),
+                ),
+                TokenMatcher::Num(
+                    "#x1-i",
+                    NumCheck::Radix(
+                        NumberRadix::Hexadecimal,
+                        Box::new(NumCheck::RectInt("1", "-1")),
+                    ),
+                ),
+            ]),
+        },
+        TestCase {
+            name: "pure_imaginary_signless_integer_invalid",
+            input: "2i",
+            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+        },
+        TestCase {
+            name: "pure_imaginary_signless_rational_invalid",
+            input: "3/4i",
+            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+        },
+        TestCase {
+            name: "pure_imaginary_signless_decimal_invalid",
+            input: "1.0e3i",
+            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+        },
+        TestCase {
+            name: "pure_imaginary_signless_unit_invalid",
+            input: "1i",
+            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
         },
         TestCase {
             name: "prefixed_decimal",
@@ -988,6 +865,296 @@ fn run_all_tests() {
             expected: Expected::Error(ErrorMatcher::Lex("<number>")),
         },
         TestCase {
+            name: "number_invalid_exponent_space",
+            input: "(+ 1e 1e)",
+            // 1e followed by space is invalid number format, not incomplete token
+            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+        },
+        TestCase {
+            name: "number_incomplete_exponent_eof",
+            input: "1e",
+            // 1e at EOF is incomplete token
+            expected: Expected::Error(ErrorMatcher::IncompleteToken),
+        },
+    ]
+}
+
+#[test]
+fn run_all_tests() {
+    let cases = vec![
+        TestCase {
+            name: "simple_identifier_call",
+            input: "(foo)",
+            expected: Expected::Tokens(vec![
+                TokenMatcher::LParen,
+                TokenMatcher::Ident("foo"),
+                TokenMatcher::RParen,
+            ]),
+        },
+        // --- Identifier Tests ---
+        TestCase {
+            name: "identifier_simple",
+            input: "hello",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("hello")]),
+        },
+        TestCase {
+            name: "identifier_with_digits",
+            input: "foo123",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("foo123")]),
+        },
+        TestCase {
+            name: "identifier_special_initial",
+            input: "!important",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("!important")]),
+        },
+        TestCase {
+            name: "identifier_all_special_initials",
+            input: "!$%&*/:<=>?^_~",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("!$%&*/:<=>?^_~")]),
+        },
+        TestCase {
+            name: "identifier_with_special_subsequent",
+            input: "foo+bar",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("foo+bar")]),
+        },
+        TestCase {
+            name: "identifier_kebab_case",
+            input: "my-identifier",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("my-identifier")]),
+        },
+        TestCase {
+            name: "identifier_question_mark",
+            input: "null?",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("null?")]),
+        },
+        TestCase {
+            name: "identifier_arrow",
+            input: "->string",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("->string")]),
+        },
+        TestCase {
+            name: "identifier_dots",
+            input: "...",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("...")]),
+        },
+        TestCase {
+            name: "identifier_plus",
+            input: "+",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("+")]),
+        },
+        TestCase {
+            name: "identifier_minus",
+            input: "-",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("-")]),
+        },
+        TestCase {
+            name: "identifier_plus_word",
+            input: "+foo",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("+foo")]),
+        },
+        TestCase {
+            name: "identifier_minus_word",
+            input: "-bar",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("-bar")]),
+        },
+        TestCase {
+            name: "identifier_if_not_plusi",
+            input: "+if",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("+if")]),
+        },
+        TestCase {
+            name: "identifier_vertical_line",
+            input: "|hello world|",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("hello world")]),
+        },
+        TestCase {
+            name: "identifier_vertical_line_escape",
+            input: r"|hello\|pipe|",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("hello|pipe")]),
+        },
+        TestCase {
+            name: "identifier_vertical_line_newline_escape",
+            input: "|hello\\nworld|",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("hello\nworld")]),
+        },
+        TestCase {
+            name: "identifier_vertical_line_hex_escape",
+            input: r"|hello\x41;world|",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("helloAworld")]),
+        },
+        TestCase {
+            name: "identifier_vertical_line_backslash_escape",
+            input: r"|foo\\bar|",
+            // R7RS does not define `\\` as a symbol escape inside `|...|`;
+            // a backslash must be written via an inline hex escape instead.
+            expected: Expected::Error(ErrorMatcher::Lex("<identifier>")),
+        },
+        TestCase {
+            name: "identifier_unicode",
+            input: "λ",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("λ")]),
+        },
+        TestCase {
+            name: "identifier_unicode_mixed",
+            input: "α-beta",
+            expected: Expected::Tokens(vec![TokenMatcher::Ident("α-beta")]),
+        },
+        TestCase {
+            name: "identifier_unicode_reject_punctuation_bullet",
+            input: "•item",
+            // R7RS would allow this (bullet is Po), but our
+            // conservative identifier rules reject it.
+            expected: Expected::Error(ErrorMatcher::Lex("<token>")),
+        },
+        TestCase {
+            name: "identifier_unicode_reject_currency_euro",
+            input: "€price",
+            expected: Expected::Error(ErrorMatcher::Lex("<token>")),
+        },
+        // Numbers that should NOT be identifiers
+        TestCase {
+            name: "not_identifier_plusi",
+            input: "+i",
+            expected: Expected::Tokens(vec![TokenMatcher::Num("+i", NumCheck::Any)]),
+        },
+        TestCase {
+            name: "not_identifier_minusi",
+            input: "-i",
+            expected: Expected::Tokens(vec![TokenMatcher::Num("-i", NumCheck::Any)]),
+        },
+        TestCase {
+            name: "not_identifier_plus_inf",
+            input: "+inf.0",
+            expected: Expected::Tokens(vec![TokenMatcher::Num(
+                "+inf.0",
+                NumCheck::Inf(InfinityNan::PositiveInfinity),
+            )]),
+        },
+        TestCase {
+            name: "not_identifier_minus_inf",
+            input: "-inf.0",
+            expected: Expected::Tokens(vec![TokenMatcher::Num(
+                "-inf.0",
+                NumCheck::Inf(InfinityNan::NegativeInfinity),
+            )]),
+        },
+        TestCase {
+            name: "not_identifier_plus_nan",
+            input: "+nan.0",
+            expected: Expected::Tokens(vec![TokenMatcher::Num(
+                "+nan.0",
+                NumCheck::Inf(InfinityNan::PositiveNaN),
+            )]),
+        },
+        TestCase {
+            name: "not_identifier_minus_nan",
+            input: "-nan.0",
+            expected: Expected::Tokens(vec![TokenMatcher::Num(
+                "-nan.0",
+                NumCheck::Inf(InfinityNan::NegativeNaN),
+            )]),
+        },
+        TestCase {
+            name: "whitespace_comments",
+            input: "   ; comment here\n  #| nested ; comment |#   ",
+            expected: Expected::Empty,
+        },
+        TestCase {
+            name: "incomplete_nested_comment",
+            input: "#| unclosed nested comment",
+            expected: Expected::Error(ErrorMatcher::Incomplete),
+        },
+        TestCase {
+            name: "incomplete_character_prefix",
+            input: r#"#\"#,
+            expected: Expected::Error(ErrorMatcher::IncompleteToken),
+        },
+        TestCase {
+            name: "incomplete_hash_only",
+            input: "#",
+            expected: Expected::Error(ErrorMatcher::IncompleteToken),
+        },
+        TestCase {
+            name: "incomplete_double_prefix",
+            input: "#b#",
+            expected: Expected::Error(ErrorMatcher::IncompleteToken),
+        },
+        TestCase {
+            name: "unknown_directive",
+            input: "#!unknown-directive",
+            expected: Expected::Error(ErrorMatcher::Lex("<directive>")),
+        },
+        TestCase {
+            name: "fold_case_directives",
+            input: "#!fold-case\n  #!no-fold-case  ; rest is comment\n",
+            expected: Expected::Empty,
+        },
+        TestCase {
+            name: "directive_requires_delimiter_1",
+            input: "#!fold-caseX",
+            expected: Expected::Error(ErrorMatcher::Lex("<directive>")),
+        },
+        TestCase {
+            name: "directive_requires_delimiter_2",
+            input: "#!no-fold-caseX",
+            expected: Expected::Error(ErrorMatcher::Lex("<directive>")),
+        },
+        TestCase {
+            name: "boolean_tokens",
+            input: "  #t  #FaLsE  #true #FALSE",
+            expected: Expected::Tokens(vec![
+                TokenMatcher::Bool(true),
+                TokenMatcher::Bool(false),
+                TokenMatcher::Bool(true),
+                TokenMatcher::Bool(false),
+            ]),
+        },
+        TestCase {
+            name: "character_tokens",
+            input: "#\\a #\\space #\\x41",
+            expected: Expected::Tokens(vec![
+                TokenMatcher::Char('a'),
+                TokenMatcher::Char(' '),
+                TokenMatcher::Char('A'),
+            ]),
+        },
+        TestCase {
+            name: "punctuation_tokens",
+            input: "( ) ' ` , ,@ . #( #u8(",
+            expected: Expected::Tokens(vec![
+                TokenMatcher::LParen,
+                TokenMatcher::RParen,
+                TokenMatcher::Quote,
+                TokenMatcher::Backquote,
+                TokenMatcher::Comma,
+                TokenMatcher::CommaAt,
+                TokenMatcher::Dot,
+                TokenMatcher::VectorStart,
+                TokenMatcher::ByteVectorStart,
+            ]),
+        },
+        TestCase {
+            name: "bytevector_start",
+            input: "#u8(",
+            expected: Expected::Tokens(vec![TokenMatcher::ByteVectorStart]),
+        },
+        TestCase {
+            name: "labels_def_and_ref_simple",
+            input: "#1= #2#",
+            expected: Expected::Tokens(vec![TokenMatcher::LabelDef(1), TokenMatcher::LabelRef(2)]),
+        },
+        TestCase {
+            name: "labels_with_following_datum",
+            input: "#3=(foo) #4#",
+            expected: Expected::Tokens(vec![
+                TokenMatcher::LabelDef(3),
+                TokenMatcher::LParen,
+                TokenMatcher::Ident("foo"),
+                TokenMatcher::RParen,
+                TokenMatcher::LabelRef(4),
+            ]),
+        },
+        TestCase {
             name: "strings_simple",
             input: "  \"hi\"  \"a\\n\\t\\r\\b\\a\\\\\\\"\"  \"\\x41;\"",
             expected: Expected::Tokens(vec![
@@ -1000,6 +1167,11 @@ fn run_all_tests() {
             name: "strings_splice",
             input: "\"foo\\\n   bar\"",
             expected: Expected::Tokens(vec![TokenMatcher::Str("foobar")]),
+        },
+        TestCase {
+            name: "strings_raw_newline_error",
+            input: "\"foo\nbar\"",
+            expected: Expected::Error(ErrorMatcher::Lex("<string>")),
         },
         TestCase {
             name: "strings_incomplete",
@@ -1015,6 +1187,13 @@ fn run_all_tests() {
             name: "strings_incomplete_hex",
             input: "\"\\x",
             expected: Expected::Error(ErrorMatcher::IncompleteToken),
+        },
+        TestCase {
+            name: "character_ambiguous_hash_x_literal",
+            input: "#\\x ",
+            // Ambiguous `#\\x` with no hex digits: treated as `#\\ <any character>`
+            // where the character is literally 'x'.
+            expected: Expected::Tokens(vec![TokenMatcher::Char('x')]),
         },
         TestCase {
             name: "datum_comment",
@@ -1039,9 +1218,34 @@ fn run_all_tests() {
                 TokenMatcher::Ident("bar"),
             ]),
         },
+        TestCase {
+            name: "directive_case_insensitive",
+            input: "#!FOLD-CASE",
+            expected: Expected::Empty,
+        },
+        TestCase {
+            name: "reserved_bracket_is_error",
+            input: "[",
+            expected: Expected::Error(ErrorMatcher::Lex("<token>")),
+        },
+        TestCase {
+            name: "char_name_case_sensitive",
+            input: "#\\Space",
+            // Should NOT be parsed as space char.
+            // Since 'S' is alphabetic, it tries to parse a named char "Space".
+            // "Space" != "space", so it fails named char lookup.
+            expected: Expected::Error(ErrorMatcher::Lex("<character>")),
+        },
     ];
 
     for case in cases {
+        case.run();
+    }
+}
+
+#[test]
+fn run_number_tests() {
+    for case in number_test_cases() {
         case.run();
     }
 }

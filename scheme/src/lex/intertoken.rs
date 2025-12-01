@@ -4,13 +4,13 @@ use crate::lex::{
 };
 use winnow::{
     Parser,
-    ascii::{line_ending, till_line_ending},
+    ascii::{Caseless, line_ending, till_line_ending},
     combinator::{alt, opt},
     stream::Stream,
-    token::{literal, take_while},
+    token::take_while,
 };
 
-/// Canonical `<intertoken space>` parser using `winnow`.
+/// Canonical `<intertoken space>` parser.
 ///
 /// This parser consumes zero or more `<atmosphere>` elements:
 /// whitespace, line comments, nested comments, and directives.
@@ -72,18 +72,18 @@ pub fn lex_intertoken<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
 
 /// Parse a `<directive>` word after `#!` has been consumed.
 ///
-/// Grammar reference (spec/syn.md / Lexical structure):
+/// Grammar reference (`syn.tex` / Lexical structure):
 ///
 /// ```text
 /// <directive> ::= #!fold-case | #!no-fold-case
 /// ```
 ///
 /// NOTE: We validate these directives but ignore their semantics.
-/// See R7RS-DEVIATION comment in `lex_winnow`.
+/// See R7RS-DEVIATIONS.md §2 and the comment on `lex` in `src/lex.rs`.
 #[cold]
 fn lex_directive_body<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
     cut_lex_error_token(
-        alt((literal("fold-case"), literal("no-fold-case"))),
+        alt((Caseless("fold-case"), Caseless("no-fold-case"))),
         "<directive>",
     )
     .parse_next(input)?;

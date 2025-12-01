@@ -11,7 +11,7 @@ use winnow::{
 
 // --- Idiomatic helper trait for cleaner character consumption ---
 
-/// Extension trait providing idiomatic helpers for `WinnowInput`.
+/// Extension trait providing idiomatic helpers for the lexer input stream.
 ///
 /// These methods reduce boilerplate for common lexer patterns while
 /// maintaining zero-cost abstractions (they inline to the same code
@@ -168,9 +168,9 @@ pub fn winnow_incomplete<O>() -> PResult<O> {
 
 /// Helper to produce an incomplete token error (mid-token EOF).
 ///
-/// Unlike `winnow_incomplete`, this indicates the input ended in the middle
-/// of a token (e.g., `#\`, `1e+`, `3/`). In a REPL, this is typically a user
-/// error rather than a prompt-for-more signal.
+/// This indicates the input ended in the middle of a token (e.g., `#\`,
+/// `1e+`, `3/`). In a REPL, this is typically a user error rather than a
+/// prompt-for-more signal.
 pub fn winnow_incomplete_token<O>() -> PResult<O> {
     let mut ctx = ContextError::new();
     ctx.push(StrContext::Label(INCOMPLETE_TOKEN_LABEL));

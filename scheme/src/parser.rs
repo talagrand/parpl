@@ -195,7 +195,7 @@ impl TokenStream {
 
     /// Parse a single `<datum>` from the token stream.
     ///
-    /// Grammar reference (spec/syn.md / External representations):
+    /// Grammar reference (`syn.tex` / External representations):
     ///
     /// ```text
     /// <datum> ::= <simple datum> | <compound datum>
@@ -243,7 +243,7 @@ impl TokenStream {
 
     /// Parse a `<list>` (proper or improper) once the opening `(` has been consumed.
     ///
-    /// Grammar reference (spec/syn.md / External representations):
+    /// Grammar reference (`syn.tex` / External representations):
     ///
     /// ```text
     /// <list> ::= ( <datum>* )
@@ -313,7 +313,7 @@ impl TokenStream {
 
     /// Parse a `<vector>` once the `#(` prefix has been consumed.
     ///
-    /// Grammar reference (spec/syn.md / External representations):
+    /// Grammar reference (`syn.tex` / External representations):
     ///
     /// ```text
     /// <vector> ::= #( <datum>* )
@@ -344,7 +344,7 @@ impl TokenStream {
 
     /// Parse an `<abbreviation>` (quote, quasiquote, unquote variants).
     ///
-    /// Grammar reference (spec/syn.md / External representations):
+    /// Grammar reference (`syn.tex` / External representations):
     ///
     /// ```text
     /// <abbreviation> ::= <abbrev prefix> <datum>
@@ -378,7 +378,7 @@ impl TokenStream {
 
     /// Parse a `<bytevector>` datum once the `#u8(` prefix has been consumed.
     ///
-    /// Grammar reference (spec/syn.md / External representations):
+    /// Grammar reference (`syn.tex` / External representations):
     ///
     /// ```text
     /// <bytevector> ::= #u8( <byte>* )
@@ -472,7 +472,7 @@ fn integer_spelling_to_byte(spelling: &str, radix: u32) -> Option<u8> {
 
 /// Parse a single `<datum>` from the given source string.
 ///
-/// Grammar reference: see `spec/syn.md`, section *External representations*,
+/// Grammar reference: see `syn.tex`, section *External representations*,
 /// production:
 ///
 /// ```text
@@ -507,24 +507,24 @@ pub fn parse_datum(source: &str) -> Result<Syntax<Datum>, ParseError> {
 }
 
 /// Expression syntax as defined in the "Expressions" section
-/// of `spec/syn.md`. This is currently a placeholder and will
+/// of `syn.tex`. This is currently a placeholder and will
 /// be fleshed out rule by rule.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {}
 
 /// Program syntax as defined in the "Programs and definitions"
-/// section of `spec/syn.md`. Placeholder for now.
+/// section of `syn.tex`. Placeholder for now.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program;
 
 /// Library syntax as defined in the "Libraries" section
-/// of `spec/syn.md`. Placeholder for now.
+/// of `syn.tex`. Placeholder for now.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Library;
 
 /// Parse a single `<expression>` from the given source string.
 ///
-/// Grammar reference: see `spec/syn.md`, section *Expressions*.
+/// Grammar reference: see `syn.tex`, section *Expressions*.
 ///
 /// Currently this is a stub and always returns
 /// `ParseError::Unimplemented`.
@@ -534,7 +534,7 @@ pub fn parse_expression(_source: &str) -> Result<Syntax<Expr>, ParseError> {
 
 /// Parse a `<program>` from the given source string.
 ///
-/// Grammar reference: see `spec/syn.md`, section *Programs and definitions*.
+/// Grammar reference: see `syn.tex`, section *Programs and definitions*.
 ///
 /// Currently this is a stub and always returns
 /// `ParseError::Unimplemented`.
@@ -544,7 +544,7 @@ pub fn parse_program(_source: &str) -> Result<Syntax<Program>, ParseError> {
 
 /// Parse a `<library>` from the given source string.
 ///
-/// Grammar reference: see `spec/syn.md`, section *Libraries*.
+/// Grammar reference: see `syn.tex`, section *Libraries*.
 ///
 /// Currently this is a stub and always returns
 /// `ParseError::Unimplemented`.

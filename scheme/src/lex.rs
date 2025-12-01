@@ -26,11 +26,12 @@ pub mod strings;
 mod tests;
 pub mod utils;
 
-// Internal types and helpers to support the `winnow`-based lexer.
+// Internal input and result types used by the lexer implementation.
 pub type WinnowInput<'i> = winnow::stream::LocatingSlice<winnow::stream::Str<'i>>;
 pub type PResult<O> = Result<O, ErrMode<ContextError>>;
 
-/// Lexical tokens as defined by `<token>` in `spec/syn.md`.
+/// Lexical tokens as defined by `<token>` in `syn.tex`, plus internal tokens
+/// to support other R7RS constructs.
 ///
 /// Grammar reference (Formal syntax / Lexical structure):
 ///
@@ -39,6 +40,10 @@ pub type PResult<O> = Result<O, ErrMode<ContextError>>;
 ///           | <character> | <string>
 ///           | ( | ) | #( | #u8( | ' | ` | , | ,@ | .
 /// ```
+///
+/// **Internal tokens:**
+/// - `DatumComment` (`#;`) supports R7RS datum comments (handled by the parser).
+/// - `LabelDef` (`#n=`) and `LabelRef` (`#n#`) support R7RS shared structure labels.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token {
     /// `<identifier>`
@@ -96,6 +101,15 @@ pub type SpannedToken = Syntax<Token>;
 /// `<intertoken space>` (whitespace, comments, nested comments,
 /// and directives).
 ///
+/// This function recognizes all standard R7RS tokens. It also produces tokens
+/// for constructs that R7RS defines as part of `<comment>` or `<datum>`
+/// (datum comments, labels) to facilitate parser-level handling.
+///
+/// **Deviations from R7RS:**
+/// - **Unicode:** Identifier support is conservative (see `R7RS-DEVIATIONS.md`).
+/// - **Fold-case:** `#!fold-case` directives are ignored.
+/// - **Datum comments:** Handled at parser level (emitted as `Token::DatumComment`).
+///
 /// Grammar reference (Formal syntax / Lexical structure):
 ///
 /// ```text
@@ -107,11 +121,6 @@ pub type SpannedToken = Syntax<Token>;
 /// <nested comment> ::= #| <comment text> |#
 /// <directive> ::= #!fold-case | #!no-fold-case
 /// ```
-///
-/// For now, `lex` implements `<intertoken space>` and a subset of
-/// `<token>` recognition: inputs that contain only intertoken space
-/// yield an empty token list. We are gradually adding `<token>`
-/// classifications, currently `<boolean>`, `<character>`, `<string>`, and `<number>`.
 pub fn lex(source: &str) -> Result<Vec<SpannedToken>, ParseError> {
     let mut tokens = Vec::new();
     let mut input = WinnowInput::new(source);
@@ -131,8 +140,8 @@ pub fn lex(source: &str) -> Result<Vec<SpannedToken>, ParseError> {
     Ok(tokens)
 }
 
-/// Lex a single token using a `WinnowInput`, returning `Ok(None)` at EOF.
-/// This driver now uses the canonical `lex_*` parsers directly.
+/// Lex a single token from the input stream, returning `Ok(None)` at EOF.
+/// This driver delegates to the canonical `lex_*` parsers.
 fn token_with_span<'i>(
     input: &mut WinnowInput<'i>,
     source: &'i str,
