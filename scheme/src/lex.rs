@@ -1,6 +1,7 @@
-use crate::{
+use crate::ParseError;
+use crate::ast::{
     FiniteRealRepr, InfinityNan, NumberExactness, NumberLiteral, NumberLiteralKind, NumberRadix,
-    NumberValue, ParseError, RealRepr, Span, Syntax,
+    NumberValue, RealRepr, Span, Syntax,
 };
 use winnow::Parser;
 use winnow::ascii::{Caseless, hex_digit1, line_ending, space0, till_line_ending};
