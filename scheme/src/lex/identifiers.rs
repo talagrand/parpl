@@ -1,0 +1,411 @@
+use crate::{
+    ast::{Span, Syntax},
+    lex::{
+        PResult, SpannedToken, Token, WinnowInput,
+        utils::{
+            InputExt, cut_lex_error_token, ensure_delimiter, is_delimiter, lex_error,
+            winnow_backtrack, winnow_incomplete,
+        },
+    },
+};
+use winnow::{
+    Parser,
+    ascii::{Caseless, hex_digit1},
+    combinator::alt,
+    error::{ContextError, ErrMode, StrContext},
+    stream::{Location, Stream},
+};
+
+// --- Identifier character classification ---
+//
+// The R7RS spec allows Unicode characters with specific general categories
+// in identifiers. Rust's stdlib doesn't expose Unicode general categories
+// directly, but we can approximate using the available methods.
+//
+// R7RS-DEVIATION: Conservative Unicode identifier support.
+// See R7RS-DEVIATIONS.md §1 for full details.
+//
+// Allowed categories per R7RS:
+//   Lu, Ll, Lt, Lm, Lo - Letters (covered by is_alphabetic())
+//   Mn, Mc, Me - Marks (NOT in subsequent initial, Mc/Me not in initial)
+//   Nd, Nl, No - Numbers (Nd not in initial)
+//   Pd, Pc, Po, Sc, Sm, Sk, So - Punctuation/Symbols
+//   Co - Private Use
+//   U+200C, U+200D - Zero-width joiner/non-joiner
+//
+// Rust stdlib limitations - we can only detect:
+//   - is_alphabetic() → Lu, Ll, Lt, Lm, Lo, Nl
+//   - is_numeric() → Nd, Nl, No
+//
+// We CANNOT detect: Mn, Mc, Me, Pd, Pc, Po, Sc, Sm, Sk, So, Co, U+200C/D
+//
+// Consequence: We reject some valid R7RS identifiers (those using marks,
+// symbols, or private-use characters) but never accept invalid ones.
+
+/// Check if a character is an ASCII `<letter>`.
+#[inline]
+fn is_ascii_letter(ch: char) -> bool {
+    ch.is_ascii_alphabetic()
+}
+
+/// Check if a character is an ASCII `<special initial>`.
+///
+/// ```text
+/// <special initial> ::= ! | $ | % | & | * | / | : | < | =
+///                     | > | ? | ^ | _ | ~
+/// ```
+#[inline]
+fn is_special_initial(ch: char) -> bool {
+    matches!(
+        ch,
+        '!' | '$' | '%' | '&' | '*' | '/' | ':' | '<' | '=' | '>' | '?' | '^' | '_' | '~'
+    )
+}
+
+/// Check if a character is an ASCII `<initial>`.
+///
+/// ```text
+/// <initial> ::= <letter> | <special initial>
+/// ```
+#[inline]
+fn is_ascii_initial(ch: char) -> bool {
+    is_ascii_letter(ch) || is_special_initial(ch)
+}
+
+/// Check if a character is a Unicode character valid as an identifier initial.
+///
+/// Per R7RS, Unicode characters with categories Lu, Ll, Lt, Lm, Lo, Mn, Nl, No,
+/// Pd, Pc, Po, Sc, Sm, Sk, So, Co are allowed, but NOT Nd, Mc, Me as initial.
+///
+/// We use `is_alphabetic()` which covers Lu, Ll, Lt, Lm, Lo, Nl.
+/// This is conservative - we reject valid chars we can't verify.
+#[inline]
+fn is_unicode_initial(ch: char) -> bool {
+    // Must be non-ASCII (ASCII handled separately)
+    !ch.is_ascii() && ch.is_alphabetic()
+}
+
+/// Check if a character is valid as `<initial>` (first char of identifier).
+#[inline]
+fn is_initial(ch: char) -> bool {
+    is_ascii_initial(ch) || is_unicode_initial(ch)
+}
+
+/// Check if a character is an ASCII `<digit>`.
+#[inline]
+fn is_ascii_digit_char(ch: char) -> bool {
+    ch.is_ascii_digit()
+}
+
+/// Check if a character is a `<special subsequent>`.
+///
+/// ```text
+/// <special subsequent> ::= <explicit sign> | . | @
+/// ```
+#[inline]
+fn is_special_subsequent(ch: char) -> bool {
+    matches!(ch, '+' | '-' | '.' | '@')
+}
+
+/// Check if a character is valid as `<subsequent>`.
+///
+/// ```text
+/// <subsequent> ::= <initial> | <digit> | <special subsequent>
+/// ```
+///
+/// For Unicode, we allow is_alphanumeric() which includes Nd (digits).
+#[inline]
+fn is_subsequent(ch: char) -> bool {
+    is_initial(ch)
+        || is_ascii_digit_char(ch)
+        || is_special_subsequent(ch)
+        || (!ch.is_ascii() && ch.is_alphanumeric())
+}
+
+/// Check if a character is a `<sign subsequent>`.
+///
+/// ```text
+/// <sign subsequent> ::= <initial> | <explicit sign> | @
+/// ```
+#[inline]
+fn is_sign_subsequent(ch: char) -> bool {
+    is_initial(ch) || matches!(ch, '+' | '-' | '@')
+}
+
+/// Check if a character is a `<dot subsequent>`.
+///
+/// ```text
+/// <dot subsequent> ::= <sign subsequent> | .
+/// ```
+#[inline]
+pub(crate) fn is_dot_subsequent(ch: char) -> bool {
+    is_sign_subsequent(ch) || ch == '.'
+}
+
+// --- Identifier Lexer ---
+
+/// Parse a hex escape inside a vertical-line delimited identifier.
+/// The leading `\x` has been consumed; parse `<hex digits>;`.
+fn lex_identifier_hex_escape<'i>(input: &mut WinnowInput<'i>) -> PResult<char> {
+    let digits = cut_lex_error_token(hex_digit1, "<identifier>").parse_next(input)?;
+    let _ = cut_lex_error_token(';', "<identifier>").parse_next(input)?;
+
+    let codepoint = u32::from_str_radix(digits, 16).map_err(|_| {
+        let mut ctx = ContextError::new();
+        ctx.push(StrContext::Label("<identifier>"));
+        ErrMode::Cut(ctx)
+    })?;
+
+    char::from_u32(codepoint).ok_or_else(|| {
+        let mut ctx = ContextError::new();
+        ctx.push(StrContext::Label("<identifier>"));
+        ErrMode::Cut(ctx)
+    })
+}
+
+/// Parse a `<symbol element>` inside a vertical-line delimited identifier.
+///
+/// ```text
+/// <symbol element> ::= any character other than <vertical line> or \
+///                    | <inline hex escape> | <mnemonic escape> | \|
+/// ```
+fn lex_symbol_element<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<char>> {
+    let ch = input.peek_or_incomplete()?;
+
+    match ch {
+        '|' => Ok(None), // End of symbol - don't consume
+        '\\' => {
+            let _ = input.next_token();
+            let escape_ch = input.next_or_incomplete()?;
+            match escape_ch {
+                'x' | 'X' => Ok(Some(lex_identifier_hex_escape(input)?)),
+                'a' => Ok(Some('\u{7}')),
+                'b' => Ok(Some('\u{8}')),
+                't' => Ok(Some('\t')),
+                'n' => Ok(Some('\n')),
+                'r' => Ok(Some('\r')),
+                '|' => Ok(Some('|')),
+                '\\' => Ok(Some('\\')),
+                _ => lex_error("<identifier>"),
+            }
+        }
+        _ => {
+            let _ = input.next_token();
+            Ok(Some(ch))
+        }
+    }
+}
+
+/// Parse a vertical-line delimited identifier: `|<symbol element>*|`.
+/// The opening `|` has already been consumed.
+fn lex_vertical_line_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
+    let mut result = String::new();
+
+    while let Some(ch) = lex_symbol_element(input)? {
+        result.push(ch);
+    }
+
+    // Consume the closing `|`
+    if !input.eat('|') {
+        return winnow_incomplete();
+    }
+
+    Ok(result)
+}
+
+/// Parse a `<peculiar identifier>`.
+///
+/// ```text
+/// <peculiar identifier> ::= <explicit sign>
+///                         | <explicit sign> <sign subsequent> <subsequent>*
+///                         | <explicit sign> . <dot subsequent> <subsequent>*
+///                         | . <dot subsequent> <subsequent>*
+/// ```
+///
+/// IMPORTANT: This must NOT match `+i`, `-i`, or `<infnan>` which are numbers.
+/// We handle this by checking for these cases and backtracking.
+fn lex_peculiar_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
+    let start = *input;
+    let mut result = String::new();
+
+    let first = input.peek_or_backtrack()?;
+
+    match first {
+        '+' | '-' => {
+            result.push(first);
+            let _ = input.next_token();
+
+            // Check what follows
+            match input.peek_token() {
+                None => {
+                    // Just `+` or `-` alone - valid peculiar identifier
+                    Ok(result)
+                }
+                Some(ch) if is_delimiter(ch) => {
+                    // `+` or `-` followed by delimiter - valid
+                    Ok(result)
+                }
+                Some('.') => {
+                    // `<explicit sign> . <dot subsequent> <subsequent>*`
+                    result.push('.');
+                    let _ = input.next_token();
+
+                    // Must have <dot subsequent>
+                    let ds = input.peek_or_backtrack().map_err(|_| {
+                        *input = start;
+                        ErrMode::Backtrack(ContextError::new())
+                    })?;
+
+                    if !is_dot_subsequent(ds) {
+                        *input = start;
+                        return winnow_backtrack();
+                    }
+                    result.push(ds);
+                    let _ = input.next_token();
+
+                    // Consume remaining <subsequent>*
+                    input.eat_while(&mut result, is_subsequent);
+                    Ok(result)
+                }
+                Some(ch) if is_sign_subsequent(ch) => {
+                    // Check for `+i`, `-i` which are numbers, not identifiers
+                    if (ch == 'i' || ch == 'I')
+                        && input
+                            .peek_token()
+                            .map(|c| c == 'i' || c == 'I')
+                            .unwrap_or(false)
+                    {
+                        // Peek ahead after the 'i'
+                        let mut probe = *input;
+                        let _ = probe.next_token(); // consume 'i'
+                        match probe.peek_token() {
+                            None => {
+                                // This is `+i` or `-i` - a number, not identifier
+                                *input = start;
+                                return winnow_backtrack();
+                            }
+                            Some(c) if is_delimiter(c) => {
+                                // This is `+i` or `-i` - a number, not identifier
+                                *input = start;
+                                return winnow_backtrack();
+                            }
+                            _ => {
+                                // Something follows - could be `+if` etc., valid identifier
+                            }
+                        }
+                    }
+
+                    // Check for infnan: +inf.0, -inf.0, +nan.0, -nan.0
+                    if ch == 'i' || ch == 'I' || ch == 'n' || ch == 'N' {
+                        let mut probe = *input;
+                        let res: Result<&str, ErrMode<ContextError>> =
+                            alt((Caseless("inf.0"), Caseless("nan.0"))).parse_next(&mut probe);
+                        if res.is_ok() {
+                            // Check if followed by delimiter
+                            match probe.peek_token() {
+                                None => {
+                                    // This is infnan - a number
+                                    *input = start;
+                                    return winnow_backtrack();
+                                }
+                                Some(c) if is_delimiter(c) => {
+                                    // This is infnan - a number
+                                    *input = start;
+                                    return winnow_backtrack();
+                                }
+                                _ => {
+                                    // Something follows - continue as identifier
+                                }
+                            }
+                        }
+                    }
+
+                    // `<explicit sign> <sign subsequent> <subsequent>*`
+                    result.push(ch);
+                    let _ = input.next_token();
+
+                    // Consume remaining <subsequent>*
+                    input.eat_while(&mut result, is_subsequent);
+                    Ok(result)
+                }
+                _ => {
+                    // Invalid character after sign
+                    *input = start;
+                    winnow_backtrack()
+                }
+            }
+        }
+        '.' => {
+            // `. <dot subsequent> <subsequent>*`
+            result.push('.');
+            let _ = input.next_token();
+
+            // Must have <dot subsequent>
+            let ds = input.peek_or_backtrack().map_err(|_| {
+                *input = start;
+                ErrMode::Backtrack(ContextError::new())
+            })?;
+
+            if !is_dot_subsequent(ds) {
+                *input = start;
+                return winnow_backtrack();
+            }
+
+            // Check for `...` which is a valid peculiar identifier
+            // but also check it's not just `.` followed by a number
+            if ds == '.' {
+                // Continue - this could be `...` or `..<subsequent>*`
+            }
+
+            result.push(ds);
+            let _ = input.next_token();
+
+            // Consume remaining <subsequent>*
+            input.eat_while(&mut result, is_subsequent);
+            Ok(result)
+        }
+        _ => winnow_backtrack(),
+    }
+}
+
+/// Canonical `<identifier>` parser.
+///
+/// Grammar reference:
+///
+/// ```text
+/// <identifier> ::= <initial> <subsequent>*
+///                 | <vertical line> <symbol element>* <vertical line>
+///                 | <peculiar identifier>
+/// ```
+pub fn lex_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
+    let start = input.current_token_start();
+
+    let first = input.peek_or_backtrack()?;
+
+    let name = match first {
+        // Vertical-line delimited identifier
+        '|' => {
+            let _ = input.next_token();
+            lex_vertical_line_identifier(input)?
+        }
+        // Regular identifier: <initial> <subsequent>*
+        ch if is_initial(ch) => {
+            let mut name = String::new();
+            name.push(ch);
+            let _ = input.next_token();
+            input.eat_while(&mut name, is_subsequent);
+            name
+        }
+        // Peculiar identifier (starts with +, -, or .)
+        '+' | '-' | '.' => lex_peculiar_identifier(input)?,
+        _ => return winnow_backtrack(),
+    };
+
+    // Identifiers not starting with `|` must be followed by delimiter or EOF
+    if first != '|' {
+        ensure_delimiter(input, "<identifier>")?;
+    }
+
+    let end = input.current_token_start();
+    Ok(Syntax::new(Span { start, end }, Token::Identifier(name)))
+}
