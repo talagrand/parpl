@@ -64,7 +64,7 @@ enum NumCheck {
 
 impl TestCase {
     fn run(&self) {
-        let result = lex(self.input);
+        let result: Result<Vec<SpannedToken>, ParseError> = lex(self.input).collect();
         match &self.expected {
             Expected::Tokens(expected_tokens) => {
                 let tokens = result.unwrap_or_else(|e| {

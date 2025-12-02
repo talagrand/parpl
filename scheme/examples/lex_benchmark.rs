@@ -43,13 +43,14 @@ fn main() {
     let mut total_tokens = 0;
 
     for _ in 0..100 {
-        match lex(&huge_source) {
-            Ok(tokens) => {
-                total_tokens += tokens.len();
-            }
-            Err(e) => {
-                eprintln!("Lexing error: {:?}", e);
-                return;
+        let lexer = lex(&huge_source);
+        for token in lexer {
+            match token {
+                Ok(_) => total_tokens += 1,
+                Err(e) => {
+                    eprintln!("Lexing error: {:?}", e);
+                    return;
+                }
             }
         }
     }

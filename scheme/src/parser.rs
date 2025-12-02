@@ -23,62 +23,69 @@ use crate::{
 /// Our approach: The lexer emits `Token::DatumComment` when it sees `#;`.
 /// This `TokenStream` wrapper consumes those tokens and recursively skips
 /// the following datum, providing a clean token stream to higher-level parsers.
-pub struct TokenStream {
-    tokens: Vec<SpannedToken>,
-    pos: usize,
+pub struct TokenStream<'i> {
+    lexer: std::iter::Peekable<lex::Lexer<'i>>,
 }
 
-impl TokenStream {
+impl<'i> TokenStream<'i> {
     /// Create a new token stream from lexed tokens.
-    pub fn new(tokens: Vec<SpannedToken>) -> Self {
-        Self { tokens, pos: 0 }
+    pub fn new(lexer: lex::Lexer<'i>) -> Self {
+        Self { lexer: lexer.peekable() }
     }
 
     /// Lex source and create a token stream.
-    pub fn from_source(source: &str) -> Result<Self, ParseError> {
-        let tokens = lex::lex(source)?;
-        Ok(Self::new(tokens))
+    pub fn from_source(source: &'i str) -> Self {
+        Self::new(lex::lex(source))
     }
 
     /// Peek at the next token without consuming it, skipping datum comments.
-    pub fn peek(&mut self) -> Option<&SpannedToken> {
-        self.skip_datum_comments();
-        self.tokens.get(self.pos)
+    pub fn peek(&mut self) -> Result<Option<&SpannedToken>, ParseError> {
+        self.skip_datum_comments()?;
+        match self.lexer.peek() {
+            Some(Ok(token)) => Ok(Some(token)),
+            Some(Err(e)) => Err(e.clone()),
+            None => Ok(None),
+        }
+    }
+
+    /// Peek at the next token's value without consuming it, skipping datum comments.
+    pub fn peek_token_value(&mut self) -> Result<Option<&Token>, ParseError> {
+        Ok(self.peek()?.map(|st| &st.value))
     }
 
     /// Consume and return the next token, skipping datum comments.
-    pub fn next_token(&mut self) -> Option<SpannedToken> {
-        self.skip_datum_comments();
-        if self.pos < self.tokens.len() {
-            let token = self.tokens[self.pos].clone();
-            self.pos += 1;
-            Some(token)
-        } else {
-            None
+    pub fn next_token(&mut self) -> Result<Option<SpannedToken>, ParseError> {
+        self.skip_datum_comments()?;
+        match self.lexer.next() {
+            Some(Ok(token)) => Ok(Some(token)),
+            Some(Err(e)) => Err(e),
+            None => Ok(None),
         }
     }
 
     /// Check if the stream is exhausted (no more tokens after skipping comments).
     pub fn is_empty(&mut self) -> bool {
-        self.peek().is_none()
-    }
-
-    /// Return remaining tokens as a slice (for debugging/testing).
-    pub fn remaining(&self) -> &[SpannedToken] {
-        &self.tokens[self.pos..]
+        matches!(self.peek(), Ok(None))
     }
 
     /// Skip any `#;` datum comments by consuming the `DatumComment` token
     /// and the following datum.
-    fn skip_datum_comments(&mut self) {
-        while self.pos < self.tokens.len() {
-            if let Token::DatumComment = &self.tokens[self.pos].value {
-                self.pos += 1; // consume #;
-                self.skip_one_datum(); // skip the following datum
+    fn skip_datum_comments(&mut self) -> Result<(), ParseError> {
+        loop {
+            let is_comment = match self.lexer.peek() {
+                Some(Ok(token)) => matches!(token.value, Token::DatumComment),
+                Some(Err(e)) => return Err(e.clone()),
+                None => false,
+            };
+
+            if is_comment {
+                self.lexer.next(); // consume #;
+                self.skip_one_datum()?;
             } else {
                 break;
             }
         }
+        Ok(())
     }
 
     /// Skip exactly one datum from the current position.
@@ -93,62 +100,64 @@ impl TokenStream {
     ///
     /// If the stream is empty or starts with an unexpected token (like `)`),
     /// this is a no-op (the parser will report the error).
-    fn skip_one_datum(&mut self) {
+    fn skip_one_datum(&mut self) -> Result<(), ParseError> {
         // First, skip any leading datum comments within this datum
-        self.skip_datum_comments();
+        self.skip_datum_comments()?;
 
-        if self.pos >= self.tokens.len() {
-            return;
-        }
+        let token_type = match self.lexer.peek() {
+            Some(Ok(token)) => token.value.clone(),
+            Some(Err(e)) => return Err(e.clone()),
+            None => return Ok(()),
+        };
 
-        match &self.tokens[self.pos].value {
+        match token_type {
             // Simple datums: just consume the token
             Token::Boolean(_)
             | Token::Number(_)
             | Token::Character(_)
             | Token::String(_)
             | Token::Identifier(_) => {
-                self.pos += 1;
+                self.lexer.next();
             }
 
             // List or dotted list
             Token::LParen => {
-                self.pos += 1; // consume (
-                self.skip_list_contents();
+                self.lexer.next(); // consume (
+                self.skip_list_contents()?;
             }
 
             // Vector
             Token::VectorStart => {
-                self.pos += 1; // consume #(
-                self.skip_list_contents();
+                self.lexer.next(); // consume #(
+                self.skip_list_contents()?;
             }
 
             // Bytevector
             Token::ByteVectorStart => {
-                self.pos += 1; // consume #u8(
-                self.skip_list_contents();
+                self.lexer.next(); // consume #u8(
+                self.skip_list_contents()?;
             }
 
             // Abbreviations: quote, quasiquote, unquote, unquote-splicing
             Token::Quote | Token::Backquote | Token::Comma | Token::CommaAt => {
-                self.pos += 1; // consume the prefix
-                self.skip_one_datum(); // skip the following datum
+                self.lexer.next(); // consume the prefix
+                self.skip_one_datum()?; // skip the following datum
             }
 
             // Labels
             Token::LabelDef(_) => {
-                self.pos += 1; // consume #n=
-                self.skip_one_datum(); // skip the following datum
+                self.lexer.next(); // consume #n=
+                self.skip_one_datum()?; // skip the following datum
             }
             Token::LabelRef(_) => {
-                self.pos += 1; // consume #n#
+                self.lexer.next(); // consume #n#
             }
 
             // Nested datum comment - already handled by skip_datum_comments above,
             // but handle explicitly just in case
             Token::DatumComment => {
-                self.pos += 1;
-                self.skip_one_datum();
+                self.lexer.next();
+                self.skip_one_datum()?;
             }
 
             // Unexpected tokens - leave for parser to handle
@@ -156,38 +165,40 @@ impl TokenStream {
                 // Don't consume - this will be an error in the parser
             }
         }
+        Ok(())
     }
 
     /// Skip contents of a list/vector until the closing `)`.
-    fn skip_list_contents(&mut self) {
+    fn skip_list_contents(&mut self) -> Result<(), ParseError> {
         loop {
-            self.skip_datum_comments();
+            self.skip_datum_comments()?;
 
-            if self.pos >= self.tokens.len() {
-                // Incomplete - let parser handle
-                return;
-            }
+            let token_type = match self.lexer.peek() {
+                Some(Ok(token)) => token.value.clone(),
+                Some(Err(e)) => return Err(e.clone()),
+                None => return Ok(()),
+            };
 
-            match &self.tokens[self.pos].value {
+            match token_type {
                 Token::RParen => {
-                    self.pos += 1; // consume )
-                    return;
+                    self.lexer.next(); // consume )
+                    return Ok(());
                 }
                 Token::Dot => {
                     // Dotted list: skip the dot and the final datum
-                    self.pos += 1; // consume .
-                    self.skip_one_datum();
+                    self.lexer.next(); // consume .
+                    self.skip_one_datum()?;
                     // Now expect )
-                    self.skip_datum_comments();
-                    if self.pos < self.tokens.len()
-                        && matches!(&self.tokens[self.pos].value, Token::RParen)
-                    {
-                        self.pos += 1;
+                    self.skip_datum_comments()?;
+                    if let Some(Ok(token)) = self.lexer.peek() {
+                        if matches!(token.value, Token::RParen) {
+                            self.lexer.next();
+                        }
                     }
-                    return;
+                    return Ok(());
                 }
                 _ => {
-                    self.skip_one_datum();
+                    self.skip_one_datum()?;
                 }
             }
         }
@@ -206,7 +217,7 @@ impl TokenStream {
     /// covering the currently implemented `<simple datum>` and
     /// `<compound datum>` alternatives plus label forms (`#n=` / `#n#`).
     pub fn parse_datum(&mut self) -> Result<Syntax<Datum>, ParseError> {
-        let token = self.next_token().ok_or(ParseError::Incomplete)?;
+        let token = self.next_token()?.ok_or(ParseError::Incomplete)?;
 
         match token.value {
             Token::Boolean(b) => Ok(Syntax::new(token.span, Datum::Boolean(b))),
@@ -256,9 +267,9 @@ impl TokenStream {
 
         loop {
             // Check for end of list or dot
-            match self.peek().map(|t| &t.value) {
+            match self.peek_token_value()? {
                 Some(Token::RParen) => {
-                    let token = self.next_token().unwrap();
+                    let token = self.next_token()?.ok_or(ParseError::Incomplete)?;
                     end_span = token.span;
                     if tail.is_none() {
                         tail = Some(Syntax::new(end_span, Datum::EmptyList));
@@ -267,18 +278,19 @@ impl TokenStream {
                 }
                 Some(Token::Dot) => {
                     if elements.is_empty() {
+                        let span = self.peek()?.ok_or(ParseError::Incomplete)?.span;
                         return Err(ParseError::syntax(
-                            self.peek().unwrap().span,
+                            span,
                             "<list>",
                             "unexpected dot at start of list",
                         ));
                     }
-                    self.next_token(); // consume dot
+                    self.next_token()?; // consume dot
                     let tail_datum = self.parse_datum()?;
                     tail = Some(tail_datum);
 
                     // Expect RParen
-                    match self.next_token() {
+                    match self.next_token()? {
                         Some(token) if matches!(token.value, Token::RParen) => {
                             end_span = token.span;
                             break;
@@ -323,9 +335,9 @@ impl TokenStream {
         let end_span;
 
         loop {
-            match self.peek().map(|t| &t.value) {
+            match self.peek_token_value()? {
                 Some(Token::RParen) => {
-                    let token = self.next_token().unwrap();
+                    let token = self.next_token()?.ok_or(ParseError::Incomplete)?;
                     end_span = token.span;
                     break;
                 }
@@ -389,9 +401,9 @@ impl TokenStream {
         let end_span;
 
         loop {
-            match self.peek().map(|t| &t.value) {
+            match self.peek_token_value()? {
                 Some(Token::RParen) => {
-                    let token = self.next_token().unwrap();
+                    let token = self.next_token()?.ok_or(ParseError::Incomplete)?;
                     end_span = token.span;
                     break;
                 }
@@ -490,12 +502,12 @@ fn integer_spelling_to_byte(spelling: &str, radix: u32) -> Option<u8> {
 /// That is, `parse_datum` recognizes simple datums; compound datums
 /// return `ParseError::Unimplemented` for now.
 pub fn parse_datum(source: &str) -> Result<Syntax<Datum>, ParseError> {
-    let mut stream = TokenStream::from_source(source)?;
+    let mut stream = TokenStream::from_source(source);
     let datum = stream.parse_datum()?;
 
     if !stream.is_empty() {
         // If there are remaining tokens, it's an error for a single datum parse
-        let next = stream.peek().unwrap();
+        let next = stream.peek()?.ok_or(ParseError::Incomplete)?;
         return Err(ParseError::lexical(
             next.span,
             "<datum>",
@@ -595,7 +607,6 @@ mod tests {
 
     #[derive(Debug)]
     enum ErrorMatcher {
-        Unimplemented,
         Incomplete,
         Syntax(&'static str),
     }
@@ -625,13 +636,12 @@ mod tests {
         }
 
         fn run_token_stream(&self, expected: &Expected<Vec<TokenMatcher>>) {
-            let mut ts = TokenStream::from_source(self.input)
-                .unwrap_or_else(|e| panic!("{}: failed to create TokenStream: {:?}", self.name, e));
+            let mut ts = TokenStream::from_source(self.input);
 
             match expected {
                 Expected::Success(matchers) => {
                     let mut tokens = Vec::new();
-                    while let Some(tok) = ts.next_token() {
+                    while let Some(tok) = ts.next_token().unwrap() {
                         tokens.push(tok);
                     }
 
@@ -721,7 +731,6 @@ mod tests {
     impl ErrorMatcher {
         fn check(&self, err: &ParseError, test_name: &str) {
             match (self, err) {
-                (ErrorMatcher::Unimplemented, ParseError::Unimplemented) => {}
                 (ErrorMatcher::Incomplete, ParseError::Incomplete) => {}
                 (ErrorMatcher::Syntax(expected_nt), ParseError::Syntax { nonterminal, .. }) => {
                     assert_eq!(

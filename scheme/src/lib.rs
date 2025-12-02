@@ -6,7 +6,7 @@ use crate::ast::Span;
 
 /// Top-level parse error type. This will grow as the implementation
 /// starts enforcing more of `syn.tex`.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum ParseError {
     /// The input ends in the middle of a grammatically valid construct
     /// and more characters are required to decide the result.

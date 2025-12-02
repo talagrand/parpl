@@ -97,6 +97,141 @@ pub enum Token {
 /// A single token paired with its source span.
 pub type SpannedToken = Syntax<Token>;
 
+/// An iterator over tokens in the source string.
+pub struct Lexer<'i> {
+    input: WinnowInput<'i>,
+    source: &'i str,
+}
+
+impl<'i> Lexer<'i> {
+    /// Create a new lexer for the given source string.
+    pub fn new(source: &'i str) -> Self {
+        Self {
+            input: WinnowInput::new(source),
+            source,
+        }
+    }
+
+    /// Lex a single token from the input stream, returning `Ok(None)` at EOF.
+    /// This driver delegates to the canonical `lex_*` parsers.
+    fn token_with_span(&mut self) -> Result<Option<SpannedToken>, ParseError> {
+        let len = self.source.len();
+
+        // Skip `<intertoken space>` before each token.
+        let start_before = self.input.current_token_start();
+        let fallback_span_before = Span {
+            start: start_before,
+            end: len,
+        };
+
+        match lex_intertoken(&mut self.input) {
+            Ok(()) => {}
+            Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
+            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span_before)),
+        }
+
+        let start = self.input.current_token_start();
+        if self.input.peek_token().is_none() {
+            return Ok(None);
+        }
+
+        let fallback_span = Span { start, end: len };
+
+        // 1. Strings.
+        match lex_string(&mut self.input) {
+            Ok(spanned) => return Ok(Some(spanned)),
+            Err(ErrMode::Backtrack(_)) => {}
+            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+        }
+
+        // 2. Characters.
+        match lex_character(&mut self.input) {
+            Ok(spanned) => return Ok(Some(spanned)),
+            Err(ErrMode::Backtrack(_)) => {}
+            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+        }
+
+        // 3. Booleans.
+        match lex_boolean(&mut self.input) {
+            Ok(spanned) => return Ok(Some(spanned)),
+            Err(ErrMode::Backtrack(_)) => {}
+            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+        }
+
+        // 4. Prefixed numbers (`#b`, `#x`, `#e`, `#i`, ...).
+        match lex_prefixed_number(&mut self.input) {
+            Ok(mut literal) => {
+                let end = self.input.current_token_start();
+                literal.text = self.source[start..end].to_string();
+                let span = Span { start, end };
+                return Ok(Some(Syntax::new(span, Token::Number(literal))));
+            }
+            Err(ErrMode::Backtrack(_)) => {}
+            Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
+            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+        }
+
+        // 5. Punctuation: parens, quotes, `#(`, `#u8(`, `.`, etc.
+        match lex_punctuation(&mut self.input) {
+            Ok(spanned) => return Ok(Some(spanned)),
+            Err(ErrMode::Backtrack(_)) => {}
+            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+        }
+
+        // 6. Decimal `<number>` tokens (no prefixes), including complex forms.
+        let ch = match self.input.peek_token() {
+            Some(c) => c,
+            None => return Ok(None),
+        };
+        match ch {
+            '+' | '-' | '0'..='9' | '.' => {
+                match lex_complex_decimal(&mut self.input) {
+                    Ok(mut literal) => {
+                        let end = self.input.current_token_start();
+                        literal.text = self.source[start..end].to_string();
+                        let span = Span { start, end };
+                        return Ok(Some(Syntax::new(span, Token::Number(literal))));
+                    }
+                    Err(ErrMode::Backtrack(_)) => {
+                        // Not a `<number>` starting here; try as identifier
+                        // (e.g., `+` or `-` alone, or peculiar identifiers)
+                    }
+                    Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
+                    Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+                }
+            }
+            _ => {}
+        }
+
+        // 7. Identifiers (including peculiar identifiers like `+`, `-`, `...`).
+        match lex_identifier(&mut self.input) {
+            Ok(spanned) => return Ok(Some(spanned)),
+            Err(ErrMode::Backtrack(_)) => {}
+            Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
+            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+        }
+
+        // No token matched - this is an error
+        Err(ParseError::lexical(
+            fallback_span,
+            "<token>",
+            format!("unexpected character: {:?}", ch),
+        ))
+    }
+}
+
+impl<'i> Iterator for Lexer<'i> {
+    type Item = Result<SpannedToken, ParseError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.token_with_span() {
+            Ok(Some(token)) => Some(Ok(token)),
+            Ok(None) => None,
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
 /// Lex all `<token>`s from the given source string, skipping
 /// `<intertoken space>` (whitespace, comments, nested comments,
 /// and directives).
@@ -121,131 +256,6 @@ pub type SpannedToken = Syntax<Token>;
 /// <nested comment> ::= #| <comment text> |#
 /// <directive> ::= #!fold-case | #!no-fold-case
 /// ```
-pub fn lex(source: &str) -> Result<Vec<SpannedToken>, ParseError> {
-    let mut tokens = Vec::new();
-    let mut input = WinnowInput::new(source);
-
-    // R7RS-DEVIATION: Fold-case directives recognized but ignored.
-    // See R7RS-DEVIATIONS.md §2 for full details.
-    //
-    // We recognize `#!fold-case` / `#!no-fold-case` directives lexically
-    // (and validate them), but deliberately ignore their semantics.
-    // The reader remains case-sensitive throughout. Identifiers `FOO`
-    // and `foo` are treated as distinct.
-
-    while let Some(token) = token_with_span(&mut input, source)? {
-        tokens.push(token);
-    }
-
-    Ok(tokens)
-}
-
-/// Lex a single token from the input stream, returning `Ok(None)` at EOF.
-/// This driver delegates to the canonical `lex_*` parsers.
-fn token_with_span<'i>(
-    input: &mut WinnowInput<'i>,
-    source: &'i str,
-) -> Result<Option<SpannedToken>, ParseError> {
-    let len = source.len();
-
-    // Skip `<intertoken space>` before each token.
-    let start_before = input.current_token_start();
-    let fallback_span_before = Span {
-        start: start_before,
-        end: len,
-    };
-
-    match lex_intertoken(input) {
-        Ok(()) => {}
-        Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
-        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span_before)),
-    }
-
-    let start = input.current_token_start();
-    if input.peek_token().is_none() {
-        return Ok(None);
-    }
-
-    let fallback_span = Span { start, end: len };
-
-    // 1. Strings.
-    match lex_string(input) {
-        Ok(spanned) => return Ok(Some(spanned)),
-        Err(ErrMode::Backtrack(_)) => {}
-        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
-    }
-
-    // 2. Characters.
-    match lex_character(input) {
-        Ok(spanned) => return Ok(Some(spanned)),
-        Err(ErrMode::Backtrack(_)) => {}
-        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
-    }
-
-    // 3. Booleans.
-    match lex_boolean(input) {
-        Ok(spanned) => return Ok(Some(spanned)),
-        Err(ErrMode::Backtrack(_)) => {}
-        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
-    }
-
-    // 4. Prefixed numbers (`#b`, `#x`, `#e`, `#i`, ...).
-    match lex_prefixed_number(input) {
-        Ok(mut literal) => {
-            let end = input.current_token_start();
-            literal.text = source[start..end].to_string();
-            let span = Span { start, end };
-            return Ok(Some(Syntax::new(span, Token::Number(literal))));
-        }
-        Err(ErrMode::Backtrack(_)) => {}
-        Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
-        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
-    }
-
-    // 5. Punctuation: parens, quotes, `#(`, `#u8(`, `.`, etc.
-    match lex_punctuation(input) {
-        Ok(spanned) => return Ok(Some(spanned)),
-        Err(ErrMode::Backtrack(_)) => {}
-        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
-    }
-
-    // 6. Decimal `<number>` tokens (no prefixes), including complex forms.
-    let ch = match input.peek_token() {
-        Some(c) => c,
-        None => return Ok(None),
-    };
-    match ch {
-        '+' | '-' | '0'..='9' | '.' => {
-            match lex_complex_decimal(input) {
-                Ok(mut literal) => {
-                    let end = input.current_token_start();
-                    literal.text = source[start..end].to_string();
-                    let span = Span { start, end };
-                    return Ok(Some(Syntax::new(span, Token::Number(literal))));
-                }
-                Err(ErrMode::Backtrack(_)) => {
-                    // Not a `<number>` starting here; try as identifier
-                    // (e.g., `+` or `-` alone, or peculiar identifiers)
-                }
-                Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
-                Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
-            }
-        }
-        _ => {}
-    }
-
-    // 7. Identifiers (including peculiar identifiers like `+`, `-`, `...`).
-    match lex_identifier(input) {
-        Ok(spanned) => return Ok(Some(spanned)),
-        Err(ErrMode::Backtrack(_)) => {}
-        Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
-        Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
-    }
-
-    // No token matched - this is an error
-    Err(ParseError::lexical(
-        fallback_span,
-        "<token>",
-        format!("unexpected character: {:?}", ch),
-    ))
+pub fn lex(source: &str) -> Lexer<'_> {
+    Lexer::new(source)
 }
