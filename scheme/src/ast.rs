@@ -75,25 +75,24 @@ pub enum InfinityNan {
 
 /// Finite real-number spellings built from `<ureal R>` and
 /// `<decimal 10>`.
-///
-/// All `spelling` fields are normalized substrings of the original
-/// literal, without surrounding whitespace but potentially including
-/// an explicit sign.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FiniteRealRepr {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FiniteRealKind {
     /// A (possibly signed) integer, e.g. "42", "-7".
-    Integer { spelling: String },
+    Integer,
     /// A (possibly signed) rational, e.g. "3/4", "-5/16".
-    Rational { spelling: String },
+    Rational,
     /// A (possibly signed) decimal, e.g. "3.14", "-.5", "1e3".
-    Decimal { spelling: String },
+    Decimal,
 }
 
 /// Representation of `<real R>` values.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RealRepr {
     /// A finite real built from `<ureal R>` or `<decimal 10>`.
-    Finite(FiniteRealRepr),
+    Finite {
+        kind: FiniteRealKind,
+        spelling: String,
+    },
     /// One of the four `<infnan>` spellings.
     Infnan(InfinityNan),
 }
@@ -139,17 +138,6 @@ pub struct NumberLiteralKind {
     pub radix: NumberRadix,
     pub exactness: NumberExactness,
     pub value: NumberValue,
-}
-
-impl NumberLiteralKind {
-    /// Convert to a `NumberLiteral` with an empty text field.
-    /// The text is filled in later by the lexer driver.
-    pub fn into_literal(self) -> NumberLiteral {
-        NumberLiteral {
-            text: String::new(),
-            kind: self,
-        }
-    }
 }
 
 /// A number literal, keeping the original spelling from the source.

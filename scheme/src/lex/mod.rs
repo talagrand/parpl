@@ -1,6 +1,6 @@
 use crate::{
     ParseError,
-    ast::{NumberLiteral, Span, Syntax},
+    ast::{self, FiniteRealKind, InfinityNan, NumberExactness, NumberRadix, Span, Syntax},
     lex::{
         boolean::lex_boolean,
         identifiers::lex_identifier,
@@ -11,6 +11,7 @@ use crate::{
         utils::winnow_err_to_parse_error,
     },
 };
+use std::borrow::Cow;
 use winnow::{
     error::{ContextError, ErrMode},
     stream::{Location, Stream},
@@ -30,6 +31,108 @@ pub mod utils;
 pub type WinnowInput<'i> = winnow::stream::LocatingSlice<winnow::stream::Str<'i>>;
 pub type PResult<O> = Result<O, ErrMode<ContextError>>;
 
+// --- Lexer-specific Number Representations (Zero-Copy) ---
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FiniteReal<'a> {
+    pub kind: FiniteRealKind,
+    pub spelling: &'a str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RealRepr<'a> {
+    Finite(FiniteReal<'a>),
+    Infnan(InfinityNan),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NumberValue<'a> {
+    Real(RealRepr<'a>),
+    Rectangular {
+        real: RealRepr<'a>,
+        imag: RealRepr<'a>,
+    },
+    Polar {
+        magnitude: RealRepr<'a>,
+        angle: RealRepr<'a>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NumberLiteralKind<'a> {
+    pub radix: NumberRadix,
+    pub exactness: NumberExactness,
+    pub value: NumberValue<'a>,
+}
+
+impl<'a> NumberLiteralKind<'a> {
+    pub fn into_literal(self) -> NumberLiteral<'a> {
+        NumberLiteral {
+            text: "",
+            kind: self,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumberLiteral<'a> {
+    pub text: &'a str,
+    pub kind: NumberLiteralKind<'a>,
+}
+
+impl<'a> From<FiniteReal<'a>> for ast::RealRepr {
+    fn from(lex: FiniteReal<'a>) -> Self {
+        ast::RealRepr::Finite {
+            kind: lex.kind,
+            spelling: lex.spelling.to_string(),
+        }
+    }
+}
+
+impl<'a> From<RealRepr<'a>> for ast::RealRepr {
+    fn from(lex: RealRepr<'a>) -> Self {
+        match lex {
+            RealRepr::Finite(f) => f.into(),
+            RealRepr::Infnan(i) => ast::RealRepr::Infnan(i),
+        }
+    }
+}
+
+impl<'a> From<NumberValue<'a>> for ast::NumberValue {
+    fn from(lex: NumberValue<'a>) -> Self {
+        match lex {
+            NumberValue::Real(r) => ast::NumberValue::Real(r.into()),
+            NumberValue::Rectangular { real, imag } => ast::NumberValue::Rectangular {
+                real: real.into(),
+                imag: imag.into(),
+            },
+            NumberValue::Polar { magnitude, angle } => ast::NumberValue::Polar {
+                magnitude: magnitude.into(),
+                angle: angle.into(),
+            },
+        }
+    }
+}
+
+impl<'a> From<NumberLiteralKind<'a>> for ast::NumberLiteralKind {
+    fn from(lex: NumberLiteralKind<'a>) -> Self {
+        ast::NumberLiteralKind {
+            radix: lex.radix,
+            exactness: lex.exactness,
+            value: lex.value.into(),
+        }
+    }
+}
+
+impl<'a> From<NumberLiteral<'a>> for ast::NumberLiteral {
+    fn from(lex: NumberLiteral<'a>) -> Self {
+        ast::NumberLiteral {
+            text: lex.text.to_string(),
+            kind: lex.kind.into(),
+        }
+    }
+}
+
 /// Lexical tokens as defined by `<token>` in `syn.tex`, plus internal tokens
 /// to support other R7RS constructs.
 ///
@@ -45,17 +148,17 @@ pub type PResult<O> = Result<O, ErrMode<ContextError>>;
 /// - `DatumComment` (`#;`) supports R7RS datum comments (handled by the parser).
 /// - `LabelDef` (`#n=`) and `LabelRef` (`#n#`) support R7RS shared structure labels.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Token {
+pub enum Token<'a> {
     /// `<identifier>`
-    Identifier(String),
+    Identifier(Cow<'a, str>),
     /// `<boolean>`
     Boolean(bool),
     /// `<number>`
-    Number(NumberLiteral),
+    Number(NumberLiteral<'a>),
     /// `<character>`
     Character(char),
     /// `<string>`
-    String(String),
+    String(Cow<'a, str>),
     /// `(`
     LParen,
     /// `)`
@@ -95,7 +198,7 @@ pub enum Token {
 }
 
 /// A single token paired with its source span.
-pub type SpannedToken = Syntax<Token>;
+pub type SpannedToken<'a> = Syntax<Token<'a>>;
 
 /// An iterator over tokens in the source string.
 pub struct Lexer<'i> {
@@ -114,7 +217,7 @@ impl<'i> Lexer<'i> {
 
     /// Lex a single token from the input stream, returning `Ok(None)` at EOF.
     /// This driver delegates to the canonical `lex_*` parsers.
-    fn token_with_span(&mut self) -> Result<Option<SpannedToken>, ParseError> {
+    fn token_with_span(&mut self) -> Result<Option<SpannedToken<'i>>, ParseError> {
         let len = self.source.len();
 
         // Skip `<intertoken space>` before each token.
@@ -162,7 +265,7 @@ impl<'i> Lexer<'i> {
         match lex_prefixed_number(&mut self.input) {
             Ok(mut literal) => {
                 let end = self.input.current_token_start();
-                literal.text = self.source[start..end].to_string();
+                literal.text = &self.source[start..end];
                 let span = Span { start, end };
                 return Ok(Some(Syntax::new(span, Token::Number(literal))));
             }
@@ -188,7 +291,7 @@ impl<'i> Lexer<'i> {
                 match lex_complex_decimal(&mut self.input) {
                     Ok(mut literal) => {
                         let end = self.input.current_token_start();
-                        literal.text = self.source[start..end].to_string();
+                        literal.text = &self.source[start..end];
                         let span = Span { start, end };
                         return Ok(Some(Syntax::new(span, Token::Number(literal))));
                     }
@@ -221,7 +324,7 @@ impl<'i> Lexer<'i> {
 }
 
 impl<'i> Iterator for Lexer<'i> {
-    type Item = Result<SpannedToken, ParseError>;
+    type Item = Result<SpannedToken<'i>, ParseError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.token_with_span() {

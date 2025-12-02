@@ -25,10 +25,6 @@ pub trait InputExt {
     /// Returns `Some(char)` if consumed, `None` otherwise.
     fn eat_if(&mut self, predicate: impl FnOnce(char) -> bool) -> Option<char>;
 
-    /// Consume characters while the predicate holds, pushing them to `buf`.
-    /// Returns the number of characters consumed.
-    fn eat_while(&mut self, buf: &mut String, predicate: impl Fn(char) -> bool) -> usize;
-
     /// Peek at the next character, returning an incomplete error if at EOF.
     /// Use for REPL-continuable constructs (strings, nested comments).
     fn peek_or_incomplete(&mut self) -> PResult<char>;
@@ -69,21 +65,6 @@ impl InputExt for WinnowInput<'_> {
             }
             _ => None,
         }
-    }
-
-    #[inline]
-    fn eat_while(&mut self, buf: &mut String, predicate: impl Fn(char) -> bool) -> usize {
-        let mut count = 0;
-        while let Some(c) = self.peek_token() {
-            if predicate(c) {
-                buf.push(c);
-                let _ = self.next_token();
-                count += 1;
-            } else {
-                break;
-            }
-        }
-        count
     }
 
     #[inline]

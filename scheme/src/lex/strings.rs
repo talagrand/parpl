@@ -4,17 +4,17 @@ use crate::{
         PResult, SpannedToken, Token, WinnowInput,
         utils::{
             InputExt, cut_lex_error_token, ensure_delimiter, lex_error, winnow_backtrack,
-            winnow_incomplete, winnow_incomplete_token,
+            winnow_incomplete,
         },
     },
 };
 use winnow::{
     Parser,
     ascii::{hex_digit1, line_ending, space0},
-    combinator::{alt, preceded},
+    combinator::{alt, cut_err, preceded},
     error::{ContextError, ErrMode, StrContext},
     stream::{Location, Stream},
-    token::take_while,
+    token::{literal, take_while},
 };
 
 /// Look up a named character (case-sensitive).
@@ -51,30 +51,49 @@ fn named_character(name: &str) -> Option<char> {
 ///
 /// This function assumes the opening `"` has already been consumed
 /// and stops just before the closing `"`.
-fn lex_string_body<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
-    let mut result = String::new();
+fn lex_string_body<'i>(input: &mut WinnowInput<'i>) -> PResult<std::borrow::Cow<'i, str>> {
+    let is_not_string_terminator = |c| c != '"' && c != '\\' && c != '\n' && c != '\r';
 
-    loop {
-        // Fast path: consume literal text.
-        // Strings cannot contain raw newlines, so we stop at them too.
-        let chunk: &str = take_while(0.., |c| c != '"' && c != '\\' && c != '\n' && c != '\r')
-            .parse_next(input)?;
-        result.push_str(chunk);
+    // Fast path: consume literal text.
+    // Strings cannot contain raw newlines, so we stop at them too.
+    let simple_part = take_while(0.., is_not_string_terminator).parse_next(input)?;
 
-        match input.peek_or_incomplete()? {
-            '"' => break,
-            '\\' => {
-                let _ = input.next_token();
-                if let Some(c) = lex_string_escape(input)? {
-                    result.push(c);
+    match input.peek_or_incomplete()? {
+        '"' => {
+            // No escapes encountered, just the closing quote
+            Ok(std::borrow::Cow::Borrowed(simple_part))
+        }
+        '\\' => {
+            // Encountered an escape sequence; switch to owned string building
+            let mut result = String::from(simple_part);
+
+            loop {
+                // We are at a backslash or just finished a chunk.
+                // If we are at a backslash, handle escape.
+                if input.peek_token() == Some('\\') {
+                    let _ = input.next_token();
+                    if let Some(c) = lex_string_escape(input)? {
+                        result.push(c);
+                    }
+                } else {
+                    // Consume next chunk of literal text
+                    let chunk: &str =
+                        take_while(0.., is_not_string_terminator).parse_next(input)?;
+                    result.push_str(chunk);
+                }
+
+                match input.peek_or_incomplete()? {
+                    '"' => break,
+                    '\\' => continue, // Loop back to handle escape
+                    '\n' | '\r' => return lex_error("<string>"),
+                    _ => continue, // Continue to consume next chunk
                 }
             }
-            '\n' | '\r' => return lex_error("<string>"),
-            _ => unreachable!("take_while stops at quote, backslash, or newline"),
+            Ok(std::borrow::Cow::Owned(result))
         }
+        '\n' | '\r' => lex_error("<string>"),
+        _ => unreachable!("take_while stops at quote, backslash, or newline"),
     }
-
-    Ok(result)
 }
 
 /// Parse the body of a hex escape sequence: `<hex digits>;`.
@@ -129,7 +148,7 @@ fn lex_string_escape<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<char>> {
 ///
 /// The `<string element>` production itself is implemented by
 /// `lex_string_body`.
-pub(crate) fn lex_string<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
+pub(crate) fn lex_string<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
 
     if !input.eat('"') {
@@ -164,61 +183,29 @@ pub(crate) fn lex_string<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToke
 /// This helper accepts the R7RS named characters and `#\x` hex
 /// scalar values and reports lexical errors using the `<character>`
 /// nonterminal.
-pub(crate) fn lex_character<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
+pub(crate) fn lex_character<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
 
-    // Expect leading "#\" prefix using lookahead so that we don't
-    // consume input on mismatch (for example, `#t` / `#f` booleans).
-    let mut probe = *input;
-    match (probe.next_token(), probe.peek_token()) {
-        (Some('#'), Some('\\')) => {
-            // Commit the prefix on the real input.
-            let _ = input.next_token();
-            let _ = input.next_token();
-        }
-        // `#` at end-of-input followed by missing `\\` is an
-        // incomplete `<character>` token.
-        (Some('#'), None) => return winnow_incomplete_token(),
-        _ => return winnow_backtrack(),
-    }
+    // 1. Match prefix "#\"
+    literal("#\\").parse_next(input)?;
 
-    // At least one character must follow `#\`.
-    let c1 = input.next_or_incomplete_token()?;
-
-    let value_char = if c1.eq_ignore_ascii_case(&'x') {
-        // Potential `#\x<hex scalar value>` form.
-        let mut probe = *input;
-        if let Ok(digits) = hex_digit1::<_, ContextError>.parse_next(&mut probe) {
-            let Some(codepoint) = u32::from_str_radix(digits, 16)
+    // 2. Match body
+    let value_char = cut_err(alt((
+        // Hex scalar value: x<hex>
+        // Note: We must NOT cut here, because `#\x` is a valid literal char 'x'.
+        preceded(alt(('x', 'X')), hex_digit1).verify_map(|digits| {
+            u32::from_str_radix(digits, 16)
                 .ok()
                 .and_then(char::from_u32)
-            else {
-                return lex_error("<character>");
-            };
-            *input = probe;
-            codepoint
-        } else {
-            c1 // No hex digits: literal 'x' / 'X'
-        }
-    } else if c1.is_ascii_alphabetic() {
-        // Possible named character like `space`, `newline`, etc.
-        let mut name = String::new();
-        name.push(c1);
-        input.eat_while(&mut name, |c| c.is_ascii_alphabetic());
+        }),
+        // Named character
+        take_while(1.., |c: char| c.is_ascii_alphabetic()).verify_map(named_character),
+        // Any character
+        |i: &mut WinnowInput<'i>| i.next_or_incomplete_token(),
+    )))
+    .parse_next(input)?;
 
-        if name.len() == c1.len_utf8() {
-            c1 // Single alphabetic character like `#\a`
-        } else {
-            match named_character(&name) {
-                Some(ch) => ch,
-                None => return lex_error("<character>"),
-            }
-        }
-    } else {
-        c1 // Any other single character after `#\`
-    };
-
-    // Enforce delimiter after the `<character>` token.
+    // 3. Enforce delimiter after the `<character>` token.
     ensure_delimiter(input, "<character>")?;
 
     let end = input.current_token_start();

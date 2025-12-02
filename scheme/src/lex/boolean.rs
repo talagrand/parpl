@@ -21,7 +21,7 @@ use crate::ast::{Span, Syntax};
 ///
 /// This helper is consulted before `<number>` prefix handling so that
 /// `#t` / `#f` and their long forms are always recognized as booleans.
-pub fn lex_boolean<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
+pub fn lex_boolean<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
     let mut probe = *input;
 

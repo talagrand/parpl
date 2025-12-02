@@ -3,10 +3,15 @@ use crate::{
     lex::{
         PResult, SpannedToken, Token, WinnowInput,
         identifiers::is_dot_subsequent,
-        utils::{InputExt, winnow_backtrack},
+        utils::{InputExt, lex_error, winnow_backtrack, winnow_incomplete_token},
     },
 };
-use winnow::stream::{Location, Stream};
+use winnow::{
+    Parser,
+    ascii::digit1,
+    error::ContextError,
+    stream::{Location, Stream},
+};
 
 /// Canonical punctuation parser.
 ///
@@ -15,7 +20,7 @@ use winnow::stream::{Location, Stream};
 /// ```text
 /// ( | ) | #( | #u8( | ' | ` | , | ,@ | .
 /// ```
-pub fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
+pub fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
 
     let ch = input.peek_or_backtrack()?;
@@ -68,30 +73,31 @@ pub fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken>
                 Some(c) if c.is_ascii_digit() => {
                     // Label definition `#n=` or reference `#n#`
                     let mut probe = *input;
-                    let mut text = String::new();
-                    if probe.eat_while(&mut text, |c| c.is_ascii_digit()) > 0 {
+                    if let Ok(digits) = digit1::<_, ContextError>.parse_next(&mut probe) {
                         match probe.peek_token() {
                             Some('=') => {
                                 let _ = probe.next_token();
                                 *input = probe;
-                                let n = text.parse::<u64>().unwrap(); // Safe because we only ate digits
+                                let n = digits.parse::<u64>().unwrap(); // Safe because we only ate digits
                                 Token::LabelDef(n)
                             }
                             Some('#') => {
                                 let _ = probe.next_token();
                                 *input = probe;
-                                let n = text.parse::<u64>().unwrap();
+                                let n = digits.parse::<u64>().unwrap();
                                 Token::LabelRef(n)
                             }
-                            _ => return winnow_backtrack(),
+                            None => return winnow_incomplete_token(),
+                            _ => return lex_error("label definition or reference"),
                         }
                     } else {
                         return winnow_backtrack();
                     }
                 }
+                None => return winnow_incomplete_token(),
                 _ => {
-                    // Let other `#`-prefixed tokens handle this.
-                    return winnow_backtrack();
+                    // No other valid tokens start with `#`.
+                    return lex_error("punctuation");
                 }
             }
         }

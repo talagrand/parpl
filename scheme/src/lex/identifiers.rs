@@ -8,12 +8,14 @@ use crate::{
         },
     },
 };
+use std::borrow::Cow;
 use winnow::{
     Parser,
     ascii::{Caseless, hex_digit1},
     combinator::alt,
     error::{ContextError, ErrMode, StrContext},
     stream::{Location, Stream},
+    token::take_while,
 };
 
 // --- Identifier character classification ---
@@ -197,22 +199,37 @@ fn lex_symbol_element<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<char>> 
 
 /// Parse a vertical-line delimited identifier: `|<symbol element>*|`.
 /// The opening `|` has already been consumed.
-fn lex_vertical_line_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
-    let mut result = String::new();
+fn lex_vertical_line_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<Cow<'i, str>> {
+    // Fast path: consume characters that don't need escaping
+    let simple_part = take_while(0.., |c| c != '|' && c != '\\').parse_next(input)?;
 
-    while let Some(ch) = lex_symbol_element(input)? {
-        result.push(ch);
+    match input.peek_token() {
+        Some('|') => {
+            // No escapes encountered, just the closing delimiter
+            let _ = input.next_token();
+            Ok(Cow::Borrowed(simple_part))
+        }
+        Some('\\') => {
+            // Encountered an escape sequence; switch to owned string building
+            let mut result = String::from(simple_part);
+
+            while let Some(ch) = lex_symbol_element(input)? {
+                result.push(ch);
+            }
+
+            // Consume the closing `|`
+            if !input.eat('|') {
+                return winnow_incomplete();
+            }
+
+            Ok(Cow::Owned(result))
+        }
+        _ => winnow_incomplete(),
     }
-
-    // Consume the closing `|`
-    if !input.eat('|') {
-        return winnow_incomplete();
-    }
-
-    Ok(result)
 }
 
-/// Parse a `<peculiar identifier>`.
+/// Parse the content of a `<peculiar identifier>` (without consuming it into a string).
+/// This function just validates and advances the input.
 ///
 /// ```text
 /// <peculiar identifier> ::= <explicit sign>
@@ -223,30 +240,20 @@ fn lex_vertical_line_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<Stri
 ///
 /// IMPORTANT: This must NOT match `+i`, `-i`, or `<infnan>` which are numbers.
 /// We handle this by checking for these cases and backtracking.
-fn lex_peculiar_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
+fn lex_peculiar_identifier_content<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
     let start = *input;
-    let mut result = String::new();
-
     let first = input.peek_or_backtrack()?;
 
     match first {
         '+' | '-' => {
-            result.push(first);
             let _ = input.next_token();
 
             // Check what follows
             match input.peek_token() {
-                None => {
-                    // Just `+` or `-` alone - valid peculiar identifier
-                    Ok(result)
-                }
-                Some(ch) if is_delimiter(ch) => {
-                    // `+` or `-` followed by delimiter - valid
-                    Ok(result)
-                }
+                None => Ok(()), // Just `+` or `-` alone - valid peculiar identifier
+                Some(ch) if is_delimiter(ch) => Ok(()), // `+` or `-` followed by delimiter - valid
                 Some('.') => {
                     // `<explicit sign> . <dot subsequent> <subsequent>*`
-                    result.push('.');
                     let _ = input.next_token();
 
                     // Must have <dot subsequent>
@@ -259,12 +266,11 @@ fn lex_peculiar_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
                         *input = start;
                         return winnow_backtrack();
                     }
-                    result.push(ds);
                     let _ = input.next_token();
 
                     // Consume remaining <subsequent>*
-                    input.eat_while(&mut result, is_subsequent);
-                    Ok(result)
+                    let _ = take_while(0.., is_subsequent).parse_next(input)?;
+                    Ok(())
                 }
                 Some(ch) if is_sign_subsequent(ch) => {
                     // Check for `+i`, `-i` which are numbers, not identifiers
@@ -320,12 +326,11 @@ fn lex_peculiar_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
                     }
 
                     // `<explicit sign> <sign subsequent> <subsequent>*`
-                    result.push(ch);
                     let _ = input.next_token();
 
                     // Consume remaining <subsequent>*
-                    input.eat_while(&mut result, is_subsequent);
-                    Ok(result)
+                    let _ = take_while(0.., is_subsequent).parse_next(input)?;
+                    Ok(())
                 }
                 _ => {
                     // Invalid character after sign
@@ -336,7 +341,6 @@ fn lex_peculiar_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
         }
         '.' => {
             // `. <dot subsequent> <subsequent>*`
-            result.push('.');
             let _ = input.next_token();
 
             // Must have <dot subsequent>
@@ -356,12 +360,11 @@ fn lex_peculiar_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
                 // Continue - this could be `...` or `..<subsequent>*`
             }
 
-            result.push(ds);
             let _ = input.next_token();
 
             // Consume remaining <subsequent>*
-            input.eat_while(&mut result, is_subsequent);
-            Ok(result)
+            let _ = take_while(0.., is_subsequent).parse_next(input)?;
+            Ok(())
         }
         _ => winnow_backtrack(),
     }
@@ -376,12 +379,12 @@ fn lex_peculiar_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<String> {
 ///                 | <vertical line> <symbol element>* <vertical line>
 ///                 | <peculiar identifier>
 /// ```
-pub fn lex_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> {
+pub fn lex_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
 
     let first = input.peek_or_backtrack()?;
 
-    let name = match first {
+    let name: Cow<'i, str> = match first {
         // Vertical-line delimited identifier
         '|' => {
             let _ = input.next_token();
@@ -389,14 +392,14 @@ pub fn lex_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken> 
         }
         // Regular identifier: <initial> <subsequent>*
         ch if is_initial(ch) => {
-            let mut name = String::new();
-            name.push(ch);
-            let _ = input.next_token();
-            input.eat_while(&mut name, is_subsequent);
-            name
+            let slice = take_while(0.., is_subsequent).parse_next(input)?;
+            Cow::Borrowed(slice)
         }
         // Peculiar identifier (starts with +, -, or .)
-        '+' | '-' | '.' => lex_peculiar_identifier(input)?,
+        '+' | '-' | '.' => {
+            let slice = lex_peculiar_identifier_content.take().parse_next(input)?;
+            Cow::Borrowed(slice)
+        }
         _ => return winnow_backtrack(),
     };
 

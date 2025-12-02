@@ -1,6 +1,5 @@
 use crate::ast::{
-    Datum, FiniteRealRepr, NumberExactness, NumberLiteral, NumberRadix, NumberValue, RealRepr,
-    Span, Syntax,
+    self, Datum, FiniteRealKind, NumberExactness, NumberRadix, NumberValue, RealRepr, Span, Syntax,
 };
 use crate::{
     ParseError,
@@ -30,7 +29,9 @@ pub struct TokenStream<'i> {
 impl<'i> TokenStream<'i> {
     /// Create a new token stream from lexed tokens.
     pub fn new(lexer: lex::Lexer<'i>) -> Self {
-        Self { lexer: lexer.peekable() }
+        Self {
+            lexer: lexer.peekable(),
+        }
     }
 
     /// Lex source and create a token stream.
@@ -39,7 +40,7 @@ impl<'i> TokenStream<'i> {
     }
 
     /// Peek at the next token without consuming it, skipping datum comments.
-    pub fn peek(&mut self) -> Result<Option<&SpannedToken>, ParseError> {
+    pub fn peek(&mut self) -> Result<Option<&SpannedToken<'i>>, ParseError> {
         self.skip_datum_comments()?;
         match self.lexer.peek() {
             Some(Ok(token)) => Ok(Some(token)),
@@ -49,12 +50,12 @@ impl<'i> TokenStream<'i> {
     }
 
     /// Peek at the next token's value without consuming it, skipping datum comments.
-    pub fn peek_token_value(&mut self) -> Result<Option<&Token>, ParseError> {
+    pub fn peek_token_value(&mut self) -> Result<Option<&Token<'i>>, ParseError> {
         Ok(self.peek()?.map(|st| &st.value))
     }
 
     /// Consume and return the next token, skipping datum comments.
-    pub fn next_token(&mut self) -> Result<Option<SpannedToken>, ParseError> {
+    pub fn next_token(&mut self) -> Result<Option<SpannedToken<'i>>, ParseError> {
         self.skip_datum_comments()?;
         match self.lexer.next() {
             Some(Ok(token)) => Ok(Some(token)),
@@ -190,10 +191,10 @@ impl<'i> TokenStream<'i> {
                     self.skip_one_datum()?;
                     // Now expect )
                     self.skip_datum_comments()?;
-                    if let Some(Ok(token)) = self.lexer.peek() {
-                        if matches!(token.value, Token::RParen) {
-                            self.lexer.next();
-                        }
+                    if let Some(Ok(token)) = self.lexer.peek()
+                        && matches!(token.value, Token::RParen)
+                    {
+                        self.lexer.next();
                     }
                     return Ok(());
                 }
@@ -221,10 +222,10 @@ impl<'i> TokenStream<'i> {
 
         match token.value {
             Token::Boolean(b) => Ok(Syntax::new(token.span, Datum::Boolean(b))),
-            Token::Number(n) => Ok(Syntax::new(token.span, Datum::Number(n))),
+            Token::Number(n) => Ok(Syntax::new(token.span, Datum::Number(n.into()))),
             Token::Character(c) => Ok(Syntax::new(token.span, Datum::Character(c))),
-            Token::String(s) => Ok(Syntax::new(token.span, Datum::String(s))),
-            Token::Identifier(s) => Ok(Syntax::new(token.span, Datum::Symbol(s))),
+            Token::String(s) => Ok(Syntax::new(token.span, Datum::String(s.into_owned()))),
+            Token::Identifier(s) => Ok(Syntax::new(token.span, Datum::Symbol(s.into_owned()))),
 
             Token::LParen => self.parse_list(token.span),
             Token::VectorStart => self.parse_vector(token.span),
@@ -435,7 +436,7 @@ impl<'i> TokenStream<'i> {
 }
 
 /// Attempt to interpret `literal` as a `<byte>` value (exact integer 0-255).
-fn number_literal_to_byte(literal: &NumberLiteral) -> Option<u8> {
+fn number_literal_to_byte(literal: &ast::NumberLiteral) -> Option<u8> {
     match literal.kind.exactness {
         NumberExactness::Inexact => return None,
         NumberExactness::Exact | NumberExactness::Unspecified => {}
@@ -449,9 +450,10 @@ fn number_literal_to_byte(literal: &NumberLiteral) -> Option<u8> {
     };
 
     match &literal.kind.value {
-        NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Integer { spelling })) => {
-            integer_spelling_to_byte(spelling, radix)
-        }
+        NumberValue::Real(RealRepr::Finite {
+            kind: FiniteRealKind::Integer,
+            spelling,
+        }) => integer_spelling_to_byte(spelling, radix),
         _ => None,
     }
 }

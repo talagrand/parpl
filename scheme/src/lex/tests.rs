@@ -1,8 +1,5 @@
 use super::*;
-use crate::ast::{
-    FiniteRealRepr, InfinityNan, NumberExactness, NumberLiteralKind, NumberRadix, NumberValue,
-    RealRepr,
-};
+use crate::ast::{FiniteRealKind, InfinityNan, NumberExactness, NumberRadix};
 
 // --- Test Infrastructure ---
 
@@ -196,8 +193,10 @@ impl NumCheck {
         match self {
             NumCheck::Any => {}
             NumCheck::Int(s) => {
-                if let NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Integer { spelling })) =
-                    &kind.value
+                if let NumberValue::Real(RealRepr::Finite(FiniteReal {
+                    kind: FiniteRealKind::Integer,
+                    spelling,
+                })) = &kind.value
                 {
                     assert_eq!(
                         spelling, s,
@@ -212,8 +211,10 @@ impl NumCheck {
                 }
             }
             NumCheck::Dec(s) => {
-                if let NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Decimal { spelling })) =
-                    &kind.value
+                if let NumberValue::Real(RealRepr::Finite(FiniteReal {
+                    kind: FiniteRealKind::Decimal,
+                    spelling,
+                })) = &kind.value
                 {
                     assert_eq!(
                         spelling, s,
@@ -228,8 +229,10 @@ impl NumCheck {
                 }
             }
             NumCheck::Rat(s) => {
-                if let NumberValue::Real(RealRepr::Finite(FiniteRealRepr::Rational { spelling })) =
-                    &kind.value
+                if let NumberValue::Real(RealRepr::Finite(FiniteReal {
+                    kind: FiniteRealKind::Rational,
+                    spelling,
+                })) = &kind.value
                 {
                     assert_eq!(
                         spelling, s,
@@ -246,7 +249,10 @@ impl NumCheck {
             NumCheck::RectInt(r, i) => {
                 if let NumberValue::Rectangular { real, imag } = &kind.value {
                     match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
+                        RealRepr::Finite(FiniteReal {
+                            kind: FiniteRealKind::Integer,
+                            spelling,
+                        }) => {
                             assert_eq!(spelling, r)
                         }
                         _ => {
@@ -254,7 +260,10 @@ impl NumCheck {
                         }
                     }
                     match imag {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
+                        RealRepr::Finite(FiniteReal {
+                            kind: FiniteRealKind::Integer,
+                            spelling,
+                        }) => {
                             assert_eq!(spelling, i)
                         }
                         _ => {
@@ -268,7 +277,10 @@ impl NumCheck {
             NumCheck::RectRat(r, i) => {
                 if let NumberValue::Rectangular { real, imag } = &kind.value {
                     match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
+                        RealRepr::Finite(FiniteReal {
+                            kind: FiniteRealKind::Integer,
+                            spelling,
+                        }) => {
                             assert_eq!(spelling, r)
                         }
                         _ => {
@@ -276,7 +288,10 @@ impl NumCheck {
                         }
                     }
                     match imag {
-                        RealRepr::Finite(FiniteRealRepr::Rational { spelling }) => {
+                        RealRepr::Finite(FiniteReal {
+                            kind: FiniteRealKind::Rational,
+                            spelling,
+                        }) => {
                             assert_eq!(spelling, i)
                         }
                         _ => {
@@ -290,7 +305,10 @@ impl NumCheck {
             NumCheck::PolarInt(m, a) => {
                 if let NumberValue::Polar { magnitude, angle } = &kind.value {
                     match magnitude {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
+                        RealRepr::Finite(FiniteReal {
+                            kind: FiniteRealKind::Integer,
+                            spelling,
+                        }) => {
                             assert_eq!(spelling, m)
                         }
                         _ => {
@@ -298,7 +316,10 @@ impl NumCheck {
                         }
                     }
                     match angle {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
+                        RealRepr::Finite(FiniteReal {
+                            kind: FiniteRealKind::Integer,
+                            spelling,
+                        }) => {
                             assert_eq!(spelling, a)
                         }
                         _ => panic!("{}: token {} expected Integer angle", test_name, index),
@@ -310,7 +331,10 @@ impl NumCheck {
             NumCheck::PolarRatDec(m, a) => {
                 if let NumberValue::Polar { magnitude, angle } = &kind.value {
                     match magnitude {
-                        RealRepr::Finite(FiniteRealRepr::Rational { spelling }) => {
+                        RealRepr::Finite(FiniteReal {
+                            kind: FiniteRealKind::Rational,
+                            spelling,
+                        }) => {
                             assert_eq!(spelling, m)
                         }
                         _ => {
@@ -318,7 +342,10 @@ impl NumCheck {
                         }
                     }
                     match angle {
-                        RealRepr::Finite(FiniteRealRepr::Decimal { spelling }) => {
+                        RealRepr::Finite(FiniteReal {
+                            kind: FiniteRealKind::Decimal,
+                            spelling,
+                        }) => {
                             assert_eq!(spelling, a)
                         }
                         _ => panic!("{}: token {} expected Decimal angle", test_name, index),
@@ -337,7 +364,10 @@ impl NumCheck {
             NumCheck::RectInfImag(r, k) => {
                 if let NumberValue::Rectangular { real, imag } = &kind.value {
                     match real {
-                        RealRepr::Finite(FiniteRealRepr::Integer { spelling }) => {
+                        RealRepr::Finite(FiniteReal {
+                            kind: FiniteRealKind::Integer,
+                            spelling,
+                        }) => {
                             assert_eq!(spelling, r)
                         }
                         _ => {
