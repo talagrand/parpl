@@ -11,7 +11,7 @@ use crate::{
 use winnow::{
     Parser,
     ascii::{hex_digit1, line_ending, space0},
-    combinator::{alt, cut_err, preceded},
+    combinator::{alt, cut_err, preceded, repeat},
     error::{ContextError, ErrMode, StrContext},
     stream::{Location, Stream},
     token::{literal, take_while},
@@ -43,53 +43,62 @@ fn named_character(name: &str) -> Option<char> {
 /// <string> ::= " <string element>* "
 ///
 /// <string element> ::= any character other than " or \
-///                     | <mnemonic escape> | \" | \\
+///                     | <mnemonic escape> | " | \
 ///                     | \ <intraline whitespace>* <line ending>
 ///                       <intraline whitespace>*
 ///                     | <inline hex escape>
 /// ```
-///
+enum Fragment<'a> {
+    Literal(&'a str),
+    Char(char),
+    Empty,
+}
+
+fn is_string_terminator(c: char) -> bool {
+    c == '"' || c == '\\' || c == '\n' || c == '\r'
+}
+
+fn lex_string_fragment<'i>(input: &mut WinnowInput<'i>) -> PResult<Fragment<'i>> {
+    match input.peek_token() {
+        Some('"') => return winnow_backtrack(),
+        Some('\n' | '\r') => return lex_error("<string>"),
+        None => return winnow_incomplete(),
+        _ => {}
+    }
+
+    alt((
+        preceded('\\', cut_err(lex_string_escape)).map(|opt_c| match opt_c {
+            Some(c) => Fragment::Char(c),
+            None => Fragment::Empty,
+        }),
+        take_while(1.., |c| !is_string_terminator(c)).map(Fragment::Literal),
+    ))
+    .parse_next(input)
+}
+
 /// This function assumes the opening `"` has already been consumed
 /// and stops just before the closing `"`.
 fn lex_string_body<'i>(input: &mut WinnowInput<'i>) -> PResult<std::borrow::Cow<'i, str>> {
-    let is_not_string_terminator = |c| c != '"' && c != '\\' && c != '\n' && c != '\r';
-
-    // Fast path: consume literal text.
-    // Strings cannot contain raw newlines, so we stop at them too.
-    let simple_part = take_while(0.., is_not_string_terminator).parse_next(input)?;
+    let simple_part = take_while(0.., |c| !is_string_terminator(c)).parse_next(input)?;
 
     match input.peek_or_incomplete()? {
-        '"' => {
-            // No escapes encountered, just the closing quote
-            Ok(std::borrow::Cow::Borrowed(simple_part))
-        }
+        '"' => Ok(std::borrow::Cow::Borrowed(simple_part)),
         '\\' => {
-            // Encountered an escape sequence; switch to owned string building
-            let mut result = String::from(simple_part);
-
-            loop {
-                // We are at a backslash or just finished a chunk.
-                // If we are at a backslash, handle escape.
-                if input.peek_token() == Some('\\') {
-                    let _ = input.next_token();
-                    if let Some(c) = lex_string_escape(input)? {
-                        result.push(c);
-                    }
-                } else {
-                    // Consume next chunk of literal text
-                    let chunk: &str =
-                        take_while(0.., is_not_string_terminator).parse_next(input)?;
-                    result.push_str(chunk);
-                }
-
-                match input.peek_or_incomplete()? {
-                    '"' => break,
-                    '\\' => continue, // Loop back to handle escape
-                    '\n' | '\r' => return lex_error("<string>"),
-                    _ => continue, // Continue to consume next chunk
-                }
-            }
-            Ok(std::borrow::Cow::Owned(result))
+            let init = String::from(simple_part);
+            repeat(0.., lex_string_fragment)
+                .fold(
+                    move || init.clone(),
+                    |mut s, fragment| {
+                        match fragment {
+                            Fragment::Literal(t) => s.push_str(t),
+                            Fragment::Char(c) => s.push(c),
+                            Fragment::Empty => {}
+                        }
+                        s
+                    },
+                )
+                .parse_next(input)
+                .map(std::borrow::Cow::Owned)
         }
         '\n' | '\r' => lex_error("<string>"),
         _ => unreachable!("take_while stops at quote, backslash, or newline"),
@@ -151,17 +160,13 @@ fn lex_string_escape<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<char>> {
 pub(crate) fn lex_string<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
 
-    if !input.eat('"') {
-        return winnow_backtrack();
-    }
+    literal("\"").parse_next(input)?;
 
     let value = lex_string_body(input)?;
 
-    match input.next_token() {
-        Some('"') => {}
-        None => return winnow_incomplete(),
-        _ => return lex_error("<string>"),
-    }
+    cut_err(literal("\""))
+        .context(StrContext::Label("<string>"))
+        .parse_next(input)?;
 
     let end = input.current_token_start();
     Ok(Syntax::new(Span { start, end }, Token::String(value)))

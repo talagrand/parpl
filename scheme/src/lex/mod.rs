@@ -262,6 +262,9 @@ impl<'i> Lexer<'i> {
         }
 
         // 4. Prefixed numbers (`#b`, `#x`, `#e`, `#i`, ...).
+        // Note: lex_boolean must come before this because #t/#f could be mistaken
+        // for hex digits if we aren't careful, though lex_prefixed_number looks for
+        // specific radix prefixes.
         match lex_prefixed_number(&mut self.input) {
             Ok(mut literal) => {
                 let end = self.input.current_token_start();
