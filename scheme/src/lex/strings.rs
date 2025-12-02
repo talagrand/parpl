@@ -73,6 +73,7 @@ fn lex_string_fragment<'i>(input: &mut WinnowInput<'i>) -> PResult<Fragment<'i>>
         }),
         take_while(1.., |c| !is_string_terminator(c)).map(Fragment::Literal),
     ))
+    .context(StrContext::Label("<string>"))
     .parse_next(input)
 }
 

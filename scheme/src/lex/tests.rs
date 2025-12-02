@@ -17,7 +17,9 @@ enum Expected {
 enum ErrorMatcher {
     Incomplete,
     IncompleteToken,
-    Lex(&'static str), // nonterminal
+    /// Lex error with expected span.
+    /// Parameters: (nonterminal, start, end).
+    LexSpan(&'static str, usize, usize),
 }
 
 enum TokenMatcher {
@@ -95,8 +97,25 @@ impl ErrorMatcher {
         match (self, err) {
             (ErrorMatcher::Incomplete, ParseError::Incomplete) => {}
             (ErrorMatcher::IncompleteToken, ParseError::IncompleteToken) => {}
-            (ErrorMatcher::Lex(nt), ParseError::Lex { nonterminal, .. }) => {
+            (
+                ErrorMatcher::LexSpan(nt, start, end),
+                ParseError::Lex {
+                    span,
+                    nonterminal,
+                    ..
+                },
+            ) => {
                 assert_eq!(nt, nonterminal, "{}: error nonterminal mismatch", test_name);
+                assert_eq!(
+                    *start, span.start,
+                    "{}: error span.start mismatch (expected {}, got {})",
+                    test_name, start, span.start
+                );
+                assert_eq!(
+                    *end, span.end,
+                    "{}: error span.end mismatch (expected {}, got {})",
+                    test_name, end, span.end
+                );
             }
             _ => panic!(
                 "{}: error mismatch. Expected {:?}, got {:?}",
@@ -108,10 +127,15 @@ impl ErrorMatcher {
 
 impl std::fmt::Debug for ErrorMatcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
+        match self {    
             Self::Incomplete => write!(f, "Incomplete"),
             Self::IncompleteToken => write!(f, "IncompleteToken"),
-            Self::Lex(arg0) => f.debug_tuple("Lex").field(arg0).finish(),
+            Self::LexSpan(arg0, arg1, arg2) => f
+                .debug_tuple("LexSpan")
+                .field(arg0)
+                .field(arg1)
+                .field(arg2)
+                .finish(),
         }
     }
 }
@@ -458,8 +482,10 @@ fn number_test_cases() -> Vec<TestCase> {
         },
         TestCase {
             name: "malformed_number_suffix",
-            input: "42foo",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            input: "0 42foo",
+            // Error is in the second number token ("42foo");
+            // span covers the valid numeric prefix of that token.
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 2, 4)),
         },
         TestCase {
             name: "rationals",
@@ -477,17 +503,17 @@ fn number_test_cases() -> Vec<TestCase> {
         TestCase {
             name: "malformed_rational_1",
             input: "3/x",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 2)),
         },
         TestCase {
             name: "malformed_rational_2",
             input: "1/2/3",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 3)),
         },
         TestCase {
             name: "invalid_hex_literal",
             input: "0x1",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "decimal_complex",
@@ -530,22 +556,22 @@ fn number_test_cases() -> Vec<TestCase> {
         TestCase {
             name: "complex_double_sign_invalid_1",
             input: "1+-2i",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "complex_double_sign_invalid_2",
             input: "1-+2i",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "complex_double_sign_invalid_3",
             input: "1--2i",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "complex_double_sign_invalid_4",
             input: "1++2i",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "complex_infnan_valid",
@@ -568,7 +594,7 @@ fn number_test_cases() -> Vec<TestCase> {
         TestCase {
             name: "complex_infnan_double_sign_invalid",
             input: "1+-inf.0i",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "nondecimal_complex_unit_imaginary_with_real",
@@ -590,22 +616,22 @@ fn number_test_cases() -> Vec<TestCase> {
         TestCase {
             name: "pure_imaginary_signless_integer_invalid",
             input: "2i",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "pure_imaginary_signless_rational_invalid",
             input: "3/4i",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 3)),
         },
         TestCase {
             name: "pure_imaginary_signless_decimal_invalid",
             input: "1.0e3i",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 5)),
         },
         TestCase {
             name: "pure_imaginary_signless_unit_invalid",
             input: "1i",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "prefixed_decimal",
@@ -661,17 +687,17 @@ fn number_test_cases() -> Vec<TestCase> {
         TestCase {
             name: "prefixed_errors_1",
             input: "#d#d1",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "prefixed_errors_2",
             input: "#e#i1",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "prefixed_errors_3",
             input: "#d42foo",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "prefixed_errors_4",
@@ -773,7 +799,7 @@ fn number_test_cases() -> Vec<TestCase> {
         TestCase {
             name: "nondecimal_errors_1",
             input: "#b102",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "nondecimal_errors_2",
@@ -783,32 +809,32 @@ fn number_test_cases() -> Vec<TestCase> {
         TestCase {
             name: "nondecimal_errors_3",
             input: "#xA/G",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "nondecimal_errors_4",
             input: "#b#b1",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "nondecimal_errors_5",
             input: "#i#e#b1",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "nondecimal_errors_6",
             input: "#b1010foo",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "nondecimal_errors_7",
             input: "#b101e10",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "nondecimal_errors_8",
             input: "#x1.2",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "nondecimal_complex",
@@ -856,12 +882,12 @@ fn number_test_cases() -> Vec<TestCase> {
         TestCase {
             name: "infnan_errors_1",
             input: "+inf.0foo",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 6)),
         },
         TestCase {
             name: "infnan_errors_2",
             input: "#e+inf.0bar",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "ambiguous_complex_1",
@@ -871,33 +897,33 @@ fn number_test_cases() -> Vec<TestCase> {
         TestCase {
             name: "ambiguous_complex_2",
             input: "1+2)",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "ambiguous_complex_3",
             input: "#e1@foo",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "ambiguous_complex_4",
             input: "#b1@10x",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 1)),
         },
         TestCase {
             name: "ambiguous_complex_5",
             input: "+inf.0x",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 6)),
         },
         TestCase {
             name: "ambiguous_complex_6",
             input: "+inf.0i0",
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 0, 6)),
         },
         TestCase {
             name: "number_invalid_exponent_space",
             input: "(+ 1e 1e)",
             // 1e followed by space is invalid number format, not incomplete token
-            expected: Expected::Error(ErrorMatcher::Lex("<number>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<number>", 3, 5)),
         },
         TestCase {
             name: "number_incomplete_exponent_eof",
@@ -1013,10 +1039,12 @@ fn run_all_tests() {
         },
         TestCase {
             name: "identifier_vertical_line_backslash_escape",
-            input: r"|foo\\bar|",
+            input: r"foo |foo\\bar|",
             // R7RS does not define `\\` as a symbol escape inside `|...|`;
             // a backslash must be written via an inline hex escape instead.
-            expected: Expected::Error(ErrorMatcher::Lex("<identifier>")),
+            // Error is in the second identifier token ("|foo\\bar|");
+            // span covers the valid prefix up to the bad escape.
+            expected: Expected::Error(ErrorMatcher::LexSpan("<identifier>", 4, 10)),
         },
         TestCase {
             name: "identifier_unicode",
@@ -1030,15 +1058,15 @@ fn run_all_tests() {
         },
         TestCase {
             name: "identifier_unicode_reject_punctuation_bullet",
-            input: "•item",
+            input: "x •item",
             // R7RS would allow this (bullet is Po), but our
             // conservative identifier rules reject it.
-            expected: Expected::Error(ErrorMatcher::Lex("<token>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<token>", 2, 5)),
         },
         TestCase {
             name: "identifier_unicode_reject_currency_euro",
-            input: "€price",
-            expected: Expected::Error(ErrorMatcher::Lex("<token>")),
+            input: "x €price",
+            expected: Expected::Error(ErrorMatcher::LexSpan("<token>", 2, 5)),
         },
         // Numbers that should NOT be identifiers
         TestCase {
@@ -1111,7 +1139,7 @@ fn run_all_tests() {
         TestCase {
             name: "unknown_directive",
             input: "#!unknown-directive",
-            expected: Expected::Error(ErrorMatcher::Lex("<directive>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<directive>", 0, 2)),
         },
         TestCase {
             name: "fold_case_directives",
@@ -1121,12 +1149,12 @@ fn run_all_tests() {
         TestCase {
             name: "directive_requires_delimiter_1",
             input: "#!fold-caseX",
-            expected: Expected::Error(ErrorMatcher::Lex("<directive>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<directive>", 0, 11)),
         },
         TestCase {
             name: "directive_requires_delimiter_2",
             input: "#!no-fold-caseX",
-            expected: Expected::Error(ErrorMatcher::Lex("<directive>")),
+            expected: Expected::Error(ErrorMatcher::LexSpan("<directive>", 0, 14)),
         },
         TestCase {
             name: "boolean_tokens",
@@ -1200,7 +1228,17 @@ fn run_all_tests() {
         TestCase {
             name: "strings_raw_newline_error",
             input: "\"foo\nbar\"",
-            expected: Expected::Error(ErrorMatcher::Lex("<string>")),
+            // The error is reported from the opening quote up to
+            // (but not including) the embedded newline.
+            expected: Expected::Error(ErrorMatcher::LexSpan("<string>", 0, 4)),
+        },
+        TestCase {
+            name: "strings_raw_newline_error_offset",
+            input: "\"ok\" \"foo\nbar\"",
+            // Second string has a raw newline; span should start at the
+            // opening quote of the second string (offset 5) and end just
+            // before the newline (offset 9).
+            expected: Expected::Error(ErrorMatcher::LexSpan("<string>", 5, 9)),
         },
         TestCase {
             name: "strings_incomplete",
@@ -1210,12 +1248,41 @@ fn run_all_tests() {
         TestCase {
             name: "strings_invalid_hex",
             input: "\"\\xZZ;\"",
-            expected: Expected::Error(ErrorMatcher::Lex("<string>")),
+            // The error is reported from the opening quote up to
+            // the start of the invalid hex digits.
+            expected: Expected::Error(ErrorMatcher::LexSpan("<string>", 0, 3)),
+        },
+        TestCase {
+            name: "strings_invalid_hex_offset",
+            input: "\"ok\" \"\\xZZ;\"",
+            // Second string has an invalid hex escape; span should start
+            // at the opening quote of the second string (offset 5) and
+            // end at the first invalid hex digit (offset 8).
+            expected: Expected::Error(ErrorMatcher::LexSpan("<string>", 5, 8)),
         },
         TestCase {
             name: "strings_incomplete_hex",
             input: "\"\\x",
             expected: Expected::Error(ErrorMatcher::IncompleteToken),
+        },
+        TestCase {
+            name: "strings_missing_hex_semicolon_offset",
+            input: "\"ok\" \"\\x41X\"",
+            // Missing ';' terminator in the hex escape of the second
+            // string; span should start at the opening quote of the
+            // second string (offset 5) and end at the unexpected
+            // character after the hex digits (offset 10).
+            expected: Expected::Error(ErrorMatcher::LexSpan("<string>", 5, 10)),
+        },
+        TestCase {
+            name: "strings_invalid_escape_offset",
+            input: "\"ok\" \"foo\\qbar\"",
+            // Invalid mnemonic escape "\\q" inside the second string.
+            // Desired behavior: report this as a `<string>` lexical error
+            // with a span from the opening quote of the second string
+            // (offset 5) to the position of the invalid escape character
+            // (offset 10).
+            expected: Expected::Error(ErrorMatcher::LexSpan("<string>", 5, 10)),
         },
         TestCase {
             name: "character_ambiguous_hash_x_literal",
@@ -1255,7 +1322,8 @@ fn run_all_tests() {
         TestCase {
             name: "reserved_bracket_is_error",
             input: "[",
-            expected: Expected::Error(ErrorMatcher::Lex("<token>")),
+            // Single reserved bracket at start of input.
+            expected: Expected::Error(ErrorMatcher::LexSpan("<token>", 0, 1)),
         },
         TestCase {
             name: "char_name_case_sensitive",
@@ -1263,7 +1331,8 @@ fn run_all_tests() {
             // Should NOT be parsed as space char.
             // Since 'S' is alphabetic, it tries to parse a named char "Space".
             // "Space" != "space", so it fails named char lookup.
-            expected: Expected::Error(ErrorMatcher::Lex("<character>")),
+            // The error is reported for the "#\\S" prefix.
+            expected: Expected::Error(ErrorMatcher::LexSpan("<character>", 0, 3)),
         },
     ];
 

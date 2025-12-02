@@ -211,6 +211,28 @@ pub struct Lexer<'i> {
 }
 
 impl<'i> Lexer<'i> {
+    /// Map a winnow error into a `ParseError` with a span derived
+    /// from the given token start and the current input offset.
+    fn map_lex_error(&mut self, start: usize, err: ErrMode<ContextError>) -> ParseError {
+        let end = self.input.current_token_start();
+        let end = if end > start { end } else { start + 1 };
+        let span = Span { start, end };
+        winnow_err_to_parse_error(err, span)
+    }
+
+    /// Run a lexing parser starting at `start`, mapping backtrack to
+    /// `Ok(None)` and other errors into `ParseError`.
+    fn run_lex<O, F>(&mut self, start: usize, parser: F) -> Result<Option<O>, ParseError>
+    where
+        F: FnOnce(&mut WinnowInput<'i>) -> PResult<O>,
+    {
+        match parser(&mut self.input) {
+            Ok(output) => Ok(Some(output)),
+            Err(ErrMode::Backtrack(_)) => Ok(None),
+            Err(e) => Err(self.map_lex_error(start, e)),
+        }
+    }
+
     /// Create a new lexer for the given source string.
     pub fn new(source: &'i str) -> Self {
         Self {
@@ -222,70 +244,47 @@ impl<'i> Lexer<'i> {
     /// Lex a single token from the input stream, returning `Ok(None)` at EOF.
     /// This driver delegates to the canonical `lex_*` parsers.
     fn token_with_span(&mut self) -> Result<Option<SpannedToken<'i>>, ParseError> {
-        let len = self.source.len();
-
         // Skip `<intertoken space>` before each token.
         let start_before = self.input.current_token_start();
-        let fallback_span_before = Span {
-            start: start_before,
-            end: len,
-        };
 
-        match lex_intertoken(&mut self.input) {
-            Ok(()) => {}
-            Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
-            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span_before)),
-        }
+        // `lex_intertoken` should not backtrack; if it does, treat it
+        // as "no intertoken space" and continue.
+        self.run_lex(start_before, lex_intertoken)?;
 
         let start = self.input.current_token_start();
         if self.input.peek_token().is_none() {
             return Ok(None);
         }
 
-        let fallback_span = Span { start, end: len };
-
         // 1. Strings.
-        match lex_string(&mut self.input) {
-            Ok(spanned) => return Ok(Some(spanned)),
-            Err(ErrMode::Backtrack(_)) => {}
-            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+        if let Some(spanned) = self.run_lex(start, lex_string)? {
+            return Ok(Some(spanned));
         }
 
         // 2. Characters.
-        match lex_character(&mut self.input) {
-            Ok(spanned) => return Ok(Some(spanned)),
-            Err(ErrMode::Backtrack(_)) => {}
-            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+        if let Some(spanned) = self.run_lex(start, lex_character)? {
+            return Ok(Some(spanned));
         }
 
         // 3. Booleans.
-        match lex_boolean(&mut self.input) {
-            Ok(spanned) => return Ok(Some(spanned)),
-            Err(ErrMode::Backtrack(_)) => {}
-            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+        if let Some(spanned) = self.run_lex(start, lex_boolean)? {
+            return Ok(Some(spanned));
         }
 
         // 4. Prefixed numbers (`#b`, `#x`, `#e`, `#i`, ...).
         // Note: lex_boolean must come before this because #t/#f could be mistaken
         // for hex digits if we aren't careful, though lex_prefixed_number looks for
         // specific radix prefixes.
-        match lex_prefixed_number(&mut self.input) {
-            Ok(mut literal) => {
-                let end = self.input.current_token_start();
-                literal.text = &self.source[start..end];
-                let span = Span { start, end };
-                return Ok(Some(Syntax::new(span, Token::Number(literal))));
-            }
-            Err(ErrMode::Backtrack(_)) => {}
-            Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
-            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+        if let Some(mut literal) = self.run_lex(start, lex_prefixed_number)? {
+            let end = self.input.current_token_start();
+            literal.text = &self.source[start..end];
+            let span = Span { start, end };
+            return Ok(Some(Syntax::new(span, Token::Number(literal))));
         }
 
         // 5. Punctuation: parens, quotes, `#(`, `#u8(`, `.`, etc.
-        match lex_punctuation(&mut self.input) {
-            Ok(spanned) => return Ok(Some(spanned)),
-            Err(ErrMode::Backtrack(_)) => {}
-            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+        if let Some(spanned) = self.run_lex(start, lex_punctuation)? {
+            return Ok(Some(spanned));
         }
 
         // 6. Decimal `<number>` tokens (no prefixes), including complex forms.
@@ -295,35 +294,29 @@ impl<'i> Lexer<'i> {
         };
         match ch {
             '+' | '-' | '0'..='9' | '.' => {
-                match lex_complex_decimal(&mut self.input) {
-                    Ok(mut literal) => {
-                        let end = self.input.current_token_start();
-                        literal.text = &self.source[start..end];
-                        let span = Span { start, end };
-                        return Ok(Some(Syntax::new(span, Token::Number(literal))));
-                    }
-                    Err(ErrMode::Backtrack(_)) => {
-                        // Not a `<number>` starting here; try as identifier
-                        // (e.g., `+` or `-` alone, or peculiar identifiers)
-                    }
-                    Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
-                    Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+                // Not a `<number>` starting here; try as identifier
+                // (e.g., `+` or `-` alone, or peculiar identifiers).
+                if let Some(mut literal) = self.run_lex(start, lex_complex_decimal)? {
+                    let end = self.input.current_token_start();
+                    literal.text = &self.source[start..end];
+                    let span = Span { start, end };
+                    return Ok(Some(Syntax::new(span, Token::Number(literal))));
                 }
             }
             _ => {}
         }
 
         // 7. Identifiers (including peculiar identifiers like `+`, `-`, `...`).
-        match lex_identifier(&mut self.input) {
-            Ok(spanned) => return Ok(Some(spanned)),
-            Err(ErrMode::Backtrack(_)) => {}
-            Err(ErrMode::Incomplete(_)) => return Err(ParseError::Incomplete),
-            Err(e) => return Err(winnow_err_to_parse_error(e, fallback_span)),
+        if let Some(spanned) = self.run_lex(start, lex_identifier)? {
+            return Ok(Some(spanned));
         }
 
         // No token matched - this is an error
+        let end = start.saturating_add(ch.len_utf8()).min(self.source.len());
+        let span = Span { start, end };
+
         Err(ParseError::lexical(
-            fallback_span,
+            span,
             "<token>",
             format!("unexpected character: {:?}", ch),
         ))
