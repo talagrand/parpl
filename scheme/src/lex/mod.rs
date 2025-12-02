@@ -1,6 +1,6 @@
 use crate::{
     ParseError,
-    ast::{self, FiniteRealKind, InfinityNan, NumberExactness, NumberRadix, Span, Syntax},
+    ast::{Span, Syntax},
     lex::{
         boolean::lex_boolean,
         identifiers::lex_identifier,
@@ -30,6 +30,63 @@ pub mod utils;
 // Internal input and result types used by the lexer implementation.
 pub type WinnowInput<'i> = winnow::stream::LocatingSlice<winnow::stream::Str<'i>>;
 pub type PResult<O> = Result<O, ErrMode<ContextError>>;
+
+/// Radix of a Scheme number literal as specified by `<radix R>`.
+///
+/// Grammar reference (Formal syntax / `<number>`):
+///
+/// ```text
+/// <radix 2>  ::= #b
+/// <radix 8>  ::= #o
+/// <radix 10> ::= <empty> | #d
+/// <radix 16> ::= #x
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumberRadix {
+    Binary,
+    Octal,
+    Decimal,
+    Hexadecimal,
+}
+
+/// Exactness marker of a Scheme number literal.
+///
+/// ```text
+/// <exactness> ::= <empty> | #i | #e
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumberExactness {
+    Exact,
+    Inexact,
+    /// No explicit `#e`/`#i` prefix; exactness is determined
+    /// by the default rules of the report.
+    Unspecified,
+}
+
+/// The four special infinities / NaNs used by `<infnan>`.
+///
+/// ```text
+/// <infnan> ::= +inf.0 | -inf.0 | +nan.0 | -nan.0
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InfinityNan {
+    PositiveInfinity,
+    NegativeInfinity,
+    PositiveNaN,
+    NegativeNaN,
+}
+
+/// Finite real-number spellings built from `<ureal R>` and
+/// `<decimal 10>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FiniteRealKind {
+    /// A (possibly signed) integer, e.g. "42", "-7".
+    Integer,
+    /// A (possibly signed) rational, e.g. "3/4", "-5/16".
+    Rational,
+    /// A (possibly signed) decimal, e.g. "3.14", "-.5", "1e3".
+    Decimal,
+}
 
 // --- Lexer-specific Number Representations (Zero-Copy) ---
 
@@ -78,59 +135,6 @@ impl<'a> NumberLiteralKind<'a> {
 pub struct NumberLiteral<'a> {
     pub text: &'a str,
     pub kind: NumberLiteralKind<'a>,
-}
-
-impl<'a> From<FiniteReal<'a>> for ast::RealRepr {
-    fn from(lex: FiniteReal<'a>) -> Self {
-        ast::RealRepr::Finite {
-            kind: lex.kind,
-            spelling: lex.spelling.to_string(),
-        }
-    }
-}
-
-impl<'a> From<RealRepr<'a>> for ast::RealRepr {
-    fn from(lex: RealRepr<'a>) -> Self {
-        match lex {
-            RealRepr::Finite(f) => f.into(),
-            RealRepr::Infnan(i) => ast::RealRepr::Infnan(i),
-        }
-    }
-}
-
-impl<'a> From<NumberValue<'a>> for ast::NumberValue {
-    fn from(lex: NumberValue<'a>) -> Self {
-        match lex {
-            NumberValue::Real(r) => ast::NumberValue::Real(r.into()),
-            NumberValue::Rectangular { real, imag } => ast::NumberValue::Rectangular {
-                real: real.into(),
-                imag: imag.into(),
-            },
-            NumberValue::Polar { magnitude, angle } => ast::NumberValue::Polar {
-                magnitude: magnitude.into(),
-                angle: angle.into(),
-            },
-        }
-    }
-}
-
-impl<'a> From<NumberLiteralKind<'a>> for ast::NumberLiteralKind {
-    fn from(lex: NumberLiteralKind<'a>) -> Self {
-        ast::NumberLiteralKind {
-            radix: lex.radix,
-            exactness: lex.exactness,
-            value: lex.value.into(),
-        }
-    }
-}
-
-impl<'a> From<NumberLiteral<'a>> for ast::NumberLiteral {
-    fn from(lex: NumberLiteral<'a>) -> Self {
-        ast::NumberLiteral {
-            text: lex.text.to_string(),
-            kind: lex.kind.into(),
-        }
-    }
 }
 
 /// Lexical tokens as defined by `<token>` in `syn.tex`, plus internal tokens

@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod lex;
-pub mod parser;
+pub mod minireader;
+pub mod reader;
 
 use crate::ast::Span;
 
@@ -43,9 +44,9 @@ pub enum ParseError {
         message: String,
     },
 
-    /// Temporary catch-all while the parser is still a stub.
-    #[error("unimplemented parser")]
-    Unimplemented,
+    /// An unsupported feature was encountered.
+    #[error("unsupported feature at {span:?}: {message}")]
+    Unsupported { span: Span, message: String },
 }
 
 impl ParseError {
@@ -63,6 +64,14 @@ impl ParseError {
         ParseError::Syntax {
             span,
             nonterminal,
+            message: message.into(),
+        }
+    }
+
+    /// Helper for constructing an unsupported error.
+    pub fn unsupported(span: Span, message: impl Into<String>) -> Self {
+        ParseError::Unsupported {
+            span,
             message: message.into(),
         }
     }

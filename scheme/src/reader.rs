@@ -1,10 +1,147 @@
-use crate::ast::{
-    self, Datum, FiniteRealKind, NumberExactness, NumberRadix, NumberValue, RealRepr, Span, Syntax,
+use crate::ParseError;
+use crate::ast::{Span, Syntax};
+use crate::lex::{
+    self, FiniteRealKind, InfinityNan, NumberExactness, NumberRadix, SpannedToken, Token,
 };
-use crate::{
-    ParseError,
-    lex::{self, SpannedToken, Token},
-};
+
+/// Representation of `<real R>` values.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RealRepr {
+    /// A finite real built from `<ureal R>` or `<decimal 10>`.
+    Finite {
+        kind: FiniteRealKind,
+        spelling: String,
+    },
+    /// One of the four `<infnan>` spellings.
+    Infnan(InfinityNan),
+}
+
+/// Complex-number structure corresponding to `<complex R>`.
+///
+/// ```text
+/// <complex R> ::= <real R>
+///                | <real R> @ <real R>
+///                | <real R> + <ureal R> i
+///                | <real R> - <ureal R> i
+///                | <real R> + i
+///                | <real R> - i
+///                | <real R> <infnan> i
+///                | + <ureal R> i
+///                | - <ureal R> i
+///                | <infnan> i
+///                | + i
+///                | - i
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NumberValue {
+    /// A purely real number `<real R>`.
+    Real(RealRepr),
+    /// Rectangular complex form `a+bi` / `a-bi` and related
+    /// special cases normalized into explicit real and imaginary
+    /// parts.
+    Rectangular { real: RealRepr, imag: RealRepr },
+    /// Polar complex form `r@theta`.
+    Polar {
+        magnitude: RealRepr,
+        angle: RealRepr,
+    },
+}
+
+/// Full structural classification of a Scheme number literal.
+///
+/// This mirrors `<num R> ::= <prefix R> <complex R>`: `radix` and
+/// `exactness` capture `<prefix R>`, while `value` is the parsed
+/// `<complex R>` structure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NumberLiteralKind {
+    pub radix: NumberRadix,
+    pub exactness: NumberExactness,
+    pub value: NumberValue,
+}
+
+/// A number literal, keeping the original spelling from the source.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumberLiteral {
+    /// Exact token text, including prefixes/suffixes.
+    pub text: String,
+    pub kind: NumberLiteralKind,
+}
+
+// Conversions from lexer number representations to reader-owned numbers.
+
+impl<'a> From<lex::FiniteReal<'a>> for RealRepr {
+    fn from(lex_finite: lex::FiniteReal<'a>) -> Self {
+        RealRepr::Finite {
+            kind: lex_finite.kind,
+            spelling: lex_finite.spelling.to_string(),
+        }
+    }
+}
+
+impl<'a> From<lex::RealRepr<'a>> for RealRepr {
+    fn from(lex_real: lex::RealRepr<'a>) -> Self {
+        match lex_real {
+            lex::RealRepr::Finite(f) => f.into(),
+            lex::RealRepr::Infnan(i) => RealRepr::Infnan(i),
+        }
+    }
+}
+
+impl<'a> From<lex::NumberValue<'a>> for NumberValue {
+    fn from(lex_value: lex::NumberValue<'a>) -> Self {
+        match lex_value {
+            lex::NumberValue::Real(r) => NumberValue::Real(r.into()),
+            lex::NumberValue::Rectangular { real, imag } => NumberValue::Rectangular {
+                real: real.into(),
+                imag: imag.into(),
+            },
+            lex::NumberValue::Polar { magnitude, angle } => NumberValue::Polar {
+                magnitude: magnitude.into(),
+                angle: angle.into(),
+            },
+        }
+    }
+}
+
+impl<'a> From<lex::NumberLiteralKind<'a>> for NumberLiteralKind {
+    fn from(lex_kind: lex::NumberLiteralKind<'a>) -> Self {
+        NumberLiteralKind {
+            radix: lex_kind.radix,
+            exactness: lex_kind.exactness,
+            value: lex_kind.value.into(),
+        }
+    }
+}
+
+impl<'a> From<lex::NumberLiteral<'a>> for NumberLiteral {
+    fn from(lex_literal: lex::NumberLiteral<'a>) -> Self {
+        NumberLiteral {
+            text: lex_literal.text.to_string(),
+            kind: lex_literal.kind.into(),
+        }
+    }
+}
+
+/// Datum syntax as defined in the "External representations" section
+/// of `spec/syn.md`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Datum {
+    Boolean(bool),
+    Number(NumberLiteral),
+    Character(char),
+    String(String),
+    Symbol(String),
+    ByteVector(Vec<u8>),
+    /// The empty list `()`.
+    EmptyList,
+    /// Proper and improper lists are represented via pairs.
+    Pair(Box<Syntax<Datum>>, Box<Syntax<Datum>>),
+    Vector(Vec<Syntax<Datum>>),
+    /// A labeled datum: #n=datum
+    Labeled(u64, Box<Syntax<Datum>>),
+    /// A reference to a previously defined label: #n#
+    LabelRef(u64),
+}
 
 // ============================================================================
 // Token Stream with Datum Comment Handling
@@ -81,7 +218,9 @@ impl<'i> TokenStream<'i> {
 
             if is_comment {
                 self.lexer.next(); // consume #;
-                self.skip_one_datum()?;
+                // We can just parse the next datum and discard it.
+                // This is much simpler than maintaining a separate skip logic.
+                self.parse_datum()?;
             } else {
                 break;
             }
@@ -101,6 +240,7 @@ impl<'i> TokenStream<'i> {
     ///
     /// If the stream is empty or starts with an unexpected token (like `)`),
     /// this is a no-op (the parser will report the error).
+    #[allow(dead_code)]
     fn skip_one_datum(&mut self) -> Result<(), ParseError> {
         // First, skip any leading datum comments within this datum
         self.skip_datum_comments()?;
@@ -170,6 +310,7 @@ impl<'i> TokenStream<'i> {
     }
 
     /// Skip contents of a list/vector until the closing `)`.
+    #[allow(dead_code)]
     fn skip_list_contents(&mut self) -> Result<(), ParseError> {
         loop {
             self.skip_datum_comments()?;
@@ -436,7 +577,7 @@ impl<'i> TokenStream<'i> {
 }
 
 /// Attempt to interpret `literal` as a `<byte>` value (exact integer 0-255).
-fn number_literal_to_byte(literal: &ast::NumberLiteral) -> Option<u8> {
+fn number_literal_to_byte(literal: &NumberLiteral) -> Option<u8> {
     match literal.kind.exactness {
         NumberExactness::Inexact => return None,
         NumberExactness::Exact | NumberExactness::Unspecified => {}
@@ -493,16 +634,6 @@ fn integer_spelling_to_byte(spelling: &str, radix: u32) -> Option<u8> {
 /// <datum> ::= <simple datum> | <compound datum>
 ///           | <label> = <datum> | <label> #
 /// ```
-///
-/// Currently, only the following sub-productions are implemented:
-///
-/// ```text
-/// <simple datum> ::= <boolean> | <number>
-///                   | <character> | <string> | <symbol>
-/// ```
-///
-/// That is, `parse_datum` recognizes simple datums; compound datums
-/// return `ParseError::Unimplemented` for now.
 pub fn parse_datum(source: &str) -> Result<Syntax<Datum>, ParseError> {
     let mut stream = TokenStream::from_source(source);
     let datum = stream.parse_datum()?;
@@ -518,52 +649,6 @@ pub fn parse_datum(source: &str) -> Result<Syntax<Datum>, ParseError> {
     }
 
     Ok(datum)
-}
-
-/// Expression syntax as defined in the "Expressions" section
-/// of `syn.tex`. This is currently a placeholder and will
-/// be fleshed out rule by rule.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Expr {}
-
-/// Program syntax as defined in the "Programs and definitions"
-/// section of `syn.tex`. Placeholder for now.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Program;
-
-/// Library syntax as defined in the "Libraries" section
-/// of `syn.tex`. Placeholder for now.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Library;
-
-/// Parse a single `<expression>` from the given source string.
-///
-/// Grammar reference: see `syn.tex`, section *Expressions*.
-///
-/// Currently this is a stub and always returns
-/// `ParseError::Unimplemented`.
-pub fn parse_expression(_source: &str) -> Result<Syntax<Expr>, ParseError> {
-    Err(ParseError::Unimplemented)
-}
-
-/// Parse a `<program>` from the given source string.
-///
-/// Grammar reference: see `syn.tex`, section *Programs and definitions*.
-///
-/// Currently this is a stub and always returns
-/// `ParseError::Unimplemented`.
-pub fn parse_program(_source: &str) -> Result<Syntax<Program>, ParseError> {
-    Err(ParseError::Unimplemented)
-}
-
-/// Parse a `<library>` from the given source string.
-///
-/// Grammar reference: see `syn.tex`, section *Libraries*.
-///
-/// Currently this is a stub and always returns
-/// `ParseError::Unimplemented`.
-pub fn parse_library(_source: &str) -> Result<Syntax<Library>, ParseError> {
-    Err(ParseError::Unimplemented)
 }
 
 #[cfg(test)]
@@ -982,17 +1067,5 @@ mod tests {
         for case in cases {
             case.run();
         }
-    }
-
-    #[test]
-    fn top_level_parse_stubs_return_unimplemented() {
-        let err_expr = parse_expression("(+ 1 2)").unwrap_err();
-        assert!(matches!(err_expr, ParseError::Unimplemented));
-
-        let err_prog = parse_program("(program)").unwrap_err();
-        assert!(matches!(err_prog, ParseError::Unimplemented));
-
-        let err_lib = parse_library("(define-library (foo))").unwrap_err();
-        assert!(matches!(err_lib, ParseError::Unimplemented));
     }
 }

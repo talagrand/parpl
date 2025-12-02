@@ -1,11 +1,9 @@
-use crate::{
-    ast::{FiniteRealKind, InfinityNan, NumberExactness, NumberRadix},
-    lex::{
-        FiniteReal, NumberLiteral, NumberLiteralKind, NumberValue, PResult, RealRepr, WinnowInput,
-        utils::{
-            InputExt, cut_lex_error_token, ensure_delimiter, is_delimiter, lex_error,
-            winnow_backtrack, winnow_incomplete_token,
-        },
+use crate::lex::{
+    FiniteReal, FiniteRealKind, InfinityNan, NumberExactness, NumberLiteral, NumberLiteralKind,
+    NumberRadix, NumberValue, PResult, RealRepr, WinnowInput,
+    utils::{
+        InputExt, cut_lex_error_token, ensure_delimiter, is_delimiter, lex_error, winnow_backtrack,
+        winnow_incomplete_token,
     },
 };
 use winnow::{
