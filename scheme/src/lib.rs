@@ -14,6 +14,7 @@ pub enum Unsupported {
     Quasiquote,
     Labels,
     Characters,
+    Comments,
     ImproperLists,
     IntegerOverflowOrInvalidFormat,
     IntegerOverflow,
@@ -29,6 +30,7 @@ impl std::fmt::Display for Unsupported {
             Unsupported::Quasiquote => "quasiquote/unquote",
             Unsupported::Labels => "labels",
             Unsupported::Characters => "characters",
+            Unsupported::Comments => "comments",
             Unsupported::ImproperLists => "improper lists",
             Unsupported::IntegerOverflowOrInvalidFormat => {
                 "integer overflow or invalid format"

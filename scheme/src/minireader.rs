@@ -31,7 +31,10 @@ impl<'a> MiniReader<'a> {
             crate::lex::LexConfig {
                 // MiniReader intentionally does not support fold-case
                 // semantics or directives.
-                enable_fold_case: false,
+                reject_fold_case: true,
+                // MiniReader also does not support comments of any kind;
+                // encountering a comment is reported as Unsupported::Comments.
+                reject_comments: true,
             },
         );
         Self {
@@ -371,19 +374,17 @@ mod tests {
                     ValueMatcher::Number(3),
                 ])),
             },
-            // Datum comments
+            // Datum comments are not supported by MiniReader when
+            // `reject_comments` is enabled in the lexer configuration.
             TestCase {
                 name: "datum_comment_prefix",
                 input: "#; 1 2",
-                expected: Success(ValueMatcher::Number(2)),
+                expected: Error(ErrorMatcher::Unsupported(Unsupported::Comments)),
             },
             TestCase {
                 name: "datum_comment_in_list",
                 input: "(1 #; 2 3)",
-                expected: Success(list_matcher(vec![
-                    ValueMatcher::Number(1),
-                    ValueMatcher::Number(3),
-                ])),
+                expected: Error(ErrorMatcher::Unsupported(Unsupported::Comments)),
             },
             // Quote expansion
             TestCase {

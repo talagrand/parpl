@@ -215,6 +215,7 @@ pub(crate) fn lex_character<'i>(
             let mode = fold_case_names;
             take_while(1.., |c: char| c.is_ascii_alphabetic()).verify_map(move |name: &str| {
                 if matches!(mode, FoldCaseMode::On) {
+                    // Since character names are ascii, to_lowercase is a valid case fold.
                     let lowered = name.to_lowercase();
                     named_character(&lowered)
                 } else {

@@ -1367,13 +1367,15 @@ fn run_number_tests() {
 }
 
 #[test]
-fn directives_unsupported_when_fold_case_disabled() {
-    // With fold-case disabled in the lexer configuration, encountering
-    // a fold-case directive should yield an Unsupported error.
+fn directives_unsupported_when_reject_fold_case_enabled() {
+    // With fold-case rejection enabled in the lexer configuration,
+    // encountering a fold-case directive should yield an Unsupported
+    // error.
     let result: Result<Vec<SpannedToken>, ParseError> = lex_with_config(
         "#!fold-case",
         LexConfig {
-            enable_fold_case: false,
+            reject_fold_case: true,
+            reject_comments: false,
         },
     )
     .collect();
@@ -1384,6 +1386,54 @@ fn directives_unsupported_when_fold_case_disabled() {
         }
         other => panic!(
             "directives_unsupported_when_fold_case_disabled: expected Unsupported, got {:?}",
+            other
+        ),
+    }
+}
+
+#[test]
+fn comments_unsupported_when_reject_comments_enabled_intertoken() {
+    // With comment rejection enabled, any line or nested comment in
+    // intertoken space should yield an Unsupported::Comments error.
+    let result: Result<Vec<SpannedToken>, ParseError> = lex_with_config(
+        "; comment here\n42",
+        LexConfig {
+            reject_fold_case: false,
+            reject_comments: true,
+        },
+    )
+    .collect();
+    let err = result.expect_err("expected unsupported comments error");
+    match err {
+        ParseError::Unsupported { feature, .. } => {
+            assert_eq!(feature, Unsupported::Comments);
+        }
+        other => panic!(
+            "comments_unsupported_when_reject_comments_enabled_intertoken: expected Unsupported, got {:?}",
+            other
+        ),
+    }
+}
+
+#[test]
+fn datum_comments_unsupported_when_reject_comments_enabled() {
+    // With comment rejection enabled, datum comments `#;` should also be
+    // reported as Unsupported::Comments instead of producing a token.
+    let result: Result<Vec<SpannedToken>, ParseError> = lex_with_config(
+        "#; 1 2",
+        LexConfig {
+            reject_fold_case: false,
+            reject_comments: true,
+        },
+    )
+    .collect();
+    let err = result.expect_err("expected unsupported comments error");
+    match err {
+        ParseError::Unsupported { feature, .. } => {
+            assert_eq!(feature, Unsupported::Comments);
+        }
+        other => panic!(
+            "datum_comments_unsupported_when_reject_comments_enabled: expected Unsupported, got {:?}",
             other
         ),
     }

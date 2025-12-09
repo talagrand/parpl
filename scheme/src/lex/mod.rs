@@ -212,23 +212,35 @@ pub enum FoldCaseMode {
 
 /// Configuration options for the lexer.
 ///
-/// This currently controls whether fold-case directives are honored
-/// semantically. When disabled, identifiers and named character literals
-/// remain case-sensitive and `#!fold-case` / `#!no-fold-case` directives
-/// are treated as intertoken space with no effect.
+/// This controls whether fold-case directives are honored semantically
+/// and whether comments are accepted or rejected.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct LexConfig {
-    /// If true, `#!fold-case` / `#!no-fold-case` directives switch the
-    /// internal `FoldCaseMode` and affect identifiers and named character
-    /// literals. If false, identifiers and character names remain
-    /// case-sensitive and directives are effectively no-ops.
-    pub enable_fold_case: bool,
+    /// If true, fold-case directives are rejected as
+    /// `Unsupported::FoldCaseDirectives` and identifiers and character
+    /// names are always case-sensitive.
+    ///
+    /// When false (the default), `#!fold-case` / `#!no-fold-case`
+    /// directives are allowed and can toggle the internal
+    /// `FoldCaseMode`, which in turn controls whether identifiers and
+    /// named character literals are case-folded.
+    pub reject_fold_case: bool,
+
+    /// If true, any comment (line comment `;`, nested comment `#| |#`, or
+    /// datum comment `#;`) is rejected with `Unsupported::Comments`.
+    ///
+    /// When false (the default), comments are treated according to the
+    /// normal R7RS rules: line and nested comments are part of
+    /// `<intertoken space>`, and datum comments emit `Token::DatumComment`
+    /// for higher layers to interpret.
+    pub reject_comments: bool,
 }
 
 impl Default for LexConfig {
     fn default() -> Self {
         LexConfig {
-            enable_fold_case: true,
+            reject_fold_case: false,
+            reject_comments: false,
         }
     }
 }
@@ -293,7 +305,16 @@ impl<'i> Lexer<'i> {
 
         // `lex_intertoken` should not backtrack; if it does, treat it
         // as "no intertoken space" and continue.
-        self.run_lex(start_before, lex_intertoken)?;
+        let saw_comment = self.run_lex(start_before, lex_intertoken)?.unwrap_or(false);
+
+        if self.config.reject_comments && saw_comment {
+            let end = self.input.current_token_start();
+            let span = Span {
+                start: start_before,
+                end,
+            };
+            return Err(ParseError::unsupported(span, Unsupported::Comments));
+        }
 
         let start = self.input.current_token_start();
         if self.input.peek_token().is_none() {
@@ -306,10 +327,10 @@ impl<'i> Lexer<'i> {
         }
 
         // 2. Characters.
-        let fold_mode = if self.config.enable_fold_case {
-            self.fold_case_mode
-        } else {
+        let fold_mode = if self.config.reject_fold_case {
             FoldCaseMode::Off
+        } else {
+            self.fold_case_mode
         };
         if let Some(spanned) = self.run_lex(start, |input| lex_character(input, fold_mode))? {
             return Ok(Some(spanned));
@@ -333,6 +354,9 @@ impl<'i> Lexer<'i> {
 
         // 5. Punctuation: parens, quotes, `#(`, `#u8(`, `.`, etc.
         if let Some(spanned) = self.run_lex(start, lex_punctuation)? {
+            if self.config.reject_comments && spanned.value == Token::DatumComment {
+                return Err(ParseError::unsupported(spanned.span, Unsupported::Comments));
+            }
             return Ok(Some(spanned));
         }
 
@@ -365,16 +389,19 @@ impl<'i> Lexer<'i> {
             let end = self.input.current_token_start();
             let span = Span { start, end };
 
-            // When fold-case is enabled, directives act as intertoken space
-            // that update the internal mode but never produce tokens.
-            if self.config.enable_fold_case {
-                self.fold_case_mode = mode;
-                return self.token_with_span();
+            // When fold-case is rejected by configuration, encountering a
+            // fold-case directive is an unsupported feature.
+            if self.config.reject_fold_case {
+                return Err(ParseError::unsupported(
+                    span,
+                    Unsupported::FoldCaseDirectives,
+                ));
             }
 
-            // When fold-case is disabled by configuration, encountering a
-            // fold-case directive is an unsupported feature.
-            return Err(ParseError::unsupported(span, Unsupported::FoldCaseDirectives));
+            // Otherwise, directives act as intertoken space that update the
+            // internal mode but never produce tokens.
+            self.fold_case_mode = mode;
+            return self.token_with_span();
         }
 
         // No token matched - this is an error
@@ -415,10 +442,10 @@ impl<'i> Iterator for Lexer<'i> {
 ///
 /// Fold-case directives `#!fold-case` / `#!no-fold-case` are never emitted
 /// as tokens. They are recognized after `<intertoken space>` and treated as
-/// additional intertoken space, updating the internal `FoldCaseMode` only
-/// when `LexConfig::enable_fold_case` is true. The lexer applies
-/// fold-case semantics to identifiers and named character literals based
-/// on this mode.
+/// additional intertoken space, updating the internal `FoldCaseMode` when
+/// `LexConfig::reject_fold_case` is false. The lexer applies fold-case
+/// semantics to identifiers and named character literals based on this
+/// mode.
 ///
 /// Unicode identifier support remains conservative (see design notes for details).
 ///

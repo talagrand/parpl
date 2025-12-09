@@ -17,17 +17,22 @@ use winnow::{
 /// Canonical `<intertoken space>` parser.
 ///
 /// This parser consumes zero or more `<atmosphere>` elements:
-/// whitespace, line comments, nested comments, and directives.
+/// whitespace, line comments, and nested comments.
+///
+/// It returns `true` if at least one comment (line or nested) was
+/// encountered while consuming intertoken space, and `false` otherwise.
 ///
 /// Uses a manual loop for efficiency with `take_while` for the fast paths.
-pub fn lex_intertoken<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
+pub fn lex_intertoken<'i>(input: &mut WinnowInput<'i>) -> PResult<bool> {
+    let mut saw_comment = false;
+
     loop {
         // Fast path: consume runs of whitespace at once
         let _: &str =
             take_while(0.., |c| matches!(c, ' ' | '\t' | '\n' | '\r')).parse_next(input)?;
 
         let Some(ch) = input.peek_token() else {
-            return Ok(());
+            return Ok(saw_comment);
         };
 
         match ch {
@@ -37,6 +42,7 @@ pub fn lex_intertoken<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
                 let _: &str = till_line_ending.parse_next(input)?;
                 // Consume the line ending if present
                 let _: Option<&str> = opt(line_ending).parse_next(input)?;
+                saw_comment = true;
             }
             // Possible nested comment starting with '#'.
             '#' => {
@@ -51,17 +57,18 @@ pub fn lex_intertoken<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
                         let _ = input.next_token();
                         let _ = input.next_token();
                         lex_nested_comment_body(input)?;
+                        saw_comment = true;
                     }
                     _ => {
                         // Not a nested comment or directive; this
                         // begins a real token.
-                        return Ok(());
+                        return Ok(saw_comment);
                     }
                 }
             }
             _ => {
                 // Start of a real token.
-                return Ok(());
+                return Ok(saw_comment);
             }
         }
     }
