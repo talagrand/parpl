@@ -1,7 +1,7 @@
 use crate::{
     ast::{Span, Syntax},
     lex::{
-        PResult, SpannedToken, Token, WinnowInput,
+        FoldCaseMode, PResult, SpannedToken, Token, WinnowInput,
         utils::{
             InputExt, cut_lex_error_token, ensure_delimiter, lex_error, winnow_backtrack,
             winnow_incomplete,
@@ -17,9 +17,12 @@ use winnow::{
     token::{literal, take_while},
 };
 
-/// Look up a named character (case-sensitive).
+/// Look up a named character using the canonical lowercase spelling.
 ///
-/// R7RS §7.1.1: "Case is significant in ... <character name>"
+/// R7RS §7.1.1: "Case is significant in ... <character name>".
+///
+/// Fold-case handling, when enabled, lowercases the name before
+/// calling this function.
 fn named_character(name: &str) -> Option<char> {
     Some(match name {
         "alarm" => '\u{7}',
@@ -189,7 +192,10 @@ pub(crate) fn lex_string<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToke
 /// This helper accepts the R7RS named characters and `#\x` hex
 /// scalar values and reports lexical errors using the `<character>`
 /// nonterminal.
-pub(crate) fn lex_character<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
+pub(crate) fn lex_character<'i>(
+    input: &mut WinnowInput<'i>,
+    fold_case_names: FoldCaseMode,
+) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
 
     // 1. Match prefix "#\"
@@ -205,7 +211,17 @@ pub(crate) fn lex_character<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedT
                 .and_then(char::from_u32)
         }),
         // Named character
-        take_while(1.., |c: char| c.is_ascii_alphabetic()).verify_map(named_character),
+        {
+            let mode = fold_case_names;
+            take_while(1.., |c: char| c.is_ascii_alphabetic()).verify_map(move |name: &str| {
+                if matches!(mode, FoldCaseMode::On) {
+                    let lowered = name.to_lowercase();
+                    named_character(&lowered)
+                } else {
+                    named_character(name)
+                }
+            })
+        },
         // Any character
         |i: &mut WinnowInput<'i>| i.next_or_incomplete_token(),
     )))

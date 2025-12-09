@@ -1,7 +1,7 @@
 use crate::{
     ast::{Span, Syntax},
     lex::{
-        PResult, SpannedToken, Token, WinnowInput,
+        FoldCaseMode, PResult, SpannedToken, Token, WinnowInput,
         utils::{
             InputExt, cut_lex_error_token, ensure_delimiter, is_delimiter, lex_error,
             winnow_backtrack, winnow_incomplete,
@@ -9,6 +9,7 @@ use crate::{
     },
 };
 use std::borrow::Cow;
+use unicase::UniCase;
 use winnow::{
     Parser,
     ascii::{Caseless, hex_digit1},
@@ -21,11 +22,14 @@ use winnow::{
 // --- Identifier character classification ---
 //
 // The R7RS spec allows Unicode characters with specific general categories
-// in identifiers. Rust's stdlib doesn't expose Unicode general categories
-// directly, but we can approximate using the available methods.
+// in identifiers, but explicitly permits implementations to choose which
+// additional Unicode characters they support. Rust's stdlib doesn't expose
+// Unicode general categories directly, but we can approximate using the
+// available methods.
 //
-// R7RS-DEVIATION: Conservative Unicode identifier support.
-// See R7RS-DEVIATIONS.md §1 for full details.
+// We therefore implement a conservative, but still conforming, choice of
+// additional Unicode identifier characters. See design notes for
+// details of what is and is not accepted.
 //
 // Allowed categories per R7RS:
 //   Lu, Ll, Lt, Lm, Lo - Letters (covered by is_alphabetic())
@@ -39,10 +43,14 @@ use winnow::{
 //   - is_alphabetic() → Lu, Ll, Lt, Lm, Lo, Nl
 //   - is_numeric() → Nd, Nl, No
 //
-// We CANNOT detect: Mn, Mc, Me, Pd, Pc, Po, Sc, Sm, Sk, So, Co, U+200C/D
+// We CANNOT detect: Mn, Mc, Me, Pd, Pc, Po, Sc, Sm, Sk, So, Co.
 //
 // Consequence: We reject some valid R7RS identifiers (those using marks,
 // symbols, or private-use characters) but never accept invalid ones.
+//
+// U+200C (ZWNJ) and U+200D (ZWJ) are handled explicitly below as
+// <subsequent> characters, because both R7RS and Unicode UAX #31 call
+// them out as necessary for correct spelling in some scripts.
 
 /// Check if a character is an ASCII `<letter>`.
 #[inline]
@@ -115,13 +123,18 @@ fn is_special_subsequent(ch: char) -> bool {
 /// <subsequent> ::= <initial> | <digit> | <special subsequent>
 /// ```
 ///
-/// For Unicode, we allow is_alphanumeric() which includes Nd (digits).
+/// For Unicode, we allow is_alphanumeric() which includes Nd (digits), and
+/// we also treat U+200C (ZWNJ) and U+200D (ZWJ) as valid subsequent
+/// characters. R7RS and Unicode UAX #31 both permit these format controls
+/// inside identifiers to support correct spelling in scripts such as
+/// Persian and Hindi.
 #[inline]
 fn is_subsequent(ch: char) -> bool {
     is_initial(ch)
         || is_ascii_digit_char(ch)
         || is_special_subsequent(ch)
         || (!ch.is_ascii() && ch.is_alphanumeric())
+        || matches!(ch, '\u{200C}' | '\u{200D}')
 }
 
 /// Check if a character is a `<sign subsequent>`.
@@ -379,7 +392,10 @@ fn lex_peculiar_identifier_content<'i>(input: &mut WinnowInput<'i>) -> PResult<(
 ///                 | <vertical line> <symbol element>* <vertical line>
 ///                 | <peculiar identifier>
 /// ```
-pub fn lex_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
+pub fn lex_identifier<'i>(
+    input: &mut WinnowInput<'i>,
+    fold_case_mode: FoldCaseMode,
+) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
 
     let first = input.peek_or_backtrack()?;
@@ -408,6 +424,19 @@ pub fn lex_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'
         ensure_delimiter(input, "<identifier>")?;
     }
 
+    let final_name: Cow<'i, str> = if matches!(fold_case_mode, FoldCaseMode::Off) {
+        name
+    } else {
+        // Apply full Unicode case folding via `unicase`. This follows
+        // Unicode CaseFolding.txt (C/F mappings) and matches the
+        // intent of R7RS `string-foldcase` for identifiers.
+        let folded: String = UniCase::new(name.as_ref()).to_folded_case();
+        Cow::Owned(folded)
+    };
+
     let end = input.current_token_start();
-    Ok(Syntax::new(Span { start, end }, Token::Identifier(name)))
+    Ok(Syntax::new(
+        Span { start, end },
+        Token::Identifier(final_name),
+    ))
 }

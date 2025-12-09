@@ -51,14 +51,23 @@ pub fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<
             }
         }
         '#' => {
-            let _ = input.next_token();
-            match input.peek_token() {
+            // Use a probe so we only commit to `input` once we've
+            // identified a concrete punctuation token. This allows
+            // other `#`-prefixed constructs (such as `#!` directives)
+            // to backtrack cleanly to other lexers.
+            let mut probe = *input;
+            let _ = probe.next_token(); // consume '#'
+            match probe.peek_token() {
                 Some('(') => {
+                    // Vector start: commit "#(".
+                    let _ = input.next_token();
                     let _ = input.next_token();
                     Token::VectorStart
                 }
                 Some('u' | 'U') => {
-                    let _ = input.next_token();
+                    // Possible bytevector start: "#u8(".
+                    let _ = input.next_token(); // '#'
+                    let _ = input.next_token(); // 'u' or 'U'
                     if input.eat('8') && input.eat('(') {
                         Token::ByteVectorStart
                     } else {
@@ -66,24 +75,25 @@ pub fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<
                     }
                 }
                 Some(';') => {
-                    // Datum comment prefix - emit token for parser to handle
-                    let _ = input.next_token();
+                    // Datum comment prefix - emit token for parser to handle.
+                    let _ = input.next_token(); // '#'
+                    let _ = input.next_token(); // ';'
                     Token::DatumComment
                 }
                 Some(c) if c.is_ascii_digit() => {
-                    // Label definition `#n=` or reference `#n#`
-                    let mut probe = *input;
-                    if let Ok(digits) = digit1::<_, ContextError>.parse_next(&mut probe) {
-                        match probe.peek_token() {
+                    // Label definition `#n=` or reference `#n#`.
+                    let mut label_probe = probe;
+                    if let Ok(digits) = digit1::<_, ContextError>.parse_next(&mut label_probe) {
+                        match label_probe.peek_token() {
                             Some('=') => {
-                                let _ = probe.next_token();
-                                *input = probe;
+                                let _ = label_probe.next_token();
+                                *input = label_probe;
                                 let n = digits.parse::<u64>().unwrap(); // Safe because we only ate digits
                                 Token::LabelDef(n)
                             }
                             Some('#') => {
-                                let _ = probe.next_token();
-                                *input = probe;
+                                let _ = label_probe.next_token();
+                                *input = label_probe;
                                 let n = digits.parse::<u64>().unwrap();
                                 Token::LabelRef(n)
                             }
@@ -93,6 +103,10 @@ pub fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<
                     } else {
                         return winnow_backtrack();
                     }
+                }
+                Some('!') => {
+                    // `#!` starts a directive; let the directive lexer handle it.
+                    return winnow_backtrack();
                 }
                 None => return winnow_incomplete_token(),
                 _ => {

@@ -5,6 +5,42 @@ pub mod reader;
 
 use crate::ast::Span;
 
+/// Enumerates specific unsupported features that can be reported via
+/// `ParseError::Unsupported`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unsupported {
+    Vectors,
+    Bytevectors,
+    Quasiquote,
+    Labels,
+    Characters,
+    ImproperLists,
+    IntegerOverflowOrInvalidFormat,
+    IntegerOverflow,
+    NonIntegerNumber,
+    FoldCaseDirectives,
+}
+
+impl std::fmt::Display for Unsupported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Unsupported::Vectors => "vectors",
+            Unsupported::Bytevectors => "bytevectors",
+            Unsupported::Quasiquote => "quasiquote/unquote",
+            Unsupported::Labels => "labels",
+            Unsupported::Characters => "characters",
+            Unsupported::ImproperLists => "improper lists",
+            Unsupported::IntegerOverflowOrInvalidFormat => {
+                "integer overflow or invalid format"
+            }
+            Unsupported::IntegerOverflow => "integer overflow",
+            Unsupported::NonIntegerNumber => "non-integer number",
+            Unsupported::FoldCaseDirectives => "fold-case directives",
+        };
+        f.write_str(s)
+    }
+}
+
 /// Top-level parse error type. This will grow as the implementation
 /// starts enforcing more of `syn.tex`.
 #[derive(Debug, thiserror::Error, Clone)]
@@ -45,8 +81,8 @@ pub enum ParseError {
     },
 
     /// An unsupported feature was encountered.
-    #[error("unsupported feature at {span:?}: {message}")]
-    Unsupported { span: Span, message: String },
+    #[error("unsupported feature at {span:?}: {feature}")]
+    Unsupported { span: Span, feature: Unsupported },
 }
 
 impl ParseError {
@@ -69,10 +105,7 @@ impl ParseError {
     }
 
     /// Helper for constructing an unsupported error.
-    pub fn unsupported(span: Span, message: impl Into<String>) -> Self {
-        ParseError::Unsupported {
-            span,
-            message: message.into(),
-        }
+    pub fn unsupported(span: Span, feature: Unsupported) -> Self {
+        ParseError::Unsupported { span, feature }
     }
 }

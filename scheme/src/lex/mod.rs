@@ -1,5 +1,5 @@
 use crate::{
-    ParseError,
+    ParseError, Unsupported,
     ast::{Span, Syntax},
     lex::{
         boolean::lex_boolean,
@@ -201,6 +201,38 @@ pub enum Token<'a> {
     LabelRef(u64),
 }
 
+/// Fold-case mode for identifiers and named character literals.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum FoldCaseMode {
+    /// Case-folding disabled (R7RS `#!no-fold-case`).
+    Off,
+    /// Case-folding enabled (R7RS `#!fold-case`).
+    On,
+}
+
+/// Configuration options for the lexer.
+///
+/// This currently controls whether fold-case directives are honored
+/// semantically. When disabled, identifiers and named character literals
+/// remain case-sensitive and `#!fold-case` / `#!no-fold-case` directives
+/// are treated as intertoken space with no effect.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct LexConfig {
+    /// If true, `#!fold-case` / `#!no-fold-case` directives switch the
+    /// internal `FoldCaseMode` and affect identifiers and named character
+    /// literals. If false, identifiers and character names remain
+    /// case-sensitive and directives are effectively no-ops.
+    pub enable_fold_case: bool,
+}
+
+impl Default for LexConfig {
+    fn default() -> Self {
+        LexConfig {
+            enable_fold_case: true,
+        }
+    }
+}
+
 /// A single token paired with its source span.
 pub type SpannedToken<'a> = Syntax<Token<'a>>;
 
@@ -208,6 +240,10 @@ pub type SpannedToken<'a> = Syntax<Token<'a>>;
 pub struct Lexer<'i> {
     input: WinnowInput<'i>,
     source: &'i str,
+    /// Current fold-case mode for identifiers and character names.
+    fold_case_mode: FoldCaseMode,
+    /// Static configuration for this lexer instance.
+    config: LexConfig,
 }
 
 impl<'i> Lexer<'i> {
@@ -233,11 +269,19 @@ impl<'i> Lexer<'i> {
         }
     }
 
-    /// Create a new lexer for the given source string.
+    /// Create a new lexer for the given source string with default
+    /// configuration.
     pub fn new(source: &'i str) -> Self {
+        Self::with_config(source, LexConfig::default())
+    }
+
+    /// Create a new lexer for the given source string and configuration.
+    pub fn with_config(source: &'i str, config: LexConfig) -> Self {
         Self {
             input: WinnowInput::new(source),
             source,
+            fold_case_mode: FoldCaseMode::Off,
+            config,
         }
     }
 
@@ -262,7 +306,12 @@ impl<'i> Lexer<'i> {
         }
 
         // 2. Characters.
-        if let Some(spanned) = self.run_lex(start, lex_character)? {
+        let fold_mode = if self.config.enable_fold_case {
+            self.fold_case_mode
+        } else {
+            FoldCaseMode::Off
+        };
+        if let Some(spanned) = self.run_lex(start, |input| lex_character(input, fold_mode))? {
             return Ok(Some(spanned));
         }
 
@@ -307,8 +356,25 @@ impl<'i> Lexer<'i> {
         }
 
         // 7. Identifiers (including peculiar identifiers like `+`, `-`, `...`).
-        if let Some(spanned) = self.run_lex(start, lex_identifier)? {
+        if let Some(spanned) = self.run_lex(start, |input| lex_identifier(input, fold_mode))? {
             return Ok(Some(spanned));
+        }
+
+        // 8. Fold-case directives `#!fold-case` / `#!no-fold-case`.
+        if let Some(mode) = self.run_lex(start, intertoken::lex_directive)? {
+            let end = self.input.current_token_start();
+            let span = Span { start, end };
+
+            // When fold-case is enabled, directives act as intertoken space
+            // that update the internal mode but never produce tokens.
+            if self.config.enable_fold_case {
+                self.fold_case_mode = mode;
+                return self.token_with_span();
+            }
+
+            // When fold-case is disabled by configuration, encountering a
+            // fold-case directive is an unsupported feature.
+            return Err(ParseError::unsupported(span, Unsupported::FoldCaseDirectives));
         }
 
         // No token matched - this is an error
@@ -336,17 +402,25 @@ impl<'i> Iterator for Lexer<'i> {
 }
 
 /// Lex all `<token>`s from the given source string, skipping
-/// `<intertoken space>` (whitespace, comments, nested comments,
-/// and directives).
+/// `<intertoken space>` (whitespace, line comments, and nested comments).
 ///
-/// This function recognizes all standard R7RS tokens. It also produces tokens
-/// for constructs that R7RS defines as part of `<comment>` or `<datum>`
-/// (datum comments, labels) to facilitate parser-level handling.
+/// This function recognizes all standard R7RS tokens. It also produces
+/// additional tokens for constructs that the spec treats as part of
+/// `<comment>` or `<datum>` so that higher layers can implement the
+/// prescribed semantics:
 ///
-/// **Deviations from R7RS:**
-/// - **Unicode:** Identifier support is conservative (see `R7RS-DEVIATIONS.md`).
-/// - **Fold-case:** `#!fold-case` directives are ignored.
-/// - **Datum comments:** Handled at parser level (emitted as `Token::DatumComment`).
+/// - `Token::DatumComment` for `#;`, which `TokenStream` can consume while
+///   recursively skipping the following datum, making datum comments
+///   effectively intertoken space to callers.
+///
+/// Fold-case directives `#!fold-case` / `#!no-fold-case` are never emitted
+/// as tokens. They are recognized after `<intertoken space>` and treated as
+/// additional intertoken space, updating the internal `FoldCaseMode` only
+/// when `LexConfig::enable_fold_case` is true. The lexer applies
+/// fold-case semantics to identifiers and named character literals based
+/// on this mode.
+///
+/// Unicode identifier support remains conservative (see design notes for details).
 ///
 /// Grammar reference (Formal syntax / Lexical structure):
 ///
@@ -359,6 +433,12 @@ impl<'i> Iterator for Lexer<'i> {
 /// <nested comment> ::= #| <comment text> |#
 /// <directive> ::= #!fold-case | #!no-fold-case
 /// ```
+/// Convenience constructor using the default `LexConfig`.
 pub fn lex(source: &str) -> Lexer<'_> {
     Lexer::new(source)
+}
+
+/// Construct a lexer with an explicit `LexConfig`.
+pub fn lex_with_config(source: &str, config: LexConfig) -> Lexer<'_> {
+    Lexer::with_config(source, config)
 }

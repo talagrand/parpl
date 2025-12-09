@@ -148,17 +148,6 @@ pub enum Datum {
 // ============================================================================
 
 /// A token stream that handles `#;` datum comments at the parser level.
-///
-/// R7RS-DEVIATION: Datum comments handled at parser level, not lexer.
-/// See R7RS-DEVIATIONS.md §3 for full details.
-///
-/// R7RS specifies that `#; <datum>` is intertoken space—the lexer should skip
-/// both the `#;` prefix and the following datum. However, recognizing a
-/// `<datum>` requires a full parser; the lexer cannot know where the datum ends.
-///
-/// Our approach: The lexer emits `Token::DatumComment` when it sees `#;`.
-/// This `TokenStream` wrapper consumes those tokens and recursively skips
-/// the following datum, providing a clean token stream to higher-level parsers.
 pub struct TokenStream<'i> {
     lexer: std::iter::Peekable<lex::Lexer<'i>>,
 }
@@ -176,9 +165,10 @@ impl<'i> TokenStream<'i> {
         Self::new(lex::lex(source))
     }
 
-    /// Peek at the next token without consuming it, skipping datum comments.
+        /// Peek at the next token without consuming it, skipping intertoken space
+        /// such as datum comments.
     pub fn peek(&mut self) -> Result<Option<&SpannedToken<'i>>, ParseError> {
-        self.skip_datum_comments()?;
+		self.consume_intertoken_space()?;
         match self.lexer.peek() {
             Some(Ok(token)) => Ok(Some(token)),
             Some(Err(e)) => Err(e.clone()),
@@ -186,14 +176,15 @@ impl<'i> TokenStream<'i> {
         }
     }
 
-    /// Peek at the next token's value without consuming it, skipping datum comments.
+    /// Peek at the next token's value without consuming it, skipping
+	/// intertoken space.
     pub fn peek_token_value(&mut self) -> Result<Option<&Token<'i>>, ParseError> {
         Ok(self.peek()?.map(|st| &st.value))
     }
 
-    /// Consume and return the next token, skipping datum comments.
+        /// Consume and return the next token, skipping intertoken space.
     pub fn next_token(&mut self) -> Result<Option<SpannedToken<'i>>, ParseError> {
-        self.skip_datum_comments()?;
+		self.consume_intertoken_space()?;
         match self.lexer.next() {
             Some(Ok(token)) => Ok(Some(token)),
             Some(Err(e)) => Err(e),
@@ -206,23 +197,28 @@ impl<'i> TokenStream<'i> {
         matches!(self.peek(), Ok(None))
     }
 
-    /// Skip any `#;` datum comments by consuming the `DatumComment` token
-    /// and the following datum.
-    fn skip_datum_comments(&mut self) -> Result<(), ParseError> {
+    /// Consume any leading `<intertoken space>` tokens (currently datum
+    /// comments; fold-case directives are handled in the lexer) by
+    /// skipping over their tokens.
+    fn consume_intertoken_space(&mut self) -> Result<(), ParseError> {
         loop {
-            let is_comment = match self.lexer.peek() {
-                Some(Ok(token)) => matches!(token.value, Token::DatumComment),
+            let action = match self.lexer.peek() {
+                Some(Ok(token)) => match token.value {
+                    Token::DatumComment => Some("datum_comment"),
+                    _ => None,
+                },
                 Some(Err(e)) => return Err(e.clone()),
-                None => false,
+                None => None,
             };
 
-            if is_comment {
-                self.lexer.next(); // consume #;
-                // We can just parse the next datum and discard it.
-                // This is much simpler than maintaining a separate skip logic.
-                self.parse_datum()?;
-            } else {
-                break;
+            match action {
+                Some("datum_comment") => {
+                    self.lexer.next(); // consume #;
+                    // We can just parse the next datum and discard it.
+                    // This is much simpler than maintaining a separate skip logic.
+                    self.parse_datum()?;
+                }
+                _ => break,
             }
         }
         Ok(())
@@ -243,7 +239,7 @@ impl<'i> TokenStream<'i> {
     #[allow(dead_code)]
     fn skip_one_datum(&mut self) -> Result<(), ParseError> {
         // First, skip any leading datum comments within this datum
-        self.skip_datum_comments()?;
+		self.consume_intertoken_space()?;
 
         let token_type = match self.lexer.peek() {
             Some(Ok(token)) => token.value.clone(),
@@ -313,7 +309,7 @@ impl<'i> TokenStream<'i> {
     #[allow(dead_code)]
     fn skip_list_contents(&mut self) -> Result<(), ParseError> {
         loop {
-            self.skip_datum_comments()?;
+			self.consume_intertoken_space()?;
 
             let token_type = match self.lexer.peek() {
                 Some(Ok(token)) => token.value.clone(),
@@ -331,7 +327,7 @@ impl<'i> TokenStream<'i> {
                     self.lexer.next(); // consume .
                     self.skip_one_datum()?;
                     // Now expect )
-                    self.skip_datum_comments()?;
+					self.consume_intertoken_space()?;
                     if let Some(Ok(token)) = self.lexer.peek()
                         && matches!(token.value, Token::RParen)
                     {
@@ -366,7 +362,7 @@ impl<'i> TokenStream<'i> {
             Token::Number(n) => Ok(Syntax::new(token.span, Datum::Number(n.into()))),
             Token::Character(c) => Ok(Syntax::new(token.span, Datum::Character(c))),
             Token::String(s) => Ok(Syntax::new(token.span, Datum::String(s.into_owned()))),
-            Token::Identifier(s) => Ok(Syntax::new(token.span, Datum::Symbol(s.into_owned()))),
+                Token::Identifier(s) => Ok(Syntax::new(token.span, Datum::Symbol(s.into_owned()))),
 
             Token::LParen => self.parse_list(token.span),
             Token::VectorStart => self.parse_vector(token.span),

@@ -1,4 +1,5 @@
 use super::*;
+use crate::Unsupported;
 
 // --- Test Infrastructure ---
 
@@ -20,6 +21,8 @@ enum ErrorMatcher {
     /// Lex error with expected span.
     /// Parameters: (nonterminal, start, end).
     LexSpan(&'static str, usize, usize),
+    /// Unsupported feature with expected enum value.
+    Unsupported(Unsupported),
 }
 
 enum TokenMatcher {
@@ -100,9 +103,7 @@ impl ErrorMatcher {
             (
                 ErrorMatcher::LexSpan(nt, start, end),
                 ParseError::Lex {
-                    span,
-                    nonterminal,
-                    ..
+                    span, nonterminal, ..
                 },
             ) => {
                 assert_eq!(nt, nonterminal, "{}: error nonterminal mismatch", test_name);
@@ -117,6 +118,16 @@ impl ErrorMatcher {
                     test_name, end, span.end
                 );
             }
+            (
+                ErrorMatcher::Unsupported(expected_feature),
+                ParseError::Unsupported { feature, .. },
+            ) => {
+                assert_eq!(
+                    expected_feature, feature,
+                    "{}: unsupported feature mismatch",
+                    test_name
+                );
+            }
             _ => panic!(
                 "{}: error mismatch. Expected {:?}, got {:?}",
                 test_name, self, err
@@ -127,7 +138,7 @@ impl ErrorMatcher {
 
 impl std::fmt::Debug for ErrorMatcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {    
+        match self {
             Self::Incomplete => write!(f, "Incomplete"),
             Self::IncompleteToken => write!(f, "IncompleteToken"),
             Self::LexSpan(arg0, arg1, arg2) => f
@@ -136,6 +147,7 @@ impl std::fmt::Debug for ErrorMatcher {
                 .field(arg1)
                 .field(arg2)
                 .finish(),
+            Self::Unsupported(msg) => f.debug_tuple("Unsupported").field(msg).finish(),
         }
     }
 }
@@ -1144,6 +1156,9 @@ fn run_all_tests() {
         TestCase {
             name: "fold_case_directives",
             input: "#!fold-case\n  #!no-fold-case  ; rest is comment\n",
+            // Directives are treated as intertoken space and do not
+            // produce tokens; the lexer only updates its internal
+            // fold-case mode.
             expected: Expected::Empty,
         },
         TestCase {
@@ -1317,6 +1332,9 @@ fn run_all_tests() {
         TestCase {
             name: "directive_case_insensitive",
             input: "#!FOLD-CASE",
+            // Case-insensitive directive spelling is accepted and, with
+            // fold-case enabled by default, treated purely as intertoken
+            // space with no tokens.
             expected: Expected::Empty,
         },
         TestCase {
@@ -1345,5 +1363,28 @@ fn run_all_tests() {
 fn run_number_tests() {
     for case in number_test_cases() {
         case.run();
+    }
+}
+
+#[test]
+fn directives_unsupported_when_fold_case_disabled() {
+    // With fold-case disabled in the lexer configuration, encountering
+    // a fold-case directive should yield an Unsupported error.
+    let result: Result<Vec<SpannedToken>, ParseError> = lex_with_config(
+        "#!fold-case",
+        LexConfig {
+            enable_fold_case: false,
+        },
+    )
+    .collect();
+    let err = result.expect_err("expected unsupported feature error");
+    match err {
+        ParseError::Unsupported { feature, .. } => {
+            assert_eq!(feature, Unsupported::FoldCaseDirectives);
+        }
+        other => panic!(
+            "directives_unsupported_when_fold_case_disabled: expected Unsupported, got {:?}",
+            other
+        ),
     }
 }

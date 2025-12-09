@@ -1,11 +1,15 @@
 use crate::lex::{
-    PResult, WinnowInput,
-    utils::{InputExt, cut_lex_error_token, ensure_delimiter},
+    PResult, WinnowInput, FoldCaseMode,
+    utils::{InputExt, winnow_backtrack, ensure_delimiter, cut_lex_error_token},
+};
+use winnow::{
+    ascii::Caseless,
+    combinator::alt,
 };
 use winnow::{
     Parser,
-    ascii::{Caseless, line_ending, till_line_ending},
-    combinator::{alt, opt},
+    ascii::{line_ending, till_line_ending},
+    combinator::opt,
     stream::Stream,
     token::take_while,
 };
@@ -34,7 +38,7 @@ pub fn lex_intertoken<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
                 // Consume the line ending if present
                 let _: Option<&str> = opt(line_ending).parse_next(input)?;
             }
-            // Possible nested comment or directive starting with '#'.
+            // Possible nested comment starting with '#'.
             '#' => {
                 // Peek at the next character to decide.
                 let mut probe = *input;
@@ -47,13 +51,6 @@ pub fn lex_intertoken<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
                         let _ = input.next_token();
                         let _ = input.next_token();
                         lex_nested_comment_body(input)?;
-                    }
-                    // Directives starting with `#!`.
-                    Some('!') => {
-                        // Commit both characters and parse the directive
-                        let _ = input.next_token();
-                        let _ = input.next_token();
-                        lex_directive_body(input)?;
                     }
                     _ => {
                         // Not a nested comment or directive; this
@@ -70,24 +67,48 @@ pub fn lex_intertoken<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
     }
 }
 
-/// Parse a `<directive>` word after `#!` has been consumed.
+/// Parse a `<directive>` token starting at `#!`.
 ///
-/// Grammar reference (`syn.tex` / Lexical structure):
-///
-/// ```text
-/// <directive> ::= #!fold-case | #!no-fold-case
-/// ```
-///
-/// NOTE: We validate these directives but ignore their semantics.
-/// See R7RS-DEVIATIONS.md §2 and the comment on `lex` in `src/lex.rs`.
+/// Returns `FoldCaseMode::On` for `#!fold-case` and `FoldCaseMode::Off`
+/// for `#!no-fold-case`. Unknown directives are reported as `<directive>`
+/// lexical errors, and the span is anchored to the `#!` prefix so that
+/// errors like `#!unknown-directive` highlight just the directive marker.
 #[cold]
-fn lex_directive_body<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
-    cut_lex_error_token(
-        alt((Caseless("fold-case"), Caseless("no-fold-case"))),
-        "<directive>",
-    )
-    .parse_next(input)?;
-    ensure_delimiter(input, "<directive>")
+pub(crate) fn lex_directive<'i>(input: &mut WinnowInput<'i>) -> PResult<FoldCaseMode> {
+    // First, look ahead to see if we have a `#!` prefix.
+    // Use a probe so we can backtrack cleanly for non-directive tokens
+    // such as `#(`, `#\`, etc.
+    let mut probe = *input;
+    if !probe.eat('#') {
+        return winnow_backtrack();
+    }
+    if !probe.eat('!') {
+        return winnow_backtrack();
+    }
+
+    // From here on, parse against `probe`, but always commit its
+    // progress back into `input` before returning. This ensures that
+    // lexical errors report spans that extend past the `#!` prefix
+    // (e.g., `#!unknown-directive` hits the `<directive>` handler)
+    // while still allowing other lexers to backtrack cleanly when
+    // the `#!` prefix is absent.
+    let parser = alt((
+        Caseless("fold-case").value(FoldCaseMode::On),
+        Caseless("no-fold-case").value(FoldCaseMode::Off),
+    ));
+    let mode = match cut_lex_error_token(parser, "<directive>").parse_next(&mut probe) {
+        Ok(m) => m,
+        Err(e) => {
+            *input = probe;
+            return Err(e);
+        }
+    };
+    if let Err(e) = ensure_delimiter(&mut probe, "<directive>") {
+        *input = probe;
+        return Err(e);
+    }
+    *input = probe;
+    Ok(mode)
 }
 
 /// Parse the body of a nested comment after `#|` has been consumed.
