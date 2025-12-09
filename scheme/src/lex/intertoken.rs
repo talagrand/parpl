@@ -1,15 +1,11 @@
 use crate::lex::{
-    PResult, WinnowInput, FoldCaseMode,
-    utils::{InputExt, winnow_backtrack, ensure_delimiter, cut_lex_error_token},
-};
-use winnow::{
-    ascii::Caseless,
-    combinator::alt,
+    FoldCaseMode, PResult, WinnowInput,
+    utils::{InputExt, cut_lex_error_token, ensure_delimiter, winnow_backtrack},
 };
 use winnow::{
     Parser,
-    ascii::{line_ending, till_line_ending},
-    combinator::opt,
+    ascii::{Caseless, line_ending, till_line_ending},
+    combinator::{alt, opt},
     stream::Stream,
     token::take_while,
 };

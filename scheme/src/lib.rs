@@ -15,6 +15,7 @@ pub enum Unsupported {
     Labels,
     Characters,
     Comments,
+    DepthLimit,
     ImproperLists,
     IntegerOverflowOrInvalidFormat,
     IntegerOverflow,
@@ -31,10 +32,9 @@ impl std::fmt::Display for Unsupported {
             Unsupported::Labels => "labels",
             Unsupported::Characters => "characters",
             Unsupported::Comments => "comments",
+            Unsupported::DepthLimit => "maximum nesting depth",
             Unsupported::ImproperLists => "improper lists",
-            Unsupported::IntegerOverflowOrInvalidFormat => {
-                "integer overflow or invalid format"
-            }
+            Unsupported::IntegerOverflowOrInvalidFormat => "integer overflow or invalid format",
             Unsupported::IntegerOverflow => "integer overflow",
             Unsupported::NonIntegerNumber => "non-integer number",
             Unsupported::FoldCaseDirectives => "fold-case directives",

@@ -1,9 +1,9 @@
-use crate::{ParseError, Unsupported};
 use crate::ast::{Span, Syntax};
 use crate::lex::{
     FiniteReal, FiniteRealKind, Lexer, NumberLiteral, NumberRadix, NumberValue, RealRepr,
     SpannedToken, Token,
 };
+use crate::{ParseError, Unsupported};
 use std::iter::Peekable;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,6 +23,8 @@ pub enum Value {
 pub struct MiniReader<'a> {
     lexer: Peekable<Lexer<'a>>,
 }
+
+const DEFAULT_MAX_DEPTH: u32 = 64;
 
 impl<'a> MiniReader<'a> {
     pub fn new(source: &'a str) -> Self {
@@ -59,68 +61,60 @@ impl<'a> MiniReader<'a> {
     }
 
     pub fn parse_value(&mut self) -> Result<Syntax<Value>, ParseError> {
-        loop {
-            let token = self.next()?.ok_or(ParseError::Incomplete)?;
+        self.parse_value_with_max_depth(DEFAULT_MAX_DEPTH)
+    }
 
-            match token.value {
-                Token::DatumComment => {
-                    // Recursively parse the next datum and discard it
-                    let _ = self.parse_value()?;
-                    continue;
-                }
-                Token::Boolean(b) => {
-                    return Ok(Syntax::new(token.span, Value::Bool(b)));
-                }
-                Token::Identifier(s) => {
-                    return Ok(Syntax::new(token.span, Value::Symbol(s.to_string())));
-                }
-                Token::String(s) => {
-                    return Ok(Syntax::new(token.span, Value::String(s.into_owned())));
-                }
-                Token::Number(n) => return self.parse_number(n, token.span),
-                Token::LParen => return self.parse_list(token.span),
-                Token::Quote => {
-                    // Expand 'x to (quote x)
-                    let datum = self.parse_value()?;
-                    let quote = Syntax::new(token.span, Value::Symbol("quote".to_string()));
-                    let span = token.span.merge(datum.span);
-                    return Ok(Syntax::new(span, Value::List(vec![quote, datum])));
-                }
-                Token::VectorStart => {
-                    return Err(ParseError::unsupported(token.span, Unsupported::Vectors));
-                }
-                Token::ByteVectorStart => {
-                    return Err(ParseError::unsupported(
-                        token.span,
-                        Unsupported::Bytevectors,
-                    ));
-                }
-                Token::RParen => {
-                    return Err(ParseError::syntax(token.span, "datum", "unexpected ')'"));
-                }
-                Token::Dot => {
-                    return Err(ParseError::syntax(token.span, "datum", "unexpected '.'"));
-                }
-                Token::Comma | Token::CommaAt | Token::Backquote => {
-                    return Err(ParseError::unsupported(
-                        token.span,
-                        Unsupported::Quasiquote,
-                    ));
-                }
-                Token::LabelDef(_) | Token::LabelRef(_) => {
-                    return Err(ParseError::unsupported(token.span, Unsupported::Labels));
-                }
-                Token::Character(_) => {
-                    return Err(ParseError::unsupported(
-                        token.span,
-                        Unsupported::Characters,
-                    ));
-                }
+    fn parse_value_with_max_depth(&mut self, depth: u32) -> Result<Syntax<Value>, ParseError> {
+        let token = self.next()?.ok_or(ParseError::Incomplete)?;
+        let span = token.span;
+
+        if depth == 0 {
+            return Err(ParseError::unsupported(span, Unsupported::DepthLimit));
+        }
+
+        match token.value {
+            Token::DatumComment => {
+                // Recursively parse the next datum and discard it
+                let _ = self.parse_value_with_max_depth(depth - 1)?;
+                // After discarding, parse the next value at the same
+                // depth level.
+                self.parse_value_with_max_depth(depth - 1)
             }
+            Token::Boolean(b) => Ok(Syntax::new(span, Value::Bool(b))),
+            Token::Identifier(s) => Ok(Syntax::new(span, Value::Symbol(s.to_string()))),
+            Token::String(s) => Ok(Syntax::new(span, Value::String(s.into_owned()))),
+            Token::Number(n) => self.parse_number(n, span),
+            Token::LParen => self.parse_list_with_max_depth(span, depth - 1),
+            Token::Quote => {
+                // Expand 'x to (quote x)
+                let datum = self.parse_value_with_max_depth(depth - 1)?;
+                let quote = Syntax::new(span, Value::Symbol("quote".to_string()));
+                let list_span = span.merge(datum.span);
+                Ok(Syntax::new(list_span, Value::List(vec![quote, datum])))
+            }
+            Token::VectorStart => Err(ParseError::unsupported(span, Unsupported::Vectors)),
+            Token::ByteVectorStart => Err(ParseError::unsupported(span, Unsupported::Bytevectors)),
+            Token::RParen => Err(ParseError::syntax(span, "datum", "unexpected ')'")),
+            Token::Dot => Err(ParseError::syntax(span, "datum", "unexpected '.'")),
+            Token::Comma | Token::CommaAt | Token::Backquote => {
+                Err(ParseError::unsupported(span, Unsupported::Quasiquote))
+            }
+            Token::LabelDef(_) | Token::LabelRef(_) => {
+                Err(ParseError::unsupported(span, Unsupported::Labels))
+            }
+            Token::Character(_) => Err(ParseError::unsupported(span, Unsupported::Characters)),
         }
     }
 
-    fn parse_list(&mut self, start_span: Span) -> Result<Syntax<Value>, ParseError> {
+    fn parse_list_with_max_depth(
+        &mut self,
+        start_span: Span,
+        depth: u32,
+    ) -> Result<Syntax<Value>, ParseError> {
+        if depth == 0 {
+            return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
+        }
+
         let mut elements: Vec<Syntax<Value>> = Vec::new();
         let mut end_span = start_span;
         loop {
@@ -136,20 +130,17 @@ impl<'a> MiniReader<'a> {
                         ));
                     }
                     Token::Dot => {
-                        return Err(ParseError::unsupported(
-                            t.span,
-                            Unsupported::ImproperLists,
-                        ));
+                        return Err(ParseError::unsupported(t.span, Unsupported::ImproperLists));
                     }
                     Token::DatumComment => {
                         // We must handle datum comments here to support lists ending with a comment,
                         // e.g. `(1 2 #; 3)`. If we delegated to `parse_value`, it would consume
                         // the comment and then fail to find a value before the closing `)`.
                         self.next()?; // consume #;
-                        let _ = self.parse_value()?; // parse and discard
+                        let _ = self.parse_value_with_max_depth(depth - 1)?; // parse and discard
                     }
                     _ => {
-                        elements.push(self.parse_value()?);
+                        elements.push(self.parse_value_with_max_depth(depth - 1)?);
                     }
                 },
                 None => return Err(ParseError::Incomplete),
@@ -179,22 +170,15 @@ impl<'a> MiniReader<'a> {
                 };
 
                 let val = u64::from_str_radix(digits, radix).map_err(|_| {
-                    ParseError::unsupported(
-                        span,
-                        Unsupported::IntegerOverflowOrInvalidFormat,
-                    )
+                    ParseError::unsupported(span, Unsupported::IntegerOverflowOrInvalidFormat)
                 })?;
 
                 let result = if sign == 1 {
-                    i64::try_from(val).map_err(|_| {
-                        ParseError::unsupported(span, Unsupported::IntegerOverflow)
-                    })?
+                    i64::try_from(val)
+                        .map_err(|_| ParseError::unsupported(span, Unsupported::IntegerOverflow))?
                 } else {
                     if val > i64::MIN.unsigned_abs() {
-                        return Err(ParseError::unsupported(
-                            span,
-                            Unsupported::IntegerOverflow,
-                        ));
+                        return Err(ParseError::unsupported(span, Unsupported::IntegerOverflow));
                     }
                     (val as i64).wrapping_neg()
                 };
@@ -205,10 +189,13 @@ impl<'a> MiniReader<'a> {
         }
     }
 }
-
 pub fn read(source: &str) -> Result<Syntax<Value>, ParseError> {
+    read_with_max_depth(source, DEFAULT_MAX_DEPTH)
+}
+
+pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<Syntax<Value>, ParseError> {
     let mut reader = MiniReader::new(source);
-    reader.parse_value()
+    reader.parse_value_with_max_depth(max_depth)
 }
 
 #[cfg(test)]

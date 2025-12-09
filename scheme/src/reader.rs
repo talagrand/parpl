@@ -1,8 +1,8 @@
-use crate::ParseError;
 use crate::ast::{Span, Syntax};
 use crate::lex::{
     self, FiniteRealKind, InfinityNan, NumberExactness, NumberRadix, SpannedToken, Token,
 };
+use crate::{ParseError, Unsupported};
 
 /// Representation of `<real R>` values.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -152,6 +152,8 @@ pub struct TokenStream<'i> {
     lexer: std::iter::Peekable<lex::Lexer<'i>>,
 }
 
+const DEFAULT_MAX_DEPTH: u32 = 64;
+
 impl<'i> TokenStream<'i> {
     /// Create a new token stream from lexed tokens.
     pub fn new(lexer: lex::Lexer<'i>) -> Self {
@@ -164,11 +166,11 @@ impl<'i> TokenStream<'i> {
     pub fn from_source(source: &'i str) -> Self {
         Self::new(lex::lex(source))
     }
-
-        /// Peek at the next token without consuming it, skipping intertoken space
-        /// such as datum comments.
-    pub fn peek(&mut self) -> Result<Option<&SpannedToken<'i>>, ParseError> {
-		self.consume_intertoken_space()?;
+    /// Peek at the next token without consuming it, skipping intertoken
+    /// space such as datum comments, with an explicit maximum depth
+    /// used when skipping comments.
+    fn peek_with_max_depth(&mut self, depth: u32) -> Result<Option<&SpannedToken<'i>>, ParseError> {
+        self.consume_intertoken_space_with_max_depth(depth)?;
         match self.lexer.peek() {
             Some(Ok(token)) => Ok(Some(token)),
             Some(Err(e)) => Err(e.clone()),
@@ -176,20 +178,44 @@ impl<'i> TokenStream<'i> {
         }
     }
 
-    /// Peek at the next token's value without consuming it, skipping
-	/// intertoken space.
-    pub fn peek_token_value(&mut self) -> Result<Option<&Token<'i>>, ParseError> {
-        Ok(self.peek()?.map(|st| &st.value))
+    /// Public peek that uses the default maximum depth when skipping
+    /// comments.
+    pub fn peek(&mut self) -> Result<Option<&SpannedToken<'i>>, ParseError> {
+        self.peek_with_max_depth(DEFAULT_MAX_DEPTH)
     }
 
-        /// Consume and return the next token, skipping intertoken space.
-    pub fn next_token(&mut self) -> Result<Option<SpannedToken<'i>>, ParseError> {
-		self.consume_intertoken_space()?;
+    /// Peek at the next token's value without consuming it, skipping
+    /// intertoken space, with an explicit maximum depth.
+    fn peek_token_value_with_max_depth(
+        &mut self,
+        depth: u32,
+    ) -> Result<Option<&Token<'i>>, ParseError> {
+        Ok(self.peek_with_max_depth(depth)?.map(|st| &st.value))
+    }
+
+    /// Public peek of the token value using the default depth.
+    pub fn peek_token_value(&mut self) -> Result<Option<&Token<'i>>, ParseError> {
+        self.peek_token_value_with_max_depth(DEFAULT_MAX_DEPTH)
+    }
+
+    /// Consume and return the next token, skipping intertoken space,
+    /// with an explicit maximum depth used when skipping comments.
+    fn next_token_with_max_depth(
+        &mut self,
+        depth: u32,
+    ) -> Result<Option<SpannedToken<'i>>, ParseError> {
+        self.consume_intertoken_space_with_max_depth(depth)?;
         match self.lexer.next() {
             Some(Ok(token)) => Ok(Some(token)),
             Some(Err(e)) => Err(e),
             None => Ok(None),
         }
+    }
+
+    /// Public `next_token` that uses the default maximum depth when
+    /// skipping comments.
+    pub fn next_token(&mut self) -> Result<Option<SpannedToken<'i>>, ParseError> {
+        self.next_token_with_max_depth(DEFAULT_MAX_DEPTH)
     }
 
     /// Check if the stream is exhausted (no more tokens after skipping comments).
@@ -199,29 +225,38 @@ impl<'i> TokenStream<'i> {
 
     /// Consume any leading `<intertoken space>` tokens (currently datum
     /// comments; fold-case directives are handled in the lexer) by
-    /// skipping over their tokens.
-    fn consume_intertoken_space(&mut self) -> Result<(), ParseError> {
+    /// skipping over their tokens, with an explicit maximum depth used
+    /// when skipping the commented datums.
+    fn consume_intertoken_space_with_max_depth(&mut self, depth: u32) -> Result<(), ParseError> {
         loop {
-            let action = match self.lexer.peek() {
+            let span = match self.lexer.peek() {
                 Some(Ok(token)) => match token.value {
-                    Token::DatumComment => Some("datum_comment"),
+                    Token::DatumComment => Some(token.span),
                     _ => None,
                 },
                 Some(Err(e)) => return Err(e.clone()),
                 None => None,
             };
 
-            match action {
-                Some("datum_comment") => {
+            match span {
+                Some(span) => {
+                    if depth == 0 {
+                        return Err(ParseError::unsupported(span, Unsupported::DepthLimit));
+                    }
                     self.lexer.next(); // consume #;
-                    // We can just parse the next datum and discard it.
-                    // This is much simpler than maintaining a separate skip logic.
-                    self.parse_datum()?;
+                    // Skip the commented datum at one level deeper.
+                    self.skip_one_datum_with_max_depth(depth - 1)?;
                 }
-                _ => break,
+                None => break,
             }
         }
         Ok(())
+    }
+
+    /// Convenience wrapper that uses the default maximum depth when
+    /// skipping intertoken space.
+    fn consume_intertoken_space(&mut self) -> Result<(), ParseError> {
+        self.consume_intertoken_space_with_max_depth(DEFAULT_MAX_DEPTH)
     }
 
     /// Skip exactly one datum from the current position.
@@ -237,15 +272,21 @@ impl<'i> TokenStream<'i> {
     /// If the stream is empty or starts with an unexpected token (like `)`),
     /// this is a no-op (the parser will report the error).
     #[allow(dead_code)]
-    fn skip_one_datum(&mut self) -> Result<(), ParseError> {
-        // First, skip any leading datum comments within this datum
-		self.consume_intertoken_space()?;
-
-        let token_type = match self.lexer.peek() {
-            Some(Ok(token)) => token.value.clone(),
-            Some(Err(e)) => return Err(e.clone()),
-            None => return Ok(()),
+    fn skip_one_datum_with_max_depth(&mut self, depth: u32) -> Result<(), ParseError> {
+        // First, skip any leading datum comments within this datum.
+        self.consume_intertoken_space_with_max_depth(depth)?;
+        let (span, token_type) = {
+            let token = match self.lexer.peek() {
+                Some(Ok(token)) => token,
+                Some(Err(e)) => return Err(e.clone()),
+                None => return Ok(()),
+            };
+            (token.span, token.value.clone())
         };
+
+        if depth == 0 {
+            return Err(ParseError::unsupported(span, Unsupported::DepthLimit));
+        }
 
         match token_type {
             // Simple datums: just consume the token
@@ -260,41 +301,41 @@ impl<'i> TokenStream<'i> {
             // List or dotted list
             Token::LParen => {
                 self.lexer.next(); // consume (
-                self.skip_list_contents()?;
+                self.skip_list_contents_with_max_depth(depth - 1)?;
             }
 
             // Vector
             Token::VectorStart => {
                 self.lexer.next(); // consume #(
-                self.skip_list_contents()?;
+                self.skip_list_contents_with_max_depth(depth - 1)?;
             }
 
             // Bytevector
             Token::ByteVectorStart => {
                 self.lexer.next(); // consume #u8(
-                self.skip_list_contents()?;
+                self.skip_list_contents_with_max_depth(depth - 1)?;
             }
 
             // Abbreviations: quote, quasiquote, unquote, unquote-splicing
             Token::Quote | Token::Backquote | Token::Comma | Token::CommaAt => {
                 self.lexer.next(); // consume the prefix
-                self.skip_one_datum()?; // skip the following datum
+                self.skip_one_datum_with_max_depth(depth - 1)?; // skip the following datum
             }
 
             // Labels
             Token::LabelDef(_) => {
                 self.lexer.next(); // consume #n=
-                self.skip_one_datum()?; // skip the following datum
+                self.skip_one_datum_with_max_depth(depth - 1)?; // skip the following datum
             }
             Token::LabelRef(_) => {
                 self.lexer.next(); // consume #n#
             }
 
-            // Nested datum comment - already handled by skip_datum_comments above,
-            // but handle explicitly just in case
+            // Nested datum comment - already handled by consume_intertoken_space, but
+            // handle explicitly just in case.
             Token::DatumComment => {
                 self.lexer.next();
-                self.skip_one_datum()?;
+                self.skip_one_datum_with_max_depth(depth - 1)?;
             }
 
             // Unexpected tokens - leave for parser to handle
@@ -305,11 +346,16 @@ impl<'i> TokenStream<'i> {
         Ok(())
     }
 
+    #[allow(dead_code)]
+    fn skip_one_datum(&mut self) -> Result<(), ParseError> {
+        self.skip_one_datum_with_max_depth(DEFAULT_MAX_DEPTH)
+    }
+
     /// Skip contents of a list/vector until the closing `)`.
     #[allow(dead_code)]
-    fn skip_list_contents(&mut self) -> Result<(), ParseError> {
+    fn skip_list_contents_with_max_depth(&mut self, depth: u32) -> Result<(), ParseError> {
         loop {
-			self.consume_intertoken_space()?;
+            self.consume_intertoken_space_with_max_depth(depth)?;
 
             let token_type = match self.lexer.peek() {
                 Some(Ok(token)) => token.value.clone(),
@@ -325,9 +371,9 @@ impl<'i> TokenStream<'i> {
                 Token::Dot => {
                     // Dotted list: skip the dot and the final datum
                     self.lexer.next(); // consume .
-                    self.skip_one_datum()?;
+                    self.skip_one_datum_with_max_depth(depth - 1)?;
                     // Now expect )
-					self.consume_intertoken_space()?;
+                    self.consume_intertoken_space_with_max_depth(depth)?;
                     if let Some(Ok(token)) = self.lexer.peek()
                         && matches!(token.value, Token::RParen)
                     {
@@ -336,10 +382,15 @@ impl<'i> TokenStream<'i> {
                     return Ok(());
                 }
                 _ => {
-                    self.skip_one_datum()?;
+                    self.skip_one_datum_with_max_depth(depth - 1)?;
                 }
             }
         }
+    }
+
+    #[allow(dead_code)]
+    fn skip_list_contents(&mut self) -> Result<(), ParseError> {
+        self.skip_list_contents_with_max_depth(DEFAULT_MAX_DEPTH)
     }
 
     /// Parse a single `<datum>` from the token stream.
@@ -355,33 +406,46 @@ impl<'i> TokenStream<'i> {
     /// covering the currently implemented `<simple datum>` and
     /// `<compound datum>` alternatives plus label forms (`#n=` / `#n#`).
     pub fn parse_datum(&mut self) -> Result<Syntax<Datum>, ParseError> {
-        let token = self.next_token()?.ok_or(ParseError::Incomplete)?;
+        self.parse_datum_with_max_depth(DEFAULT_MAX_DEPTH)
+    }
+
+    fn parse_datum_with_max_depth(&mut self, depth: u32) -> Result<Syntax<Datum>, ParseError> {
+        let token = self
+            .next_token_with_max_depth(depth)?
+            .ok_or(ParseError::Incomplete)?;
+        let span = token.span;
+
+        if depth == 0 {
+            return Err(ParseError::unsupported(span, Unsupported::DepthLimit));
+        }
 
         match token.value {
-            Token::Boolean(b) => Ok(Syntax::new(token.span, Datum::Boolean(b))),
-            Token::Number(n) => Ok(Syntax::new(token.span, Datum::Number(n.into()))),
-            Token::Character(c) => Ok(Syntax::new(token.span, Datum::Character(c))),
-            Token::String(s) => Ok(Syntax::new(token.span, Datum::String(s.into_owned()))),
-                Token::Identifier(s) => Ok(Syntax::new(token.span, Datum::Symbol(s.into_owned()))),
+            Token::Boolean(b) => Ok(Syntax::new(span, Datum::Boolean(b))),
+            Token::Number(n) => Ok(Syntax::new(span, Datum::Number(n.into()))),
+            Token::Character(c) => Ok(Syntax::new(span, Datum::Character(c))),
+            Token::String(s) => Ok(Syntax::new(span, Datum::String(s.into_owned()))),
+            Token::Identifier(s) => Ok(Syntax::new(span, Datum::Symbol(s.into_owned()))),
 
-            Token::LParen => self.parse_list(token.span),
-            Token::VectorStart => self.parse_vector(token.span),
-            Token::ByteVectorStart => self.parse_bytevector(token.span),
-            Token::Quote => self.parse_abbreviation("quote", token.span),
-            Token::Backquote => self.parse_abbreviation("quasiquote", token.span),
-            Token::Comma => self.parse_abbreviation("unquote", token.span),
-            Token::CommaAt => self.parse_abbreviation("unquote-splicing", token.span),
+            Token::LParen => self.parse_list_with_max_depth(span, depth),
+            Token::VectorStart => self.parse_vector_with_max_depth(span, depth),
+            Token::ByteVectorStart => self.parse_bytevector_with_max_depth(span, depth),
+            Token::Quote => self.parse_abbreviation_with_max_depth("quote", span, depth),
+            Token::Backquote => self.parse_abbreviation_with_max_depth("quasiquote", span, depth),
+            Token::Comma => self.parse_abbreviation_with_max_depth("unquote", span, depth),
+            Token::CommaAt => {
+                self.parse_abbreviation_with_max_depth("unquote-splicing", span, depth)
+            }
 
             Token::LabelDef(n) => {
-                let datum = self.parse_datum()?;
-                let span = token.span.merge(datum.span);
+                let datum = self.parse_datum_with_max_depth(depth - 1)?;
+                let span = span.merge(datum.span);
                 Ok(Syntax::new(span, Datum::Labeled(n, Box::new(datum))))
             }
-            Token::LabelRef(n) => Ok(Syntax::new(token.span, Datum::LabelRef(n))),
+            Token::LabelRef(n) => Ok(Syntax::new(span, Datum::LabelRef(n))),
 
             // Invalid start of datum
             Token::RParen | Token::Dot => Err(ParseError::syntax(
-                token.span,
+                span,
                 "<datum>",
                 format!("unexpected token {:?}", token.value),
             )),
@@ -398,16 +462,26 @@ impl<'i> TokenStream<'i> {
     /// <list> ::= ( <datum>* )
     ///          | ( <datum>+ . <datum> )
     /// ```
-    fn parse_list(&mut self, start_span: Span) -> Result<Syntax<Datum>, ParseError> {
+    fn parse_list_with_max_depth(
+        &mut self,
+        start_span: Span,
+        depth: u32,
+    ) -> Result<Syntax<Datum>, ParseError> {
+        if depth == 0 {
+            return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
+        }
+
         let mut elements = Vec::new();
         let mut tail = None;
         let end_span;
 
         loop {
             // Check for end of list or dot
-            match self.peek_token_value()? {
+            match self.peek_token_value_with_max_depth(depth)? {
                 Some(Token::RParen) => {
-                    let token = self.next_token()?.ok_or(ParseError::Incomplete)?;
+                    let token = self
+                        .next_token_with_max_depth(depth)?
+                        .ok_or(ParseError::Incomplete)?;
                     end_span = token.span;
                     if tail.is_none() {
                         tail = Some(Syntax::new(end_span, Datum::EmptyList));
@@ -416,19 +490,22 @@ impl<'i> TokenStream<'i> {
                 }
                 Some(Token::Dot) => {
                     if elements.is_empty() {
-                        let span = self.peek()?.ok_or(ParseError::Incomplete)?.span;
+                        let span = self
+                            .peek_with_max_depth(depth)?
+                            .ok_or(ParseError::Incomplete)?
+                            .span;
                         return Err(ParseError::syntax(
                             span,
                             "<list>",
                             "unexpected dot at start of list",
                         ));
                     }
-                    self.next_token()?; // consume dot
-                    let tail_datum = self.parse_datum()?;
+                    self.next_token_with_max_depth(depth)?; // consume dot
+                    let tail_datum = self.parse_datum_with_max_depth(depth - 1)?;
                     tail = Some(tail_datum);
 
                     // Expect RParen
-                    match self.next_token()? {
+                    match self.next_token_with_max_depth(depth)? {
                         Some(token) if matches!(token.value, Token::RParen) => {
                             end_span = token.span;
                             break;
@@ -445,7 +522,7 @@ impl<'i> TokenStream<'i> {
                 }
                 None => return Err(ParseError::Incomplete),
                 _ => {
-                    elements.push(self.parse_datum()?);
+                    elements.push(self.parse_datum_with_max_depth(depth - 1)?);
                 }
             }
         }
@@ -468,20 +545,30 @@ impl<'i> TokenStream<'i> {
     /// ```text
     /// <vector> ::= #( <datum>* )
     /// ```
-    fn parse_vector(&mut self, start_span: Span) -> Result<Syntax<Datum>, ParseError> {
+    fn parse_vector_with_max_depth(
+        &mut self,
+        start_span: Span,
+        depth: u32,
+    ) -> Result<Syntax<Datum>, ParseError> {
+        if depth == 0 {
+            return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
+        }
+
         let mut elements = Vec::new();
         let end_span;
 
         loop {
-            match self.peek_token_value()? {
+            match self.peek_token_value_with_max_depth(depth)? {
                 Some(Token::RParen) => {
-                    let token = self.next_token()?.ok_or(ParseError::Incomplete)?;
+                    let token = self
+                        .next_token_with_max_depth(depth)?
+                        .ok_or(ParseError::Incomplete)?;
                     end_span = token.span;
                     break;
                 }
                 None => return Err(ParseError::Incomplete),
                 _ => {
-                    elements.push(self.parse_datum()?);
+                    elements.push(self.parse_datum_with_max_depth(depth - 1)?);
                 }
             }
         }
@@ -502,12 +589,17 @@ impl<'i> TokenStream<'i> {
     /// ```
     ///
     /// Each abbreviation expands into its desugared list form (e.g., `'x` ⇒ `(quote x)`).
-    fn parse_abbreviation(
+    fn parse_abbreviation_with_max_depth(
         &mut self,
         name: &str,
         start_span: Span,
+        depth: u32,
     ) -> Result<Syntax<Datum>, ParseError> {
-        let datum = self.parse_datum()?;
+        if depth == 0 {
+            return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
+        }
+
+        let datum = self.parse_datum_with_max_depth(depth - 1)?;
         let end_span = datum.span;
 
         // Construct (name datum)
@@ -534,21 +626,31 @@ impl<'i> TokenStream<'i> {
     /// <bytevector> ::= #u8( <byte>* )
     /// <byte> ::= any exact integer between 0 and 255
     /// ```
-    fn parse_bytevector(&mut self, start_span: Span) -> Result<Syntax<Datum>, ParseError> {
+    fn parse_bytevector_with_max_depth(
+        &mut self,
+        start_span: Span,
+        depth: u32,
+    ) -> Result<Syntax<Datum>, ParseError> {
+        if depth == 0 {
+            return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
+        }
+
         let mut elements = Vec::new();
         let end_span;
 
         loop {
-            match self.peek_token_value()? {
+            match self.peek_token_value_with_max_depth(depth)? {
                 Some(Token::RParen) => {
-                    let token = self.next_token()?.ok_or(ParseError::Incomplete)?;
+                    let token = self
+                        .next_token_with_max_depth(depth)?
+                        .ok_or(ParseError::Incomplete)?;
                     end_span = token.span;
                     break;
                 }
                 None => return Err(ParseError::Incomplete),
                 _ => {
                     // Bytevectors must contain exact integers in the closed range [0, 255].
-                    let datum = self.parse_datum()?;
+                    let datum = self.parse_datum_with_max_depth(depth - 1)?;
                     if let Some(value) = match &datum.value {
                         Datum::Number(number) => number_literal_to_byte(number),
                         _ => None,
@@ -631,8 +733,17 @@ fn integer_spelling_to_byte(spelling: &str, radix: u32) -> Option<u8> {
 ///           | <label> = <datum> | <label> #
 /// ```
 pub fn parse_datum(source: &str) -> Result<Syntax<Datum>, ParseError> {
+    parse_datum_with_max_depth(source, DEFAULT_MAX_DEPTH)
+}
+
+/// Parse a single `<datum>` from the given source string with an
+/// explicit maximum nesting depth.
+pub fn parse_datum_with_max_depth(
+    source: &str,
+    max_depth: u32,
+) -> Result<Syntax<Datum>, ParseError> {
     let mut stream = TokenStream::from_source(source);
-    let datum = stream.parse_datum()?;
+    let datum = stream.parse_datum_with_max_depth(max_depth)?;
 
     if !stream.is_empty() {
         // If there are remaining tokens, it's an error for a single datum parse
@@ -650,7 +761,7 @@ pub fn parse_datum(source: &str) -> Result<Syntax<Datum>, ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lex::Token;
+    use crate::{Unsupported, lex::Token};
 
     struct TestCase {
         name: &'static str,
@@ -692,6 +803,7 @@ mod tests {
     enum ErrorMatcher {
         Incomplete,
         Syntax(&'static str),
+        UnsupportedDepth,
     }
 
     impl TestCase {
@@ -822,11 +934,59 @@ mod tests {
                         test_name
                     );
                 }
+                (ErrorMatcher::UnsupportedDepth, ParseError::Unsupported { feature, .. }) => {
+                    assert_eq!(
+                        feature,
+                        &Unsupported::DepthLimit,
+                        "{}: expected depth-limit unsupported error",
+                        test_name,
+                    );
+                }
                 _ => panic!(
                     "{}: error mismatch. Expected {:?}, got {:?}",
                     test_name, self, err
                 ),
             }
+        }
+    }
+
+    #[test]
+    fn depth_limit_enforced_by_default() {
+        // Build a deeply nested list: (((... 0 ...))) with depth > 64
+        let depth = 70usize;
+        let mut input = String::new();
+        for _ in 0..depth {
+            input.push('(');
+        }
+        input.push('0');
+        for _ in 0..depth {
+            input.push(')');
+        }
+
+        let result = parse_datum(&input);
+        let err = result.expect_err("expected depth-limit error");
+        ErrorMatcher::UnsupportedDepth.check(&err, "depth_limit_enforced_by_default");
+    }
+
+    #[test]
+    fn depth_limit_can_be_raised() {
+        // Same nested list but with an increased max depth that should succeed.
+        let depth = 70usize;
+        let mut input = String::new();
+        for _ in 0..depth {
+            input.push('(');
+        }
+        input.push('0');
+        for _ in 0..depth {
+            input.push(')');
+        }
+
+        let syntax = parse_datum_with_max_depth(&input, 128)
+            .expect("expected success with increased max depth");
+        if let Datum::Pair(_, _) = syntax.value {
+            // Shallow sanity check: we at least parsed a non-trivial list.
+        } else {
+            panic!("depth_limit_can_be_raised: expected a list datum");
         }
     }
 
