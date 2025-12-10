@@ -253,12 +253,6 @@ impl<'i> TokenStream<'i> {
         Ok(())
     }
 
-    /// Convenience wrapper that uses the default maximum depth when
-    /// skipping intertoken space.
-    fn consume_intertoken_space(&mut self) -> Result<(), ParseError> {
-        self.consume_intertoken_space_with_max_depth(DEFAULT_MAX_DEPTH)
-    }
-
     /// Skip exactly one datum from the current position.
     ///
     /// This is a simplified datum skipper that handles:

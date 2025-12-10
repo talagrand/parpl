@@ -1,7 +1,7 @@
 use crate::ast::{Span, Syntax};
 use crate::lex::{
-    FiniteReal, FiniteRealKind, Lexer, NumberLiteral, NumberRadix, NumberValue, RealRepr,
-    SpannedToken, Token,
+    FiniteReal, FiniteRealKind, Lexer, NumberExactness, NumberLiteral, NumberRadix, NumberValue,
+    RealRepr, SpannedToken, Token,
 };
 use crate::{ParseError, Unsupported};
 use std::iter::Peekable;
@@ -116,16 +116,14 @@ impl<'a> MiniReader<'a> {
         }
 
         let mut elements: Vec<Syntax<Value>> = Vec::new();
-        let mut end_span = start_span;
         loop {
             let peeked = self.peek()?;
             match peeked {
                 Some(t) => match t.value {
                     Token::RParen => {
                         let closing = self.next()?.ok_or(ParseError::Incomplete)?;
-                        end_span = closing.span;
                         return Ok(Syntax::new(
-                            start_span.merge(end_span),
+                            start_span.merge(closing.span),
                             Value::List(elements),
                         ));
                     }
@@ -149,6 +147,16 @@ impl<'a> MiniReader<'a> {
     }
 
     fn parse_number(&self, n: NumberLiteral, span: Span) -> Result<Syntax<Value>, ParseError> {
+        match n.kind.exactness {
+            NumberExactness::Unspecified => {}
+            NumberExactness::Exact | NumberExactness::Inexact => {
+                return Err(ParseError::unsupported(
+                    span,
+                    Unsupported::InvalidIntegerFormat,
+                ));
+            }
+        }
+
         match n.kind.value {
             NumberValue::Real(RealRepr::Finite(FiniteReal {
                 kind: FiniteRealKind::Integer,
@@ -169,9 +177,18 @@ impl<'a> MiniReader<'a> {
                     (1, spelling)
                 };
 
-                let val = u64::from_str_radix(digits, radix).map_err(|_| {
-                    ParseError::unsupported(span, Unsupported::IntegerOverflowOrInvalidFormat)
-                })?;
+                let val = match u64::from_str_radix(digits, radix) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let feature = match e.kind() {
+                            std::num::IntErrorKind::PosOverflow
+                            | std::num::IntErrorKind::NegOverflow => Unsupported::IntegerOverflow,
+                            // This should never happen, give our lexer's enforcement
+                            _ => Unsupported::InvalidIntegerFormat,
+                        };
+                        return Err(ParseError::unsupported(span, feature));
+                    }
+                };
 
                 let result = if sign == 1 {
                     i64::try_from(val)
@@ -393,11 +410,26 @@ mod tests {
                 input: "1.5",
                 expected: Error(ErrorMatcher::Unsupported(Unsupported::NonIntegerNumber)),
             },
+            TestCase {
+                name: "unsupported_exact_number",
+                input: "#e42",
+                expected: Error(ErrorMatcher::Unsupported(Unsupported::InvalidIntegerFormat)),
+            },
+            TestCase {
+                name: "unsupported_inexact_number",
+                input: "#i42",
+                expected: Error(ErrorMatcher::Unsupported(Unsupported::InvalidIntegerFormat)),
+            },
             // Syntax errors
             TestCase {
                 name: "syntax_unexpected_rparen",
                 input: ")",
                 expected: Error(ErrorMatcher::Syntax("unexpected ')'")),
+            },
+            TestCase {
+                name: "incomplete_list",
+                input: "(1 2",
+                expected: Error(ErrorMatcher::Incomplete),
             },
             // Number edge cases
             TestCase {

@@ -17,8 +17,8 @@ pub enum Unsupported {
     Comments,
     DepthLimit,
     ImproperLists,
-    IntegerOverflowOrInvalidFormat,
     IntegerOverflow,
+    InvalidIntegerFormat,
     NonIntegerNumber,
     FoldCaseDirectives,
 }
@@ -34,8 +34,8 @@ impl std::fmt::Display for Unsupported {
             Unsupported::Comments => "comments",
             Unsupported::DepthLimit => "maximum nesting depth",
             Unsupported::ImproperLists => "improper lists",
-            Unsupported::IntegerOverflowOrInvalidFormat => "integer overflow or invalid format",
             Unsupported::IntegerOverflow => "integer overflow",
+            Unsupported::InvalidIntegerFormat => "invalid integer format",
             Unsupported::NonIntegerNumber => "non-integer number",
             Unsupported::FoldCaseDirectives => "fold-case directives",
         };

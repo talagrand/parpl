@@ -66,6 +66,16 @@ enum NumCheck {
 impl TestCase {
     fn run(&self) {
         let result: Result<Vec<SpannedToken>, ParseError> = lex(self.input).collect();
+        self.run_with_result(result);
+    }
+
+    fn run_with_config(&self, config: LexConfig) {
+        let result: Result<Vec<SpannedToken>, ParseError> =
+            lex_with_config(self.input, config).collect();
+        self.run_with_result(result);
+    }
+
+    fn run_with_result(&self, result: Result<Vec<SpannedToken>, ParseError>) {
         match &self.expected {
             Expected::Tokens(expected_tokens) => {
                 let tokens = result.unwrap_or_else(|e| {
@@ -1367,74 +1377,32 @@ fn run_number_tests() {
 }
 
 #[test]
-fn directives_unsupported_when_reject_fold_case_enabled() {
-    // With fold-case rejection enabled in the lexer configuration,
-    // encountering a fold-case directive should yield an Unsupported
-    // error.
-    let result: Result<Vec<SpannedToken>, ParseError> = lex_with_config(
-        "#!fold-case",
-        LexConfig {
-            reject_fold_case: true,
-            reject_comments: false,
-        },
-    )
-    .collect();
-    let err = result.expect_err("expected unsupported feature error");
-    match err {
-        ParseError::Unsupported { feature, .. } => {
-            assert_eq!(feature, Unsupported::FoldCaseDirectives);
-        }
-        other => panic!(
-            "directives_unsupported_when_fold_case_disabled: expected Unsupported, got {:?}",
-            other
-        ),
-    }
-}
+fn run_reject_feature_tests() {
+    // Use a config that rejects both fold-case directives and all comments.
+    let config = LexConfig {
+        reject_fold_case: true,
+        reject_comments: true,
+    };
 
-#[test]
-fn comments_unsupported_when_reject_comments_enabled_intertoken() {
-    // With comment rejection enabled, any line or nested comment in
-    // intertoken space should yield an Unsupported::Comments error.
-    let result: Result<Vec<SpannedToken>, ParseError> = lex_with_config(
-        "; comment here\n42",
-        LexConfig {
-            reject_fold_case: false,
-            reject_comments: true,
+    let cases = vec![
+        TestCase {
+            name: "directives_unsupported_when_reject_fold_case_enabled",
+            input: "#!fold-case",
+            expected: Expected::Error(ErrorMatcher::Unsupported(Unsupported::FoldCaseDirectives)),
         },
-    )
-    .collect();
-    let err = result.expect_err("expected unsupported comments error");
-    match err {
-        ParseError::Unsupported { feature, .. } => {
-            assert_eq!(feature, Unsupported::Comments);
-        }
-        other => panic!(
-            "comments_unsupported_when_reject_comments_enabled_intertoken: expected Unsupported, got {:?}",
-            other
-        ),
-    }
-}
+        TestCase {
+            name: "comments_unsupported_when_reject_comments_enabled_intertoken",
+            input: "; comment here\n42",
+            expected: Expected::Error(ErrorMatcher::Unsupported(Unsupported::Comments)),
+        },
+        TestCase {
+            name: "datum_comments_unsupported_when_reject_comments_enabled",
+            input: "#; 1 2",
+            expected: Expected::Error(ErrorMatcher::Unsupported(Unsupported::Comments)),
+        },
+    ];
 
-#[test]
-fn datum_comments_unsupported_when_reject_comments_enabled() {
-    // With comment rejection enabled, datum comments `#;` should also be
-    // reported as Unsupported::Comments instead of producing a token.
-    let result: Result<Vec<SpannedToken>, ParseError> = lex_with_config(
-        "#; 1 2",
-        LexConfig {
-            reject_fold_case: false,
-            reject_comments: true,
-        },
-    )
-    .collect();
-    let err = result.expect_err("expected unsupported comments error");
-    match err {
-        ParseError::Unsupported { feature, .. } => {
-            assert_eq!(feature, Unsupported::Comments);
-        }
-        other => panic!(
-            "datum_comments_unsupported_when_reject_comments_enabled: expected Unsupported, got {:?}",
-            other
-        ),
+    for case in cases {
+        case.run_with_config(config);
     }
 }

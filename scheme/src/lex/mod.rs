@@ -214,7 +214,7 @@ pub enum FoldCaseMode {
 ///
 /// This controls whether fold-case directives are honored semantically
 /// and whether comments are accepted or rejected.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
 pub struct LexConfig {
     /// If true, fold-case directives are rejected as
     /// `Unsupported::FoldCaseDirectives` and identifiers and character
@@ -234,15 +234,6 @@ pub struct LexConfig {
     /// `<intertoken space>`, and datum comments emit `Token::DatumComment`
     /// for higher layers to interpret.
     pub reject_comments: bool,
-}
-
-impl Default for LexConfig {
-    fn default() -> Self {
-        LexConfig {
-            reject_fold_case: false,
-            reject_comments: false,
-        }
-    }
 }
 
 /// A single token paired with its source span.
