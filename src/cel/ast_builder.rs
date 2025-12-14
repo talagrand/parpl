@@ -9,11 +9,12 @@
 // - Numeric parsing: validated and parsed immediately
 // - Identifier resolution: handled during evaluation
 
-use crate::{
+use crate::cel::{
     ast::{BinaryOp, Expr, ExprKind, Literal, QuoteStyle, RawLiteral, Span, UnaryOp},
     context::StringInterner,
     error::{Error, Result},
-    parser::{ParseConfig, Rule},
+    literal,
+    parser::{ParseConfig, Rule, parse_with_config},
 };
 use bumpalo::Bump;
 use pest::iterators::Pair;
@@ -48,7 +49,7 @@ pub fn build_ast_with_arena<'arena>(
     interner: &RefCell<StringInterner<'arena>>,
 ) -> Result<&'arena Expr<'arena>> {
     // First parse with pest
-    let pairs = crate::parser::parse_with_config(input, config)?;
+    let pairs = parse_with_config(input, config)?;
 
     // Convert to AST with depth tracking
     // The parse tree has structure: SOI ~ expr ~ EOI
@@ -701,7 +702,7 @@ fn build_literal<'arena>(
     };
 
     // Process the RawLiteral into a Literal, adding span information to any errors
-    crate::literal::process_literal(&raw_literal, &mut interner.borrow_mut(), arena)
+    literal::process_literal(&raw_literal, &mut interner.borrow_mut(), arena)
         .map_err(|e| e.with_span(span))
 }
 

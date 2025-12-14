@@ -6,11 +6,10 @@
 // Run with:
 //   cargo run --release --example bench_parse
 
+use parpl::cel::{CelloBuilder, Result};
 use std::time::Instant;
 
-use cello::CelloBuilder;
-
-fn main() -> cello::Result<()> {
+fn main() -> Result<()> {
     const ITERATIONS: u64 = 200_000;
 
     // Choose a moderately complex expression to exercise the parser.

@@ -4,7 +4,7 @@
 // Since our API is arena-based and requires scoped access, these utilities handle
 // the boilerplate of creating contexts.
 
-use crate::{
+use crate::cel::{
     ast::{BinaryOp, Expr, ExprKind, Literal},
     context::CelloBuilder,
     error::ErrorKind,
@@ -18,8 +18,8 @@ use crate::{
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
-/// # use cello::ExprKind;
+/// # use parpl::cel::test_util::*;
+/// # use parpl::cel::ExprKind;
 /// parse("1 + 2", |ast| {
 ///     assert!(matches!(ast.kind, ExprKind::Binary(..)));
 /// });
@@ -41,8 +41,8 @@ where
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
-/// # use cello::{ExprKind, ParseConfig};
+/// # use parpl::cel::test_util::*;
+/// # use parpl::cel::{ExprKind, ParseConfig};
 /// let config = ParseConfig {
 ///     max_parse_depth: 128,
 ///     max_ast_depth: 24,
@@ -72,7 +72,7 @@ where
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
+/// # use parpl::cel::test_util::*;
 /// assert_parses("1 + 2");
 /// assert_parses("true ? 1 : 2");
 /// ```
@@ -85,7 +85,7 @@ pub fn assert_parses(input: &str) {
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
+/// # use parpl::cel::test_util::*;
 /// assert_parse_fails("1 +");
 /// assert_parse_fails("@#$");
 /// ```
@@ -101,8 +101,8 @@ pub fn assert_parse_fails(input: &str) {
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
-/// # use cello::ErrorKind;
+/// # use parpl::cel::test_util::*;
+/// # use parpl::cel::ErrorKind;
 /// assert_parse_fails_with("1 +", ErrorKind::UnexpectedEOF);
 /// ```
 #[track_caller]
@@ -128,8 +128,8 @@ pub fn assert_parse_fails_with(input: &str, expected_kind: ErrorKind) {
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
-/// # use cello::ExprKind;
+/// # use parpl::cel::test_util::*;
+/// # use parpl::cel::ExprKind;
 /// assert_ast_kind("1 + 2", |kind| matches!(kind, ExprKind::Binary(..)));
 /// ```
 #[track_caller]
@@ -152,8 +152,8 @@ where
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
-/// # use cello::Literal;
+/// # use parpl::cel::test_util::*;
+/// # use parpl::cel::Literal;
 /// assert_literal("42", |lit| matches!(lit, Literal::Int(42)));
 /// assert_literal("true", |lit| matches!(lit, Literal::Bool(true)));
 /// ```
@@ -180,7 +180,7 @@ where
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
+/// # use parpl::cel::test_util::*;
 /// assert_ident("foo", "foo");
 /// assert_ident("my_var", "my_var");
 /// ```
@@ -207,8 +207,8 @@ pub fn assert_ident(input: &str, expected_name: &str) {
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
-/// # use cello::BinaryOp;
+/// # use parpl::cel::test_util::*;
+/// # use parpl::cel::BinaryOp;
 /// assert_binary("1 + 2", BinaryOp::Add);
 /// assert_binary("x && y", BinaryOp::And);
 /// ```
@@ -235,7 +235,7 @@ pub fn assert_binary(input: &str, expected_op: BinaryOp) {
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
+/// # use parpl::cel::test_util::*;
 /// assert_ternary("true ? 1 : 2");
 /// ```
 #[track_caller]
@@ -254,7 +254,7 @@ pub fn assert_ternary(input: &str) {
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
+/// # use parpl::cel::test_util::*;
 /// assert_list("[1, 2, 3]", 3);
 /// ```
 #[track_caller]
@@ -278,7 +278,7 @@ pub fn assert_list(input: &str, expected_len: usize) {
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
+/// # use parpl::cel::test_util::*;
 /// assert_map("{a: 1, b: 2}", 2);
 /// ```
 #[track_caller]
@@ -302,7 +302,7 @@ pub fn assert_map(input: &str, expected_len: usize) {
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
+/// # use parpl::cel::test_util::*;
 /// let output = parse_and_pretty("1 + 2");
 /// println!("{}", output);
 /// ```
@@ -316,7 +316,7 @@ pub fn parse_and_pretty(input: &str) -> String {
 ///
 /// # Examples
 /// ```
-/// # use cello::test_util::*;
+/// # use parpl::cel::test_util::*;
 /// test_cases! {
 ///     literal_42: "42" => assert_parses,
 ///     literal_true: "true" => assert_parses,

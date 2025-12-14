@@ -30,16 +30,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46c5e41b57b8bba42a04676d81cb89e9ee8e859a1a66f80a5a72e1cb76b34d43"
 
 [[package]]
-name = "cello"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "pest",
- "pest_derive",
- "string-interner",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -110,6 +100,16 @@ name = "once_cell"
 version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
+
+[[package]]
+name = "parpl"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "pest",
+ "pest_derive",
+ "string-interner",
+]
 
 [[package]]
 name = "pest"

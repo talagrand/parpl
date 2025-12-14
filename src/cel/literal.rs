@@ -11,14 +11,14 @@
 // **CEL Spec Reference**: langdef.md lines 156-159 (escape sequences)
 // **CEL Spec Reference**: langdef.md lines 270-360 (string/bytes semantics)
 
-use crate::{
+use crate::cel::{
     ast::{Literal, RawLiteral},
     error::{Error, Result},
 };
 use bumpalo::Bump;
 
 // Re-export StringInterner from context for use in this module
-use crate::context::StringInterner;
+use crate::cel::context::StringInterner;
 
 //==============================================================================
 // Common Escape Processing
@@ -454,6 +454,7 @@ pub fn process_literal<'arena>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cel::ast::QuoteStyle;
     use bumpalo::Bump;
 
     /// Test utilities for setting up arena and interner
@@ -642,7 +643,6 @@ mod tests {
 
     #[test]
     fn test_process_literal_strings() {
-        use crate::ast::QuoteStyle;
         let mut ctx = TestContext::new();
 
         // Raw string - no processing
@@ -691,7 +691,7 @@ mod tests {
         let mut ctx = TestContext::new();
 
         // \xFF is byte 255 - NOT valid UTF-8 on its own
-        let raw = RawLiteral::Bytes("\\xFF", false, crate::ast::QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::Bytes("\\xFF", false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap();
 
         if let Literal::Bytes(bytes) = result {
@@ -704,7 +704,7 @@ mod tests {
         }
 
         // \377 (octal) is also byte 255
-        let raw = RawLiteral::Bytes("\\377", false, crate::ast::QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::Bytes("\\377", false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap();
 
         if let Literal::Bytes(bytes) = result {
@@ -715,11 +715,7 @@ mod tests {
         }
 
         // Sequence of invalid UTF-8 bytes
-        let raw = RawLiteral::Bytes(
-            "\\xFF\\xFE\\xFD",
-            false,
-            crate::ast::QuoteStyle::DoubleQuote,
-        );
+        let raw = RawLiteral::Bytes("\\xFF\\xFE\\xFD", false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap();
 
         if let Literal::Bytes(bytes) = result {
@@ -737,7 +733,7 @@ mod tests {
         let mut ctx = TestContext::new();
 
         // ASCII is valid UTF-8
-        let raw = RawLiteral::Bytes("abc", false, crate::ast::QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::Bytes("abc", false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap();
 
         if let Literal::Bytes(bytes) = result {
@@ -748,7 +744,7 @@ mod tests {
         }
 
         // CEL Spec example (line 335): b"ÿ" is bytes [195, 191] (UTF-8 of ÿ)
-        let raw = RawLiteral::Bytes("ÿ", false, crate::ast::QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::Bytes("ÿ", false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap();
 
         if let Literal::Bytes(bytes) = result {

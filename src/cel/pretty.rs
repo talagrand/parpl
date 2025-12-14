@@ -4,7 +4,7 @@
 // The output is designed to be clear and easy to read, showing the structure
 // of parsed expressions.
 
-use crate::ast::{Expr, ExprKind, Literal, QuoteStyle};
+use crate::cel::ast::{Expr, ExprKind, Literal, QuoteStyle};
 use std::fmt;
 
 /// Configuration for pretty-printing
@@ -249,7 +249,7 @@ impl fmt::Display for Expr<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::*;
+    use crate::cel::{CelloBuilder, test_util::*};
 
     macro_rules! test_cases {
         ($($name:ident: $test:expr),* $(,)?) => {
@@ -303,7 +303,6 @@ mod tests {
 
     test_cases! {
         test_pretty_print_with_spans: {
-            use crate::CelloBuilder;
             CelloBuilder::new()
                 .parse_scoped("42", |ctx| {
                     let config = PrettyConfig::new().with_spans();
@@ -315,7 +314,6 @@ mod tests {
         },
 
         test_pretty_print_custom_indent: {
-            use crate::CelloBuilder;
             CelloBuilder::new()
                 .parse_scoped("1 + 2", |ctx| {
                     let config = PrettyConfig::new().with_indent(4);

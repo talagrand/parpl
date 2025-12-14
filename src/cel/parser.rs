@@ -3,13 +3,16 @@
 // This module handles parsing CEL expressions using the pest PEG parser.
 // It includes complexity protection against stack overflow and timeout attacks.
 
-use crate::error::{Error, Result};
+use crate::cel::{
+    constants,
+    error::{Error, Result},
+};
 use pest::Parser;
 use pest_derive::Parser;
 use std::num::NonZeroUsize;
 
 #[derive(Parser)]
-#[grammar = "grammar.pest"]
+#[grammar = "cel/grammar.pest"]
 pub struct CelParser;
 
 pub use pest::iterators::Pairs;
@@ -36,8 +39,8 @@ pub struct ParseConfig {
 impl Default for ParseConfig {
     fn default() -> Self {
         Self {
-            max_parse_depth: crate::constants::DEFAULT_MAX_PARSE_DEPTH,
-            max_ast_depth: crate::constants::DEFAULT_MAX_AST_DEPTH,
+            max_parse_depth: constants::DEFAULT_MAX_PARSE_DEPTH,
+            max_ast_depth: constants::DEFAULT_MAX_AST_DEPTH,
             max_call_limit: 10_000_000,
         }
     }
@@ -46,17 +49,17 @@ impl Default for ParseConfig {
 /// Parse a CEL expression from a string with default configuration
 ///
 /// Uses default limits:
-/// - `max_nesting_depth`: [`crate::constants::DEFAULT_MAX_RECURSION_DEPTH`] (128)
+/// - `max_nesting_depth`: [`crate::cel::constants::DEFAULT_MAX_RECURSION_DEPTH`] (128)
 /// - `max_call_limit`: 10,000,000
 ///
 /// For custom limits, use [`parse_with_config`].
 ///
 /// # Example
 /// ```
-/// use cello::parse;
+/// use parpl::cel::parse;
 ///
 /// let pairs = parse("1 + 2")?;
-/// # Ok::<(), cello::Error>(())
+/// # Ok::<(), parpl::cel::Error>(())
 /// ```
 pub fn parse(input: &str) -> Result<Pairs<'_, Rule>> {
     parse_with_config(input, ParseConfig::default())
@@ -71,7 +74,7 @@ pub fn parse(input: &str) -> Result<Pairs<'_, Rule>> {
 ///
 /// # Example
 /// ```
-/// use cello::{parse_with_config, ParseConfig};
+/// use parpl::cel::{parse_with_config, ParseConfig};
 ///
 /// let config = ParseConfig {
 ///     max_parse_depth: 128,
@@ -118,7 +121,7 @@ pub fn parse_with_config(input: &str, config: ParseConfig) -> Result<Pairs<'_, R
 /// - Counts delimiters in strings (false positives possible, but rare)
 /// - This is acceptable: we prefer rejecting extreme inputs over risking crashes
 ///
-/// Default limit: [`crate::constants::DEFAULT_MAX_RECURSION_DEPTH`] = 128
+/// Default limit: [`crate::cel::constants::DEFAULT_MAX_RECURSION_DEPTH`] = 128
 fn validate_nesting_depth(input: &str, max_depth: usize) -> Result<()> {
     let mut depth = 0;
     let mut max_reached = 0;

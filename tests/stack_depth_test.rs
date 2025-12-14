@@ -4,7 +4,7 @@
 // NOTE: Stack overflow occurs at very low nesting depths
 // This suggests recursion in the parser or AST builder
 
-use cello::CelloBuilder;
+use parpl::cel::CelloBuilder;
 
 #[test]
 fn find_max_safe_depth() {

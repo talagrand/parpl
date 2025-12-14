@@ -7,9 +7,9 @@
 // 4. Error handling
 // 5. Context reuse
 
-fn main() -> cello::Result<()> {
-    use cello::{CelloBuilder, PrettyConfig};
+use parpl::cel::{CelloBuilder, PrettyConfig, Result, pretty_print, pretty_print_with_config};
 
+fn main() -> Result<()> {
     println!("=== Cello: CEL Parser Demo ===\n");
 
     // ========================================================================
@@ -32,7 +32,7 @@ fn main() -> cello::Result<()> {
     CelloBuilder::new().parse_scoped("x > 0 ? x : -x", |ctx| {
         let ast = ctx.ast()?;
         println!("   Expression: x > 0 ? x : -x");
-        println!("{}", cello::pretty_print(ast));
+        println!("{}", pretty_print(ast));
         Ok(())
     })?;
 
@@ -42,7 +42,7 @@ fn main() -> cello::Result<()> {
         let ast = ctx.ast()?;
         let config = PrettyConfig::new().with_spans();
         println!("   Expression: true && false");
-        println!("{}", cello::pretty_print_with_config(ast, &config));
+        println!("{}", pretty_print_with_config(ast, &config));
         Ok(())
     })?;
 

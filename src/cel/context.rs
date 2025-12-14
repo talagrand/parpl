@@ -6,7 +6,12 @@
 // The builder allows fluent configuration, and the context owns the parsed AST
 // in a bumpalo::Bump arena for efficient memory management.
 
-use crate::{ast::Expr, error::Result};
+use crate::cel::{
+    ast::Expr,
+    ast_builder, constants,
+    error::{Error, ErrorKind, Phase, Result},
+    parser::ParseConfig,
+};
 use bumpalo::Bump;
 use std::cell::RefCell;
 use string_interner::{StringInterner as InnerInterner, backend::StringBackend};
@@ -69,17 +74,17 @@ impl<'arena> Default for StringInterner<'arena> {
 ///
 /// Simple usage with defaults:
 /// ```
-/// use cello::CelloBuilder;
+/// use parpl::cel::CelloBuilder;
 ///
 /// let mut ctx = CelloBuilder::new().build();
 /// ctx.parse("1 + 2")?;
 /// let ast = ctx.ast()?;
-/// # Ok::<(), cello::Error>(())
+/// # Ok::<(), parpl::cel::Error>(())
 /// ```
 ///
 /// With custom configuration:
 /// ```
-/// use cello::CelloBuilder;
+/// use parpl::cel::CelloBuilder;
 ///
 /// let mut ctx = CelloBuilder::new()
 ///     .max_parse_depth(128)
@@ -87,7 +92,7 @@ impl<'arena> Default for StringInterner<'arena> {
 ///     .max_call_limit(50_000_000)
 ///     .strict_mode(true)
 ///     .build();
-/// # Ok::<(), cello::Error>(())
+/// # Ok::<(), parpl::cel::Error>(())
 /// ```
 #[derive(Debug, Clone)]
 pub struct CelloBuilder {
@@ -113,8 +118,8 @@ impl CelloBuilder {
     /// - `strict_mode`: false
     pub fn new() -> Self {
         Self {
-            max_parse_depth: crate::constants::DEFAULT_MAX_PARSE_DEPTH,
-            max_ast_depth: crate::constants::DEFAULT_MAX_AST_DEPTH,
+            max_parse_depth: constants::DEFAULT_MAX_PARSE_DEPTH,
+            max_ast_depth: constants::DEFAULT_MAX_AST_DEPTH,
             max_call_limit: 10_000_000,
             strict_mode: false,
         }
@@ -127,7 +132,7 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use cello::CelloBuilder;
+    /// use parpl::cel::CelloBuilder;
     ///
     /// let ctx = CelloBuilder::new()
     ///     .max_parse_depth(128)
@@ -146,7 +151,7 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use cello::CelloBuilder;
+    /// use parpl::cel::CelloBuilder;
     ///
     /// let ctx = CelloBuilder::new()
     ///     .max_ast_depth(30)
@@ -164,7 +169,7 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use cello::CelloBuilder;
+    /// use parpl::cel::CelloBuilder;
     ///
     /// let ctx = CelloBuilder::new()
     ///     .max_nesting_depth(100)
@@ -183,7 +188,7 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use cello::CelloBuilder;
+    /// use parpl::cel::CelloBuilder;
     ///
     /// let ctx = CelloBuilder::new()
     ///     .max_call_limit(50_000_000)
@@ -201,7 +206,7 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use cello::CelloBuilder;
+    /// use parpl::cel::CelloBuilder;
     ///
     /// let ctx = CelloBuilder::new()
     ///     .strict_mode(true)
@@ -218,12 +223,12 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use cello::CelloBuilder;
+    /// use parpl::cel::CelloBuilder;
     ///
     /// let mut ctx = CelloBuilder::new().build();
     /// ctx.parse("1 + 2")?;
     /// let ast = ctx.ast()?;
-    /// # Ok::<(), cello::Error>(())
+    /// # Ok::<(), parpl::cel::Error>(())
     /// ```
     pub fn build(self) -> CelloContext {
         let arena = Bump::new();
@@ -245,7 +250,7 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use cello::CelloBuilder;
+    /// use parpl::cel::CelloBuilder;
     ///
     /// let result = CelloBuilder::new()
     ///     .max_nesting_depth(100)
@@ -256,7 +261,7 @@ impl CelloBuilder {
     ///     })?;
     ///
     /// assert_eq!(result, 42);
-    /// # Ok::<(), cello::Error>(())
+    /// # Ok::<(), parpl::cel::Error>(())
     /// ```
     pub fn parse_scoped<F, T>(self, input: &str, f: F) -> Result<T>
     where
@@ -310,7 +315,7 @@ impl Default for CelloBuilder {
 /// # Examples
 ///
 /// ```
-/// use cello::CelloBuilder;
+/// use parpl::cel::CelloBuilder;
 ///
 /// let mut ctx = CelloBuilder::new().build();
 ///
@@ -321,7 +326,7 @@ impl Default for CelloBuilder {
 /// // Parse second expression (replaces previous state)
 /// ctx.parse("3 * 4")?;
 /// let ast2 = ctx.ast()?;
-/// # Ok::<(), cello::Error>(())
+/// # Ok::<(), parpl::cel::Error>(())
 /// ```
 pub struct CelloContext {
     arena: Bump,
@@ -339,11 +344,11 @@ impl CelloContext {
     ///
     /// # Examples
     /// ```
-    /// use cello::CelloBuilder;
+    /// use parpl::cel::CelloBuilder;
     ///
     /// let mut ctx = CelloBuilder::new().build();
     /// ctx.parse("1 + 2")?;
-    /// # Ok::<(), cello::Error>(())
+    /// # Ok::<(), parpl::cel::Error>(())
     /// ```
     pub fn parse(&mut self, input: &str) -> Result<()> {
         // Reset arena for new parse
@@ -356,7 +361,7 @@ impl CelloContext {
         self.ast = None;
 
         // Use the builder's configuration for parsing
-        let config = crate::parser::ParseConfig {
+        let config = ParseConfig {
             max_parse_depth: self.config.max_parse_depth,
             max_ast_depth: self.config.max_ast_depth,
             max_call_limit: self.config.max_call_limit,
@@ -371,7 +376,7 @@ impl CelloContext {
         let arena_ref: &'static Bump = unsafe { std::mem::transmute(&self.arena) };
         let interner = &self.interner;
 
-        let ast = crate::ast_builder::build_ast_with_arena(input, config, arena_ref, interner)?;
+        let ast = ast_builder::build_ast_with_arena(input, config, arena_ref, interner)?;
 
         // Store with 'static lifetime (transmuted)
         self.ast = Some(ast);
@@ -385,12 +390,12 @@ impl CelloContext {
     ///
     /// # Examples
     /// ```
-    /// use cello::CelloBuilder;
+    /// use parpl::cel::CelloBuilder;
     ///
     /// let mut ctx = CelloBuilder::new().build();
     /// ctx.parse("42")?;
     /// let ast = ctx.ast()?;
-    /// # Ok::<(), cello::Error>(())
+    /// # Ok::<(), parpl::cel::Error>(())
     /// ```
     pub fn ast(&self) -> Result<&Expr<'_>> {
         // SAFETY: Transmute from 'static back to lifetime tied to &self
@@ -400,9 +405,9 @@ impl CelloContext {
                 std::mem::transmute::<&'static Expr<'static>, &Expr>(ast_static)
             })
             .ok_or_else(|| {
-                crate::error::Error::new(
-                    crate::error::Phase::AstConstruction,
-                    crate::error::ErrorKind::Custom("No AST available".to_string()),
+                Error::new(
+                    Phase::AstConstruction,
+                    ErrorKind::Custom("No AST available".to_string()),
                     "No expression has been parsed yet".to_string(),
                 )
             })
@@ -556,7 +561,7 @@ mod tests {
             assert!(result.is_err());
 
             if let Err(e) = result {
-                assert_eq!(e.phase, crate::error::Phase::AstConstruction);
+                assert_eq!(e.phase, Phase::AstConstruction);
                 assert!(e.message.contains("No expression has been parsed"));
             }
         },
@@ -584,10 +589,10 @@ mod tests {
             assert!(result.is_err());
 
             if let Err(e) = result {
-                assert_eq!(e.phase, crate::error::Phase::Parsing);
+                assert_eq!(e.phase, Phase::Parsing);
                 assert!(matches!(
                     e.kind,
-                    crate::error::ErrorKind::NestingDepthExceeded { .. }
+                    ErrorKind::NestingDepthExceeded { .. }
                 ));
             }
         },

@@ -9,7 +9,7 @@
 // By centralizing error handling, we avoid exposing pest's error types
 // throughout the codebase and provide consistent error reporting.
 
-use crate::ast::Span;
+use crate::cel::{ast::Span, parser::Rule};
 use std::fmt;
 
 /// Main error type for all Cello operations
@@ -189,8 +189,8 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// Convert from pest parsing errors
-impl From<pest::error::Error<crate::parser::Rule>> for Error {
-    fn from(err: pest::error::Error<crate::parser::Rule>) -> Self {
+impl From<pest::error::Error<Rule>> for Error {
+    fn from(err: pest::error::Error<Rule>) -> Self {
         use pest::error::ErrorVariant;
 
         let message = format!("{}", err);
