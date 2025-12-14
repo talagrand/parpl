@@ -1,4 +1,4 @@
-use crate::{
+use crate::scheme::{
     ast::{Span, Syntax},
     lex::{
         PResult, SpannedToken, Token, WinnowInput,

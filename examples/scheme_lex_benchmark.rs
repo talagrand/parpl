@@ -1,4 +1,4 @@
-use newparser::lex::lex;
+use parpl::scheme::lex::lex;
 
 fn main() {
     // A mix of tokens to exercise the lexer.

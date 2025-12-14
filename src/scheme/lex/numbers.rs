@@ -1,4 +1,4 @@
-use crate::lex::{
+use crate::scheme::lex::{
     FiniteReal, FiniteRealKind, InfinityNan, NumberExactness, NumberLiteral, NumberLiteralKind,
     NumberRadix, NumberValue, PResult, RealRepr, WinnowInput,
     utils::{

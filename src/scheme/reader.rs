@@ -1,8 +1,8 @@
-use crate::ast::{Span, Syntax};
-use crate::lex::{
+use crate::scheme::ast::{Span, Syntax};
+use crate::scheme::lex::{
     self, FiniteRealKind, InfinityNan, NumberExactness, NumberRadix, SpannedToken, Token,
 };
-use crate::{ParseError, Unsupported};
+use crate::scheme::{ParseError, Unsupported};
 
 /// Representation of `<real R>` values.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -755,7 +755,7 @@ pub fn parse_datum_with_max_depth(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Unsupported, lex::Token};
+    use crate::scheme::{Unsupported, lex::Token};
 
     struct TestCase {
         name: &'static str,

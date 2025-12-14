@@ -1,9 +1,9 @@
-use crate::ast::{Span, Syntax};
-use crate::lex::{
+use crate::scheme::ast::{Span, Syntax};
+use crate::scheme::lex::{
     FiniteReal, FiniteRealKind, Lexer, NumberExactness, NumberLiteral, NumberRadix, NumberValue,
     RealRepr, SpannedToken, Token,
 };
-use crate::{ParseError, Unsupported};
+use crate::scheme::{ParseError, Unsupported};
 use std::iter::Peekable;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -28,9 +28,9 @@ const DEFAULT_MAX_DEPTH: u32 = 64;
 
 impl<'a> MiniReader<'a> {
     pub fn new(source: &'a str) -> Self {
-        let lexer = crate::lex::lex_with_config(
+        let lexer = crate::scheme::lex::lex_with_config(
             source,
-            crate::lex::LexConfig {
+            crate::scheme::lex::LexConfig {
                 // MiniReader intentionally does not support fold-case
                 // semantics or directives.
                 reject_fold_case: true,
@@ -218,7 +218,7 @@ pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<Syntax<Value>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ParseError, Unsupported};
+    use crate::scheme::{ParseError, Unsupported};
 
     struct TestCase {
         name: &'static str,

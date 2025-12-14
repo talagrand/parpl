@@ -4,11 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["cel"]
-cel = []
+default = ["cel", "scheme"]
+cel = ["dep:pest", "dep:pest_derive"]
+scheme = ["dep:winnow", "dep:unicase", "dep:thiserror"]
 
 [dependencies]
-pest = "2.8"
-pest_derive = "2.8"
+winnow = { version = "0.7.13", optional = true }
+unicase = { version = "2", optional = true }
+thiserror = { version = "1", optional = true }
+pest = { version = "2.8", optional = true }
+pest_derive = { version = "2.8", optional = true }
 bumpalo = "3.14"
 string-interner = "0.17"
+
+[[example]]
+name = "scheme_lex_benchmark"
+required-features = ["scheme"]

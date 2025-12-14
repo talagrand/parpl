@@ -1,4 +1,4 @@
-use crate::lex::{
+use crate::scheme::lex::{
     FoldCaseMode, PResult, WinnowInput,
     utils::{InputExt, cut_lex_error_token, ensure_delimiter, winnow_backtrack},
 };

@@ -3,7 +3,7 @@ pub mod lex;
 pub mod minireader;
 pub mod reader;
 
-use crate::ast::Span;
+use crate::scheme::ast::Span;
 
 /// Enumerates specific unsupported features that can be reported via
 /// `ParseError::Unsupported`.

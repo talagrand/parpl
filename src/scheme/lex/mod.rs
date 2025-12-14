@@ -1,4 +1,4 @@
-use crate::{
+use crate::scheme::{
     ParseError, Unsupported,
     ast::{Span, Syntax},
     lex::{

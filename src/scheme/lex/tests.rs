@@ -1,5 +1,5 @@
 use super::*;
-use crate::Unsupported;
+use crate::scheme::Unsupported;
 
 // --- Test Infrastructure ---
 

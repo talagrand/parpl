@@ -1,4 +1,4 @@
-use crate::{
+use crate::scheme::{
     ParseError,
     ast::Span,
     lex::{PResult, WinnowInput},

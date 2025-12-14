@@ -9,7 +9,7 @@ use super::{
     PResult, SpannedToken, Token, WinnowInput,
     utils::{InputExt, ensure_delimiter, winnow_backtrack},
 };
-use crate::ast::{Span, Syntax};
+use crate::scheme::ast::{Span, Syntax};
 
 /// Lex a `<boolean>` token from the input stream.
 ///
