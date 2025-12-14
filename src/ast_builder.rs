@@ -9,10 +9,12 @@
 // - Numeric parsing: validated and parsed immediately
 // - Identifier resolution: handled during evaluation
 
-use crate::ast::*;
-use crate::context::StringInterner;
-use crate::error::{Error, Result};
-use crate::parser::{ParseConfig, Rule};
+use crate::{
+    ast::{BinaryOp, Expr, ExprKind, Literal, QuoteStyle, RawLiteral, Span, UnaryOp},
+    context::StringInterner,
+    error::{Error, Result},
+    parser::{ParseConfig, Rule},
+};
 use bumpalo::Bump;
 use pest::iterators::Pair;
 use std::cell::RefCell;

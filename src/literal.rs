@@ -11,8 +11,10 @@
 // **CEL Spec Reference**: langdef.md lines 156-159 (escape sequences)
 // **CEL Spec Reference**: langdef.md lines 270-360 (string/bytes semantics)
 
-use crate::ast::{Literal, RawLiteral};
-use crate::error::{Error, Result};
+use crate::{
+    ast::{Literal, RawLiteral},
+    error::{Error, Result},
+};
 use bumpalo::Bump;
 
 // Re-export StringInterner from context for use in this module

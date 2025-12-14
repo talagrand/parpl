@@ -6,11 +6,10 @@
 // The builder allows fluent configuration, and the context owns the parsed AST
 // in a bumpalo::Bump arena for efficient memory management.
 
-use crate::ast::Expr;
-use crate::error::Result;
+use crate::{ast::Expr, error::Result};
 use bumpalo::Bump;
 use std::cell::RefCell;
-use string_interner::{backend::StringBackend, StringInterner as InnerInterner};
+use string_interner::{StringInterner as InnerInterner, backend::StringBackend};
 
 // ============================================================================
 // String Interner

@@ -4,11 +4,13 @@
 // Since our API is arena-based and requires scoped access, these utilities handle
 // the boilerplate of creating contexts.
 
-use crate::ast::*;
-use crate::context::CelloBuilder;
-use crate::error::ErrorKind;
-use crate::parser::ParseConfig;
-use crate::pretty::pretty_print;
+use crate::{
+    ast::{BinaryOp, Expr, ExprKind, Literal},
+    context::CelloBuilder,
+    error::ErrorKind,
+    parser::ParseConfig,
+    pretty::pretty_print,
+};
 
 /// Parse an expression and run assertions on the AST within a scoped callback
 ///

@@ -94,8 +94,8 @@ fn main() -> cello::Result<()> {
         Ok(_) => println!("   ✗ Should have failed"),
         Err(e) => println!("   ✓ Reserved word rejected: {}", e),
     } // ========================================================================
-      // 6. COMPLEX EXPRESSIONS - Real-world examples
-      // ========================================================================
+    // 6. COMPLEX EXPRESSIONS - Real-world examples
+    // ========================================================================
     println!("\n6. Complex expressions:");
 
     let examples = vec![

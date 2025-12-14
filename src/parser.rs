@@ -227,22 +227,28 @@ mod tests {
     #[test]
     fn test_triple_quoted_strings() {
         // These need special handling due to newlines
-        assert!(parse(
-            r#""""multi
+        assert!(
+            parse(
+                r#""""multi
 line
 string""""#
-        )
-        .is_ok());
-        assert!(parse(
-            r"'''another
+            )
+            .is_ok()
+        );
+        assert!(
+            parse(
+                r"'''another
 multi-line'''"
-        )
-        .is_ok());
-        assert!(parse(
-            r#"r"""raw multi
+            )
+            .is_ok()
+        );
+        assert!(
+            parse(
+                r#"r"""raw multi
 line""""#
-        )
-        .is_ok());
+            )
+            .is_ok()
+        );
     }
 
     // ============================================================
