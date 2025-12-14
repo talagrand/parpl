@@ -35,7 +35,7 @@ fn check_depth(depth_left: usize) -> Result<usize> {
 
 /// Build an AST using a provided arena and interner
 ///
-/// This is the core AST building function used by `CelloContext`.
+/// This is the core AST building function used by `Context`.
 /// All AST nodes and strings are allocated in the provided arena.
 ///
 /// # Safety

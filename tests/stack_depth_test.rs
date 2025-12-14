@@ -4,7 +4,7 @@
 // NOTE: Stack overflow occurs at very low nesting depths
 // This suggests recursion in the parser or AST builder
 
-use parpl::cel::CelloBuilder;
+use parpl::cel::Builder;
 
 #[test]
 fn find_max_safe_depth() {
@@ -17,7 +17,7 @@ fn find_max_safe_depth() {
     for depth in test_depths.iter() {
         let input = "(".repeat(*depth) + "1" + &")".repeat(*depth);
 
-        match CelloBuilder::new()
+        match Builder::new()
             .max_nesting_depth(100) // Allow higher than default
             .parse_scoped(&input, |ctx| ctx.ast().map(|_| ()))
         {
@@ -56,7 +56,7 @@ fn test_with_larger_stack() {
             for depth in [10, 50, 100, 150].iter() {
                 let input = "(".repeat(*depth) + "1" + &")".repeat(*depth);
 
-                match CelloBuilder::new()
+                match Builder::new()
                     .max_nesting_depth(500)
                     .parse_scoped(&input, |ctx| ctx.ast().map(|_| ()))
                 {
@@ -73,9 +73,9 @@ fn test_with_larger_stack() {
 #[test]
 #[ignore]
 fn test_builder_context_depth() {
-    println!("\n=== Testing CelloContext with various depths ===\n");
+    println!("\n=== Testing Context with various depths ===\n");
 
-    let mut ctx = CelloBuilder::new().max_nesting_depth(100).build();
+    let mut ctx = Builder::new().max_nesting_depth(100).build();
 
     for depth in [5, 10, 15, 20, 25, 30].iter() {
         let input = "(".repeat(*depth) + "1" + &")".repeat(*depth);

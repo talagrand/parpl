@@ -1,4 +1,4 @@
-// Error types for Cello
+// Error types for the CEL parser
 //
 // This module defines error types for all phases of CEL processing:
 // - Parsing errors (syntax errors from pest)
@@ -12,7 +12,7 @@
 use crate::cel::{ast::Span, parser::Rule};
 use std::fmt;
 
-/// Main error type for all Cello operations
+/// Main error type for all CEL parser operations
 #[derive(Debug, Clone, PartialEq)]
 pub struct Error {
     /// The phase where the error occurred
@@ -270,7 +270,7 @@ impl fmt::Display for Phase {
     }
 }
 
-/// Result type alias for Cello operations
+/// Result type alias for CEL parser operations
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]

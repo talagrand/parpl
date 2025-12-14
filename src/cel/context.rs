@@ -43,11 +43,11 @@ impl<'arena> StringInterner<'arena> {
     /// reference. Otherwise, allocates and caches it.
     ///
     /// Note: The returned &str has 'arena lifetime because this StringInterner
-    /// is stored in CelloContext with 'arena lifetime.
+    /// is stored in Context with 'arena lifetime.
     pub(crate) fn intern(&mut self, s: &str) -> &'arena str {
         let symbol = self.interner.get_or_intern(s);
         // SAFETY: The string-interner stores strings with its own lifetime.
-        // Since self has 'arena lifetime (it's stored in CelloContext),
+        // Since self has 'arena lifetime (it's stored in Context),
         // the strings it returns also have 'arena lifetime.
         // We transmute to make this explicit to the compiler.
         unsafe {
@@ -74,9 +74,9 @@ impl<'arena> Default for StringInterner<'arena> {
 ///
 /// Simple usage with defaults:
 /// ```
-/// use parpl::cel::CelloBuilder;
+/// use parpl::cel::Builder;
 ///
-/// let mut ctx = CelloBuilder::new().build();
+/// let mut ctx = Builder::new().build();
 /// ctx.parse("1 + 2")?;
 /// let ast = ctx.ast()?;
 /// # Ok::<(), parpl::cel::Error>(())
@@ -84,9 +84,9 @@ impl<'arena> Default for StringInterner<'arena> {
 ///
 /// With custom configuration:
 /// ```
-/// use parpl::cel::CelloBuilder;
+/// use parpl::cel::Builder;
 ///
-/// let mut ctx = CelloBuilder::new()
+/// let mut ctx = Builder::new()
 ///     .max_parse_depth(128)
 ///     .max_ast_depth(24)
 ///     .max_call_limit(50_000_000)
@@ -95,7 +95,7 @@ impl<'arena> Default for StringInterner<'arena> {
 /// # Ok::<(), parpl::cel::Error>(())
 /// ```
 #[derive(Debug, Clone)]
-pub struct CelloBuilder {
+pub struct Builder {
     /// Maximum parse depth for heuristic pre-validation (default: 128)
     /// Protects against Pest parser stack overflow (~171 on 1MB stack)
     max_parse_depth: usize,
@@ -108,7 +108,7 @@ pub struct CelloBuilder {
     strict_mode: bool,
 }
 
-impl CelloBuilder {
+impl Builder {
     /// Create a new builder with default configuration
     ///
     /// Defaults:
@@ -132,9 +132,9 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use parpl::cel::CelloBuilder;
+    /// use parpl::cel::Builder;
     ///
-    /// let ctx = CelloBuilder::new()
+    /// let ctx = Builder::new()
     ///     .max_parse_depth(128)
     ///     .build();
     /// ```
@@ -151,9 +151,9 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use parpl::cel::CelloBuilder;
+    /// use parpl::cel::Builder;
     ///
-    /// let ctx = CelloBuilder::new()
+    /// let ctx = Builder::new()
     ///     .max_ast_depth(30)
     ///     .build();
     /// ```
@@ -169,9 +169,9 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use parpl::cel::CelloBuilder;
+    /// use parpl::cel::Builder;
     ///
-    /// let ctx = CelloBuilder::new()
+    /// let ctx = Builder::new()
     ///     .max_nesting_depth(100)
     ///     .build();
     /// ```
@@ -188,9 +188,9 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use parpl::cel::CelloBuilder;
+    /// use parpl::cel::Builder;
     ///
-    /// let ctx = CelloBuilder::new()
+    /// let ctx = Builder::new()
     ///     .max_call_limit(50_000_000)
     ///     .build();
     /// ```
@@ -206,9 +206,9 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use parpl::cel::CelloBuilder;
+    /// use parpl::cel::Builder;
     ///
-    /// let ctx = CelloBuilder::new()
+    /// let ctx = Builder::new()
     ///     .strict_mode(true)
     ///     .build();
     /// ```
@@ -223,18 +223,18 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use parpl::cel::CelloBuilder;
+    /// use parpl::cel::Builder;
     ///
-    /// let mut ctx = CelloBuilder::new().build();
+    /// let mut ctx = Builder::new().build();
     /// ctx.parse("1 + 2")?;
     /// let ast = ctx.ast()?;
     /// # Ok::<(), parpl::cel::Error>(())
     /// ```
-    pub fn build(self) -> CelloContext {
+    pub fn build(self) -> Context {
         let arena = Bump::new();
         let interner = StringInterner::new();
 
-        CelloContext {
+        Context {
             arena,
             interner: RefCell::new(interner),
             config: self,
@@ -250,9 +250,9 @@ impl CelloBuilder {
     ///
     /// # Examples
     /// ```
-    /// use parpl::cel::CelloBuilder;
+    /// use parpl::cel::Builder;
     ///
-    /// let result = CelloBuilder::new()
+    /// let result = Builder::new()
     ///     .max_nesting_depth(100)
     ///     .parse_scoped("1 + 2", |ctx| {
     ///         let ast = ctx.ast()?;
@@ -265,7 +265,7 @@ impl CelloBuilder {
     /// ```
     pub fn parse_scoped<F, T>(self, input: &str, f: F) -> Result<T>
     where
-        F: FnOnce(&CelloContext) -> Result<T>,
+        F: FnOnce(&Context) -> Result<T>,
     {
         let mut ctx = self.build();
         ctx.parse(input)?;
@@ -300,7 +300,7 @@ impl CelloBuilder {
     }
 }
 
-impl Default for CelloBuilder {
+impl Default for Builder {
     fn default() -> Self {
         Self::new()
     }
@@ -315,9 +315,9 @@ impl Default for CelloBuilder {
 /// # Examples
 ///
 /// ```
-/// use parpl::cel::CelloBuilder;
+/// use parpl::cel::Builder;
 ///
-/// let mut ctx = CelloBuilder::new().build();
+/// let mut ctx = Builder::new().build();
 ///
 /// // Parse first expression
 /// ctx.parse("1 + 2")?;
@@ -328,15 +328,15 @@ impl Default for CelloBuilder {
 /// let ast2 = ctx.ast()?;
 /// # Ok::<(), parpl::cel::Error>(())
 /// ```
-pub struct CelloContext {
+pub struct Context {
     arena: Bump,
     interner: RefCell<StringInterner<'static>>, // Transmuted lifetime
-    config: CelloBuilder,
+    config: Builder,
     input: Option<String>,
     ast: Option<&'static Expr<'static>>, // Transmuted lifetime - actually tied to arena
 }
 
-impl CelloContext {
+impl Context {
     /// Parse a CEL expression
     ///
     /// This replaces any previously parsed expression. The AST is stored
@@ -344,9 +344,9 @@ impl CelloContext {
     ///
     /// # Examples
     /// ```
-    /// use parpl::cel::CelloBuilder;
+    /// use parpl::cel::Builder;
     ///
-    /// let mut ctx = CelloBuilder::new().build();
+    /// let mut ctx = Builder::new().build();
     /// ctx.parse("1 + 2")?;
     /// # Ok::<(), parpl::cel::Error>(())
     /// ```
@@ -370,7 +370,7 @@ impl CelloContext {
         // Build AST using the arena and interner
         // SAFETY: We transmute the arena reference to 'static, but it's actually
         // tied to &self. This is safe because:
-        // 1. The arena lives as long as CelloContext
+        // 1. The arena lives as long as Context
         // 2. We reset the arena on each parse
         // 3. References are transmuted back to correct lifetime in ast()
         let arena_ref: &'static Bump = unsafe { std::mem::transmute(&self.arena) };
@@ -390,9 +390,9 @@ impl CelloContext {
     ///
     /// # Examples
     /// ```
-    /// use parpl::cel::CelloBuilder;
+    /// use parpl::cel::Builder;
     ///
-    /// let mut ctx = CelloBuilder::new().build();
+    /// let mut ctx = Builder::new().build();
     /// ctx.parse("42")?;
     /// let ast = ctx.ast()?;
     /// # Ok::<(), parpl::cel::Error>(())
@@ -421,7 +421,7 @@ impl CelloContext {
     }
 
     /// Get the configuration used by this context
-    pub fn config(&self) -> &CelloBuilder {
+    pub fn config(&self) -> &Builder {
         &self.config
     }
 
@@ -459,14 +459,14 @@ mod tests {
 
     test_cases! {
         test_builder_defaults: {
-            let builder = CelloBuilder::new();
+            let builder = Builder::new();
             assert_eq!(builder.get_max_nesting_depth(), 128);
             assert_eq!(builder.get_max_call_limit(), 10_000_000);
             assert!(!builder.is_strict_mode());
         },
 
         test_builder_configuration: {
-            let builder = CelloBuilder::new()
+            let builder = Builder::new()
                 .max_nesting_depth(100)
                 .max_call_limit(50_000_000)
                 .strict_mode(true);
@@ -477,7 +477,7 @@ mod tests {
         },
 
         test_builder_default_trait: {
-            let builder = CelloBuilder::default();
+            let builder = Builder::default();
             assert_eq!(builder.get_max_nesting_depth(), 128);
         },
     }
@@ -488,7 +488,7 @@ mod tests {
 
     test_cases! {
         test_context_parse: {
-            let mut ctx = CelloBuilder::new().build();
+            let mut ctx = Builder::new().build();
             assert!(ctx.input().is_none());
             assert!(ctx.ast().is_err());
 
@@ -498,7 +498,7 @@ mod tests {
         },
 
         test_context_reuse: {
-            let mut ctx = CelloBuilder::new().build();
+            let mut ctx = Builder::new().build();
 
             // Parse first expression
             ctx.parse("1 + 2").unwrap();
@@ -515,7 +515,7 @@ mod tests {
         },
 
         test_context_reset: {
-            let mut ctx = CelloBuilder::new().build();
+            let mut ctx = Builder::new().build();
             ctx.parse("1 + 2").unwrap();
             assert!(ctx.input().is_some());
             assert!(ctx.ast().is_ok());
@@ -526,7 +526,7 @@ mod tests {
         },
 
         test_context_config_access: {
-            let ctx = CelloBuilder::new().max_nesting_depth(200).build();
+            let ctx = Builder::new().max_nesting_depth(200).build();
             assert_eq!(ctx.config().get_max_nesting_depth(), 200);
         },
     }
@@ -537,7 +537,7 @@ mod tests {
 
     test_cases! {
         test_scoped_api: {
-            let result = CelloBuilder::new()
+            let result = Builder::new()
                 .max_nesting_depth(100)
                 .parse_scoped("1 + 2", |ctx| {
                     let _ast = ctx.ast()?;
@@ -556,7 +556,7 @@ mod tests {
 
     test_cases! {
         test_ast_error_before_parse: {
-            let ctx = CelloBuilder::new().build();
+            let ctx = Builder::new().build();
             let result = ctx.ast();
             assert!(result.is_err());
 
@@ -575,7 +575,7 @@ mod tests {
         test_config_max_parse_depth_honored: {
             // Create a context with low parse depth but generous AST depth
             // so that the heuristic pre-validation is the limiting factor.
-            let mut ctx = CelloBuilder::new()
+            let mut ctx = Builder::new()
                 .max_parse_depth(3)
                 .max_ast_depth(128)
                 .build();
@@ -602,7 +602,7 @@ mod tests {
     #[ignore] // TODO: Causes stack overflow - needs investigation
     fn test_config_different_limits() {
         // Test with moderately permissive limits
-        let mut ctx = CelloBuilder::new().max_nesting_depth(20).build();
+        let mut ctx = Builder::new().max_nesting_depth(20).build();
 
         // Create deeply nested expression (depth 5 - reduced from 15 to avoid stack overflow)
         // TODO: Investigate why this causes stack overflow - might be pest recursion limit
@@ -610,7 +610,7 @@ mod tests {
         assert!(ctx.parse(&deep).is_ok());
 
         // Test with very restrictive limits
-        let mut ctx = CelloBuilder::new().max_nesting_depth(2).build();
+        let mut ctx = Builder::new().max_nesting_depth(2).build();
         assert!(ctx.parse("((1))").is_ok());
         assert!(ctx.parse("(((1)))").is_err());
     }

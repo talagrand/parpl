@@ -1,4 +1,4 @@
-// Simple parse throughput benchmark for Cello
+// Simple parse throughput benchmark for the CEL parser
 //
 // This example parses a fixed CEL expression 200,000 times and reports
 // the total time and parses per second.
@@ -6,7 +6,7 @@
 // Run with:
 //   cargo run --release --example bench_parse
 
-use parpl::cel::{CelloBuilder, Result};
+use parpl::cel::{Builder, Result};
 use std::time::Instant;
 
 fn main() -> Result<()> {
@@ -15,12 +15,12 @@ fn main() -> Result<()> {
     // Choose a moderately complex expression to exercise the parser.
     let expr = "user.age >= 18 && user.country == \"US\" && \n        items.filter(x, x.price > 100).map(x, x.name).size() > 0";
 
-    println!("Cello parse benchmark");
+    println!("CEL parser benchmark");
     println!("Expression: {}", expr.replace('\n', " "));
     println!("Target iterations: {}", ITERATIONS);
 
     // Reuse a single context to avoid measuring builder construction each time.
-    let mut ctx = CelloBuilder::new().build();
+    let mut ctx = Builder::new().build();
 
     let start = Instant::now();
     let mut iterations: u64 = 0;

@@ -249,7 +249,7 @@ impl fmt::Display for Expr<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cel::{CelloBuilder, test_util::*};
+    use crate::cel::{Builder, test_util::*};
 
     macro_rules! test_cases {
         ($($name:ident: $test:expr),* $(,)?) => {
@@ -303,7 +303,7 @@ mod tests {
 
     test_cases! {
         test_pretty_print_with_spans: {
-            CelloBuilder::new()
+            Builder::new()
                 .parse_scoped("42", |ctx| {
                     let config = PrettyConfig::new().with_spans();
                     let output = pretty_print_with_config(ctx.ast()?, &config);
@@ -314,7 +314,7 @@ mod tests {
         },
 
         test_pretty_print_custom_indent: {
-            CelloBuilder::new()
+            Builder::new()
                 .parse_scoped("1 + 2", |ctx| {
                     let config = PrettyConfig::new().with_indent(4);
                     let output = pretty_print_with_config(ctx.ast()?, &config);

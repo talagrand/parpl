@@ -14,7 +14,7 @@ mod pretty;
 pub mod test_util;
 
 pub use ast::{BinaryOp, Expr, ExprKind, Literal, QuoteStyle, Span, UnaryOp};
-pub use context::{CelloBuilder, CelloContext};
+pub use context::{Builder, Context};
 pub use error::{Error, ErrorKind, Phase, Result};
 pub use parser::{Pairs, ParseConfig, Rule, parse, parse_with_config};
 pub use pretty::{PrettyConfig, pretty_print, pretty_print_with_config};
