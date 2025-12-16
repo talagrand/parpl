@@ -19,7 +19,7 @@ impl Span {
             end: std::cmp::max(self.end, other.end),
         }
     }
-    
+
     // Alias for compatibility with CEL code if needed, or we can refactor CEL to use merge
     pub fn combine(&self, other: &Span) -> Span {
         self.merge(*other)

@@ -1,133 +1,16 @@
 use crate::common::{Span, Syntax};
-use crate::scheme::lex::{
-    self, FiniteRealKind, InfinityNan, NumberExactness, NumberRadix, SpannedToken, Token,
+use crate::scheme::datumtraits::{
+    NumberLiteral, NumberValue, PrimitiveOps, RealRepr, SchemeNumberOps, SimpleNumber,
 };
+use crate::scheme::lex::{self, FiniteRealKind, NumberExactness, NumberRadix, SpannedToken, Token};
 use crate::scheme::{ParseError, Unsupported};
-
-/// Representation of `<real R>` values.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RealRepr {
-    /// A finite real built from `<ureal R>` or `<decimal 10>`.
-    Finite {
-        kind: FiniteRealKind,
-        spelling: String,
-    },
-    /// One of the four `<infnan>` spellings.
-    Infnan(InfinityNan),
-}
-
-/// Complex-number structure corresponding to `<complex R>`.
-///
-/// ```text
-/// <complex R> ::= <real R>
-///                | <real R> @ <real R>
-///                | <real R> + <ureal R> i
-///                | <real R> - <ureal R> i
-///                | <real R> + i
-///                | <real R> - i
-///                | <real R> <infnan> i
-///                | + <ureal R> i
-///                | - <ureal R> i
-///                | <infnan> i
-///                | + i
-///                | - i
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NumberValue {
-    /// A purely real number `<real R>`.
-    Real(RealRepr),
-    /// Rectangular complex form `a+bi` / `a-bi` and related
-    /// special cases normalized into explicit real and imaginary
-    /// parts.
-    Rectangular { real: RealRepr, imag: RealRepr },
-    /// Polar complex form `r@theta`.
-    Polar {
-        magnitude: RealRepr,
-        angle: RealRepr,
-    },
-}
-
-/// Full structural classification of a Scheme number literal.
-///
-/// This mirrors `<num R> ::= <prefix R> <complex R>`: `radix` and
-/// `exactness` capture `<prefix R>`, while `value` is the parsed
-/// `<complex R>` structure.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NumberLiteralKind {
-    pub radix: NumberRadix,
-    pub exactness: NumberExactness,
-    pub value: NumberValue,
-}
-
-/// A number literal, keeping the original spelling from the source.
-#[derive(Clone, Debug, PartialEq)]
-pub struct NumberLiteral {
-    /// Exact token text, including prefixes/suffixes.
-    pub text: String,
-    pub kind: NumberLiteralKind,
-}
-
-// Conversions from lexer number representations to reader-owned numbers.
-
-impl<'a> From<lex::FiniteReal<'a>> for RealRepr {
-    fn from(lex_finite: lex::FiniteReal<'a>) -> Self {
-        RealRepr::Finite {
-            kind: lex_finite.kind,
-            spelling: lex_finite.spelling.to_string(),
-        }
-    }
-}
-
-impl<'a> From<lex::RealRepr<'a>> for RealRepr {
-    fn from(lex_real: lex::RealRepr<'a>) -> Self {
-        match lex_real {
-            lex::RealRepr::Finite(f) => f.into(),
-            lex::RealRepr::Infnan(i) => RealRepr::Infnan(i),
-        }
-    }
-}
-
-impl<'a> From<lex::NumberValue<'a>> for NumberValue {
-    fn from(lex_value: lex::NumberValue<'a>) -> Self {
-        match lex_value {
-            lex::NumberValue::Real(r) => NumberValue::Real(r.into()),
-            lex::NumberValue::Rectangular { real, imag } => NumberValue::Rectangular {
-                real: real.into(),
-                imag: imag.into(),
-            },
-            lex::NumberValue::Polar { magnitude, angle } => NumberValue::Polar {
-                magnitude: magnitude.into(),
-                angle: angle.into(),
-            },
-        }
-    }
-}
-
-impl<'a> From<lex::NumberLiteralKind<'a>> for NumberLiteralKind {
-    fn from(lex_kind: lex::NumberLiteralKind<'a>) -> Self {
-        NumberLiteralKind {
-            radix: lex_kind.radix,
-            exactness: lex_kind.exactness,
-            value: lex_kind.value.into(),
-        }
-    }
-}
-
-impl<'a> From<lex::NumberLiteral<'a>> for NumberLiteral {
-    fn from(lex_literal: lex::NumberLiteral<'a>) -> Self {
-        NumberLiteral {
-            text: lex_literal.text.to_string(),
-            kind: lex_literal.kind.into(),
-        }
-    }
-}
 
 /// Datum syntax as defined in the "External representations" section
 /// of `spec/syn.md`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Datum {
     Boolean(bool),
-    Number(NumberLiteral),
+    Number(SimpleNumber),
     Character(char),
     String(String),
     Symbol(String),
@@ -415,7 +298,10 @@ impl<'i> TokenStream<'i> {
 
         match token.value {
             Token::Boolean(b) => Ok(Syntax::new(span, Datum::Boolean(b))),
-            Token::Number(n) => Ok(Syntax::new(span, Datum::Number(n.into()))),
+            Token::Number(n) => {
+                let num = PrimitiveOps::from_literal(&n.into(), span)?;
+                Ok(Syntax::new(span, Datum::Number(num)))
+            }
             Token::Character(c) => Ok(Syntax::new(span, Datum::Character(c))),
             Token::String(s) => Ok(Syntax::new(span, Datum::String(s.into_owned()))),
             Token::Identifier(s) => Ok(Syntax::new(span, Datum::Symbol(s.into_owned()))),
@@ -646,7 +532,14 @@ impl<'i> TokenStream<'i> {
                     // Bytevectors must contain exact integers in the closed range [0, 255].
                     let datum = self.parse_datum_with_max_depth(depth - 1)?;
                     if let Some(value) = match &datum.value {
-                        Datum::Number(number) => number_literal_to_byte(number),
+                        Datum::Number(SimpleNumber::Literal(lit)) => number_literal_to_byte(lit),
+                        Datum::Number(SimpleNumber::Integer(i)) => {
+                            if *i >= 0 && *i <= 255 {
+                                Some(*i as u8)
+                            } else {
+                                None
+                            }
+                        }
                         _ => None,
                     } {
                         elements.push(value);
@@ -777,6 +670,8 @@ mod tests {
     enum DatumMatcher {
         Bool(bool),
         Num(&'static str),
+        Int(i64),
+        Float(f64),
         Char(char),
         Str(&'static str),
         Sym(&'static str),
@@ -857,8 +752,14 @@ mod tests {
                 (DatumMatcher::Bool(e), Datum::Boolean(a)) => {
                     assert_eq!(e, a, "{}: boolean mismatch", test_name)
                 }
-                (DatumMatcher::Num(e), Datum::Number(a)) => {
+                (DatumMatcher::Num(e), Datum::Number(SimpleNumber::Literal(a))) => {
                     assert_eq!(e, &a.text, "{}: number text mismatch", test_name)
+                }
+                (DatumMatcher::Int(e), Datum::Number(SimpleNumber::Integer(a))) => {
+                    assert_eq!(e, a, "{}: integer mismatch", test_name)
+                }
+                (DatumMatcher::Float(e), Datum::Number(SimpleNumber::Float(a))) => {
+                    assert!((e - a).abs() < f64::EPSILON, "{}: float mismatch", test_name)
                 }
                 (DatumMatcher::Char(e), Datum::Character(a)) => {
                     assert_eq!(e, a, "{}: character mismatch", test_name)
@@ -1029,12 +930,17 @@ mod tests {
             TestCase {
                 name: "number_simple_42",
                 input: "42",
-                mode: TestMode::Datum(Expected::Success(DatumMatcher::Num("42"))),
+                mode: TestMode::Datum(Expected::Success(DatumMatcher::Int(42))),
             },
             TestCase {
                 name: "number_negative",
                 input: "-123",
-                mode: TestMode::Datum(Expected::Success(DatumMatcher::Num("-123"))),
+                mode: TestMode::Datum(Expected::Success(DatumMatcher::Int(-123))),
+            },
+            TestCase {
+                name: "number_float",
+                input: "3.14",
+                mode: TestMode::Datum(Expected::Success(DatumMatcher::Float(3.14))),
             },
             TestCase {
                 name: "character_simple",
@@ -1055,25 +961,25 @@ mod tests {
                 name: "list_proper",
                 input: "(1 2 3)",
                 mode: TestMode::Datum(Expected::Success(list_matcher(vec![
-                    DatumMatcher::Num("1"),
-                    DatumMatcher::Num("2"),
-                    DatumMatcher::Num("3"),
+                    DatumMatcher::Int(1),
+                    DatumMatcher::Int(2),
+                    DatumMatcher::Int(3),
                 ]))),
             },
             TestCase {
                 name: "list_dotted",
                 input: "(1 . 2)",
                 mode: TestMode::Datum(Expected::Success(DatumMatcher::Pair(
-                    Box::new(DatumMatcher::Num("1")),
-                    Box::new(DatumMatcher::Num("2")),
+                    Box::new(DatumMatcher::Int(1)),
+                    Box::new(DatumMatcher::Int(2)),
                 ))),
             },
             TestCase {
                 name: "vector_simple",
                 input: "#(1 2)",
                 mode: TestMode::Datum(Expected::Success(DatumMatcher::Vector(vec![
-                    DatumMatcher::Num("1"),
-                    DatumMatcher::Num("2"),
+                    DatumMatcher::Int(1),
+                    DatumMatcher::Int(2),
                 ]))),
             },
             TestCase {
@@ -1104,8 +1010,8 @@ mod tests {
                 mode: TestMode::Datum(Expected::Success(DatumMatcher::Labeled(
                     1,
                     Box::new(list_matcher(vec![
-                        DatumMatcher::Num("1"),
-                        DatumMatcher::Num("2"),
+                        DatumMatcher::Int(1),
+                        DatumMatcher::Int(2),
                     ])),
                 ))),
             },
@@ -1120,7 +1026,7 @@ mod tests {
                 mode: TestMode::Datum(Expected::Success(DatumMatcher::Labeled(
                     1,
                     Box::new(DatumMatcher::Pair(
-                        Box::new(DatumMatcher::Num("1")),
+                        Box::new(DatumMatcher::Int(1)),
                         Box::new(DatumMatcher::LabelRef(1)),
                     )),
                 ))),
@@ -1139,8 +1045,8 @@ mod tests {
                 mode: TestMode::Datum(Expected::Success(list_matcher(vec![
                     DatumMatcher::Sym("quasiquote"),
                     list_matcher(vec![
-                        DatumMatcher::Num("1"),
-                        list_matcher(vec![DatumMatcher::Sym("unquote"), DatumMatcher::Num("2")]),
+                        DatumMatcher::Int(1),
+                        list_matcher(vec![DatumMatcher::Sym("unquote"), DatumMatcher::Int(2)]),
                     ]),
                 ]))),
             },
