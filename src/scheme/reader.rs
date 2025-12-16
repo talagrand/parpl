@@ -1,4 +1,4 @@
-use crate::scheme::ast::{Span, Syntax};
+use crate::common::{Span, Syntax};
 use crate::scheme::lex::{
     self, FiniteRealKind, InfinityNan, NumberExactness, NumberRadix, SpannedToken, Token,
 };

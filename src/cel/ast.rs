@@ -7,6 +7,7 @@
 // - Deferred processing (escape sequences handled during value construction)
 // - Arena allocation for efficient memory management
 
+pub use crate::common::Span;
 use std::fmt;
 
 /// A complete CEL expression (the root of the AST)
@@ -17,26 +18,6 @@ use std::fmt;
 pub struct Expr<'arena> {
     pub kind: ExprKind<'arena>,
     pub span: Span,
-}
-
-/// Source location information for error reporting
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-}
-
-impl Span {
-    pub fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
-    }
-
-    pub fn combine(&self, other: &Span) -> Span {
-        Span {
-            start: self.start.min(other.start),
-            end: self.end.max(other.end),
-        }
-    }
 }
 
 /// The kind of expression (CEL spec lines 68-94)

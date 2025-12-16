@@ -1,5 +1,5 @@
+use crate::common::{Span, Syntax};
 use crate::scheme::{
-    ast::{Span, Syntax},
     lex::{
         PResult, SpannedToken, Token, WinnowInput,
         identifiers::is_dot_subsequent,

@@ -1,6 +1,6 @@
+use crate::common::{Span, Syntax};
 use crate::scheme::{
     ParseError, Unsupported,
-    ast::{Span, Syntax},
     lex::{
         boolean::lex_boolean,
         identifiers::lex_identifier,

@@ -1,6 +1,6 @@
+use crate::common::Span;
 use crate::scheme::{
     ParseError,
-    ast::Span,
     lex::{PResult, WinnowInput},
 };
 use winnow::{

@@ -4,12 +4,11 @@ use winnow::{
     error::{ContextError, ErrMode},
     stream::{Location, Stream},
 };
-
 use super::{
     PResult, SpannedToken, Token, WinnowInput,
     utils::{InputExt, ensure_delimiter, winnow_backtrack},
 };
-use crate::scheme::ast::{Span, Syntax};
+use crate::common::{Span, Syntax};
 
 /// Lex a `<boolean>` token from the input stream.
 ///
