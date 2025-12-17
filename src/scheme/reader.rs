@@ -1,10 +1,11 @@
-use crate::common::{Span, Syntax};
-use crate::scheme::datumtraits::{
-    FiniteRealMagnitude, NumberLiteral, NumberValue, PrimitiveOps, RealMagnitude, SchemeNumberOps,
-    SimpleNumber,
+use crate::{
+    common::{Span, Syntax},
+    scheme::{
+        ParseError, Unsupported,
+        datumtraits::{PrimitiveOps, SchemeNumberOps, SimpleNumber},
+        lex::{self, FiniteRealKind, NumberExactness, SpannedToken, Token},
+    },
 };
-use crate::scheme::lex::{self, FiniteRealKind, NumberExactness, SpannedToken, Token};
-use crate::scheme::{ParseError, Unsupported};
 
 /// Datum syntax as defined in the "External representations" section
 /// of `spec/syn.md`.
@@ -300,7 +301,7 @@ impl<'i> TokenStream<'i> {
         match token.value {
             Token::Boolean(b) => Ok(Syntax::new(span, Datum::Boolean(b))),
             Token::Number(n) => {
-                let num = PrimitiveOps::from_literal(&n.into(), span)?;
+                let num = PrimitiveOps::from_literal(&n, span)?;
                 Ok(Syntax::new(span, Datum::Number(num)))
             }
             Token::Character(c) => Ok(Syntax::new(span, Datum::Character(c))),
@@ -533,7 +534,7 @@ impl<'i> TokenStream<'i> {
                     // Bytevectors must contain exact integers in the closed range [0, 255].
                     let datum = self.parse_datum_with_max_depth(depth - 1)?;
                     if let Some(value) = match &datum.value {
-                        Datum::Number(SimpleNumber::Literal(lit)) => number_literal_to_byte(lit),
+                        Datum::Number(SimpleNumber::Literal(text)) => number_text_to_byte(text),
                         Datum::Number(SimpleNumber::Integer(i)) => {
                             if *i >= 0 && *i <= 255 {
                                 Some(*i as u8)
@@ -562,8 +563,25 @@ impl<'i> TokenStream<'i> {
     }
 }
 
+/// Attempt to interpret `text` as a `<byte>` value (exact integer 0-255).
+///
+/// This is only used when the number backend preserved an unlowered number
+/// literal as raw text.
+fn number_text_to_byte(text: &str) -> Option<u8> {
+    let mut lexer = lex::lex(text);
+    let first = lexer.next()?.ok()?;
+    if lexer.next().is_some() {
+        return None;
+    }
+
+    match &first.value {
+        Token::Number(lit) => number_literal_to_byte(lit),
+        _ => None,
+    }
+}
+
 /// Attempt to interpret `literal` as a `<byte>` value (exact integer 0-255).
-fn number_literal_to_byte(literal: &NumberLiteral) -> Option<u8> {
+fn number_literal_to_byte(literal: &lex::NumberLiteral<'_>) -> Option<u8> {
     match literal.kind.exactness {
         NumberExactness::Inexact => return None,
         NumberExactness::Exact | NumberExactness::Unspecified => {}
@@ -572,16 +590,20 @@ fn number_literal_to_byte(literal: &NumberLiteral) -> Option<u8> {
     let radix = literal.kind.radix;
 
     match &literal.kind.value {
-        NumberValue::Real(real) => match &real.magnitude {
-            RealMagnitude::Finite(FiniteRealMagnitude {
+        lex::NumberValue::Real(real) => match &real.magnitude {
+            lex::RealMagnitude::Finite(lex::FiniteRealMagnitude {
                 kind: FiniteRealKind::Integer,
                 spelling,
             }) => {
-                let value = integer_spelling_to_byte(spelling.as_str(), radix)?;
+                let value = integer_spelling_to_byte(spelling, radix)?;
 
                 match real.sign {
-                    Some(crate::scheme::lex::Sign::Negative) => {
-                        if value == 0 { Some(0) } else { None }
+                    Some(lex::Sign::Negative) => {
+                        if value == 0 {
+                            Some(0)
+                        } else {
+                            None
+                        }
                     }
                     _ => Some(value),
                 }

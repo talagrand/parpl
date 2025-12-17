@@ -1,7 +1,7 @@
 use crate::common::{Span, StringId};
 use crate::scheme::{
     ParseError,
-    lex::{self, FiniteRealKind, NumberExactness, NumberRadix, Sign},
+    lex::{self, FiniteRealKind, NumberExactness, Sign},
 };
 use std::fmt::Debug;
 
@@ -30,7 +30,7 @@ pub trait SchemeNumberOps: Debug + Sized {
 
     /// The single lowering hook.
     /// The Reader calls this once per number token.
-    fn from_literal(lit: &NumberLiteral, span: Span) -> Result<Self::Number, ParseError>;
+    fn from_literal(lit: &lex::NumberLiteral<'_>, span: Span) -> Result<Self::Number, ParseError>;
 
     /// The semantic equality hook.
     /// Required for `syntax-rules` pattern matching (e.g. matching `1` against `1.0`).
@@ -45,7 +45,7 @@ pub enum SimpleNumber {
     Integer(i64),
     Float(f64),
     // Fallback for big/rational/complex/exact-decimals
-    Literal(NumberLiteral),
+    Literal(String),
 }
 
 /// Default implementation using `SimpleNumber`.
@@ -55,7 +55,7 @@ pub struct PrimitiveOps;
 impl SchemeNumberOps for PrimitiveOps {
     type Number = SimpleNumber;
 
-    fn from_literal(lit: &NumberLiteral, _span: Span) -> Result<Self::Number, ParseError> {
+    fn from_literal(lit: &lex::NumberLiteral<'_>, _span: Span) -> Result<Self::Number, ParseError> {
         let kind = &lit.kind;
 
         let radix = kind.radix;
@@ -81,10 +81,10 @@ impl SchemeNumberOps for PrimitiveOps {
             }
         };
 
-        if let NumberValue::Real(real) = &kind.value {
+        if let lex::NumberValue::Real(real) = &kind.value {
             let sign = real.effective_sign();
             match &real.magnitude {
-                RealMagnitude::Finite(finite) => match (kind.exactness, finite.kind) {
+                lex::RealMagnitude::Finite(finite) => match (kind.exactness, finite.kind) {
                     (
                         NumberExactness::Exact | NumberExactness::Unspecified,
                         FiniteRealKind::Integer,
@@ -106,7 +106,7 @@ impl SchemeNumberOps for PrimitiveOps {
                     }
                     (_, FiniteRealKind::Decimal) => {
                         if kind.exactness == NumberExactness::Exact {
-                            return Ok(SimpleNumber::Literal(lit.clone()));
+                            return Ok(SimpleNumber::Literal(lit.text.to_string()));
                         }
 
                         // Stdlib float parsing only supports base 10 decimal spellings.
@@ -121,14 +121,14 @@ impl SchemeNumberOps for PrimitiveOps {
                     }
                     _ => {}
                 },
-                RealMagnitude::Infinity => {
+                lex::RealMagnitude::Infinity => {
                     let mut f = f64::INFINITY;
                     if sign == Sign::Negative {
                         f = -f;
                     }
                     return Ok(SimpleNumber::Float(f));
                 }
-                RealMagnitude::NaN => {
+                lex::RealMagnitude::NaN => {
                     let mut f = f64::NAN;
                     if sign == Sign::Negative {
                         f = -f;
@@ -139,7 +139,7 @@ impl SchemeNumberOps for PrimitiveOps {
         }
 
         // Fallback
-        Ok(SimpleNumber::Literal(lit.clone()))
+        Ok(SimpleNumber::Literal(lit.text.to_string()))
     }
 
     fn eqv(a: &Self::Number, b: &Self::Number) -> bool {
@@ -152,8 +152,8 @@ impl SchemeNumberOps for PrimitiveOps {
                 a == b
             }
             (SimpleNumber::Literal(a), SimpleNumber::Literal(b)) => {
-                // Fallback: if we haven't lowered them, we can only compare text/structure.
-                // This is imperfect for `1` vs `01` but sufficient for initial migration.
+                // Fallback: compare source spellings.
+                // This is imperfect for `1` vs `01` but sufficient for the example `SimpleNumber`.
                 a == b
             }
             _ => false,
@@ -296,139 +296,7 @@ pub trait DatumWriter {
         I: DatumInspector;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FiniteRealMagnitude {
-    pub kind: FiniteRealKind,
-    /// Signless spelling.
-    pub spelling: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RealMagnitude {
-    Finite(FiniteRealMagnitude),
-    Infinity,
-    NaN,
-}
-
-/// Representation of `<real R>` values.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RealRepr {
-    /// `None` means no explicit sign (implicit positive).
-    ///
-    /// Invariant: if `magnitude` is `Infinity` or `NaN`, then `sign.is_some()`.
-    pub sign: Option<Sign>,
-    pub magnitude: RealMagnitude,
-}
-
-impl RealRepr {
-    /// Returns the effective sign, treating an omitted sign as `+`.
-    pub fn effective_sign(&self) -> Sign {
-        self.sign.unwrap_or(Sign::Positive)
-    }
-}
-
-/// Complex-number structure corresponding to `<complex R>`.
-///
-/// ```text
-/// <complex R> ::= <real R>
-///                | <real R> @ <real R>
-///                | <real R> + <ureal R> i
-///                | <real R> - <ureal R> i
-///                | <real R> + i
-///                | <real R> - i
-///                | <real R> <infnan> i
-///                | + <ureal R> i
-///                | - <ureal R> i
-///                | <infnan> i
-///                | + i
-///                | - i
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NumberValue {
-    /// A purely real number `<real R>`.
-    Real(RealRepr),
-    /// Rectangular complex form `a+bi` / `a-bi` and related
-    /// special cases normalized into explicit real and imaginary
-    /// parts.
-    Rectangular { real: RealRepr, imag: RealRepr },
-    /// Polar complex form `r@theta`.
-    Polar {
-        magnitude: RealRepr,
-        angle: RealRepr,
-    },
-}
-
-/// Full structural classification of a Scheme number literal.
-///
-/// This mirrors `<num R> ::= <prefix R> <complex R>`: `radix` and
-/// `exactness` capture `<prefix R>`, while `value` is the parsed
-/// `<complex R>` structure.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NumberLiteralKind {
-    pub radix: NumberRadix,
-    pub exactness: NumberExactness,
-    pub value: NumberValue,
-}
-
-/// A number literal, keeping the original spelling from the source.
-#[derive(Clone, Debug, PartialEq)]
-pub struct NumberLiteral {
-    /// Exact token text, including prefixes/suffixes.
-    pub text: String,
-    pub kind: NumberLiteralKind,
-}
-
-// Conversions from lexer number representations to reader-owned numbers.
-
-impl<'a> From<lex::RealRepr<'a>> for RealRepr {
-    fn from(lex_real: lex::RealRepr<'a>) -> Self {
-        let magnitude = match lex_real.magnitude {
-            lex::RealMagnitude::Finite(f) => RealMagnitude::Finite(FiniteRealMagnitude {
-                kind: f.kind,
-                spelling: f.spelling.to_string(),
-            }),
-            lex::RealMagnitude::Infinity => RealMagnitude::Infinity,
-            lex::RealMagnitude::NaN => RealMagnitude::NaN,
-        };
-
-        RealRepr {
-            sign: lex_real.sign,
-            magnitude,
-        }
-    }
-}
-
-impl<'a> From<lex::NumberValue<'a>> for NumberValue {
-    fn from(lex_value: lex::NumberValue<'a>) -> Self {
-        match lex_value {
-            lex::NumberValue::Real(r) => NumberValue::Real(r.into()),
-            lex::NumberValue::Rectangular { real, imag } => NumberValue::Rectangular {
-                real: real.into(),
-                imag: imag.into(),
-            },
-            lex::NumberValue::Polar { magnitude, angle } => NumberValue::Polar {
-                magnitude: magnitude.into(),
-                angle: angle.into(),
-            },
-        }
-    }
-}
-
-impl<'a> From<lex::NumberLiteralKind<'a>> for NumberLiteralKind {
-    fn from(lex_kind: lex::NumberLiteralKind<'a>) -> Self {
-        NumberLiteralKind {
-            radix: lex_kind.radix,
-            exactness: lex_kind.exactness,
-            value: lex_kind.value.into(),
-        }
-    }
-}
-
-impl<'a> From<lex::NumberLiteral<'a>> for NumberLiteral {
-    fn from(lex_literal: lex::NumberLiteral<'a>) -> Self {
-        NumberLiteral {
-            text: lex_literal.text.to_string(),
-            kind: lex_literal.kind.into(),
-        }
-    }
-}
+// NOTE: We intentionally do not define a reader-owned number-literal IR.
+// `SchemeNumberOps::from_literal` receives a borrowed lexer `NumberLiteral`.
+// If an implementation wants to retain an unknown literal, it can clone the
+// raw token text (`lit.text`) into its own representation.
