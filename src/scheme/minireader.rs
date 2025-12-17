@@ -1,7 +1,7 @@
 use crate::common::{Span, Syntax};
 use crate::scheme::lex::{
-    FiniteReal, FiniteRealKind, Lexer, NumberExactness, NumberLiteral, NumberRadix, NumberValue,
-    RealRepr, SpannedToken, Token,
+    FiniteRealKind, Lexer, NumberExactness, NumberLiteral, NumberValue, RealMagnitude,
+    SpannedToken, Token,
 };
 use crate::scheme::{ParseError, Unsupported};
 use std::iter::Peekable;
@@ -158,50 +158,43 @@ impl<'a> MiniReader<'a> {
         }
 
         match n.kind.value {
-            NumberValue::Real(RealRepr::Finite(FiniteReal {
-                kind: FiniteRealKind::Integer,
-                spelling,
-            })) => {
-                let radix = match n.kind.radix {
-                    NumberRadix::Binary => 2,
-                    NumberRadix::Octal => 8,
-                    NumberRadix::Decimal => 10,
-                    NumberRadix::Hexadecimal => 16,
-                };
+            NumberValue::Real(real) => match real.magnitude {
+                RealMagnitude::Finite(ref finite) if finite.kind == FiniteRealKind::Integer => {
+                    let radix = n.kind.radix;
+                    let val = match u64::from_str_radix(finite.spelling, radix) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let feature = match e.kind() {
+                                std::num::IntErrorKind::PosOverflow
+                                | std::num::IntErrorKind::NegOverflow => {
+                                    Unsupported::IntegerOverflow
+                                }
+                                // This should never happen, given our lexer's enforcement
+                                _ => Unsupported::InvalidIntegerFormat,
+                            };
+                            return Err(ParseError::unsupported(span, feature));
+                        }
+                    };
 
-                let (sign, digits) = if let Some(stripped) = spelling.strip_prefix('+') {
-                    (1, stripped)
-                } else if let Some(stripped) = spelling.strip_prefix('-') {
-                    (-1, stripped)
-                } else {
-                    (1, spelling)
-                };
+                    let result = match real.effective_sign() {
+                        crate::scheme::lex::Sign::Positive => i64::try_from(val).map_err(|_| {
+                            ParseError::unsupported(span, Unsupported::IntegerOverflow)
+                        })?,
+                        crate::scheme::lex::Sign::Negative => {
+                            if val > i64::MIN.unsigned_abs() {
+                                return Err(ParseError::unsupported(
+                                    span,
+                                    Unsupported::IntegerOverflow,
+                                ));
+                            }
+                            (val as i64).wrapping_neg()
+                        }
+                    };
 
-                let val = match u64::from_str_radix(digits, radix) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        let feature = match e.kind() {
-                            std::num::IntErrorKind::PosOverflow
-                            | std::num::IntErrorKind::NegOverflow => Unsupported::IntegerOverflow,
-                            // This should never happen, give our lexer's enforcement
-                            _ => Unsupported::InvalidIntegerFormat,
-                        };
-                        return Err(ParseError::unsupported(span, feature));
-                    }
-                };
-
-                let result = if sign == 1 {
-                    i64::try_from(val)
-                        .map_err(|_| ParseError::unsupported(span, Unsupported::IntegerOverflow))?
-                } else {
-                    if val > i64::MIN.unsigned_abs() {
-                        return Err(ParseError::unsupported(span, Unsupported::IntegerOverflow));
-                    }
-                    (val as i64).wrapping_neg()
-                };
-
-                Ok(Syntax::new(span, Value::Number(result)))
-            }
+                    Ok(Syntax::new(span, Value::Number(result)))
+                }
+                _ => Err(ParseError::unsupported(span, Unsupported::NonIntegerNumber)),
+            },
             _ => Err(ParseError::unsupported(span, Unsupported::NonIntegerNumber)),
         }
     }

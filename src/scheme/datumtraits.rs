@@ -1,7 +1,7 @@
 use crate::common::{Span, StringId};
 use crate::scheme::{
     ParseError,
-    lex::{self, FiniteRealKind, InfinityNan, NumberExactness, NumberRadix},
+    lex::{self, FiniteRealKind, NumberExactness, NumberRadix, Sign},
 };
 use std::fmt::Debug;
 
@@ -20,12 +20,6 @@ pub enum DatumKind {
     Vector,
     // For opaque host objects or other extensions
     Other,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Sign {
-    Positive,
-    Negative,
 }
 
 /// Abstract interface for Scheme number operations.
@@ -62,83 +56,86 @@ impl SchemeNumberOps for PrimitiveOps {
     type Number = SimpleNumber;
 
     fn from_literal(lit: &NumberLiteral, _span: Span) -> Result<Self::Number, ParseError> {
-        use crate::scheme::lex::{FiniteRealKind, InfinityNan, NumberExactness, NumberRadix};
-
         let kind = &lit.kind;
 
-        // Helper to parse string to i64 with radix
-        let parse_int = |text: &str, radix: u32| -> Option<i64> {
-            // Handle explicit sign because i64::from_str_radix handles it,
-            // but we need to be careful about clean input.
-            // The lexer guarantees valid digits for the radix.
-            // However, `+` might be present.
-            let text = if text.starts_with('+') {
-                &text[1..]
-            } else {
-                text
-            };
-            i64::from_str_radix(text, radix).ok()
+        let radix = kind.radix;
+
+        let parse_mag_u64 =
+            |digits: &str| -> Option<u64> { u64::from_str_radix(digits, radix).ok() };
+
+        let mag_to_i64 = |mag: u64, sign: Sign| -> Option<i64> {
+            match sign {
+                Sign::Positive => i64::try_from(mag).ok(),
+                Sign::Negative => {
+                    // Two's-complement is asymmetric: `i64::MIN` is -2^63, whose magnitude (2^63)
+                    // is one larger than `i64::MAX` and therefore doesn't fit in a positive `i64`.
+                    // If we parsed that magnitude with a negative sign, it is still a valid i64.
+                    let min_mag = (i64::MAX as u64) + 1;
+                    if mag == min_mag {
+                        Some(i64::MIN)
+                    } else {
+                        let v = i64::try_from(mag).ok()?;
+                        v.checked_neg()
+                    }
+                }
+            }
         };
 
-        match &kind.value {
-            NumberValue::Real(RealRepr::Finite {
-                kind: finite_kind,
-                spelling,
-            }) => {
-                let radix = match kind.radix {
-                    NumberRadix::Binary => 2,
-                    NumberRadix::Octal => 8,
-                    NumberRadix::Decimal => 10,
-                    NumberRadix::Hexadecimal => 16,
-                };
-
-                match (kind.exactness, finite_kind) {
-                    // Exact Integer -> i64
+        if let NumberValue::Real(real) = &kind.value {
+            let sign = real.effective_sign();
+            match &real.magnitude {
+                RealMagnitude::Finite(finite) => match (kind.exactness, finite.kind) {
                     (
                         NumberExactness::Exact | NumberExactness::Unspecified,
                         FiniteRealKind::Integer,
                     ) => {
-                        if let Some(i) = parse_int(spelling, radix) {
-                            return Ok(SimpleNumber::Integer(i));
+                        if let Some(mag) = parse_mag_u64(&finite.spelling) {
+                            if let Some(i) = mag_to_i64(mag, sign) {
+                                return Ok(SimpleNumber::Integer(i));
+                            }
                         }
                     }
-                    // Inexact Integer -> f64
                     (NumberExactness::Inexact, FiniteRealKind::Integer) => {
-                        if let Some(i) = parse_int(spelling, radix) {
-                            return Ok(SimpleNumber::Float(i as f64));
+                        if let Some(mag) = parse_mag_u64(&finite.spelling) {
+                            let mut f = mag as f64;
+                            if sign == Sign::Negative {
+                                f = -f;
+                            }
+                            return Ok(SimpleNumber::Float(f));
                         }
                     }
-                    // Decimal -> f64 (Only valid for base 10 usually)
                     (_, FiniteRealKind::Decimal) => {
-                        // Decimals are usually base 10.
-                        // If exactness is Exact, we can't represent 1.2 as i64.
-                        // So we fallback to Literal for Exact Decimals.
                         if kind.exactness == NumberExactness::Exact {
                             return Ok(SimpleNumber::Literal(lit.clone()));
                         }
 
-                        // For Inexact or Unspecified, try f64.
-                        // Note: f64::from_str handles 'e' notation and decimal points.
-                        // It does NOT handle radix other than 10.
+                        // Stdlib float parsing only supports base 10 decimal spellings.
                         if radix == 10 {
-                            // Remove leading '+' if present, f64::from_str handles '-' but maybe not '+'?
-                            // Rust f64::from_str handles "3.14", "-3.14".
-                            // Does it handle "+3.14"? Yes.
-                            if let Ok(f) = spelling.parse::<f64>() {
+                            if let Ok(mut f) = finite.spelling.parse::<f64>() {
+                                if sign == Sign::Negative {
+                                    f = -f;
+                                }
                                 return Ok(SimpleNumber::Float(f));
                             }
                         }
                     }
                     _ => {}
+                },
+                RealMagnitude::Infinity => {
+                    let mut f = f64::INFINITY;
+                    if sign == Sign::Negative {
+                        f = -f;
+                    }
+                    return Ok(SimpleNumber::Float(f));
+                }
+                RealMagnitude::NaN => {
+                    let mut f = f64::NAN;
+                    if sign == Sign::Negative {
+                        f = -f;
+                    }
+                    return Ok(SimpleNumber::Float(f));
                 }
             }
-            NumberValue::Real(RealRepr::Infnan(infnan)) => match infnan {
-                InfinityNan::PositiveInfinity => return Ok(SimpleNumber::Float(f64::INFINITY)),
-                InfinityNan::NegativeInfinity => return Ok(SimpleNumber::Float(f64::NEG_INFINITY)),
-                InfinityNan::PositiveNaN => return Ok(SimpleNumber::Float(f64::NAN)),
-                InfinityNan::NegativeNaN => return Ok(SimpleNumber::Float(f64::NAN)),
-            },
-            _ => {}
         }
 
         // Fallback
@@ -299,16 +296,35 @@ pub trait DatumWriter {
         I: DatumInspector;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FiniteRealMagnitude {
+    pub kind: FiniteRealKind,
+    /// Signless spelling.
+    pub spelling: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RealMagnitude {
+    Finite(FiniteRealMagnitude),
+    Infinity,
+    NaN,
+}
+
 /// Representation of `<real R>` values.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RealRepr {
-    /// A finite real built from `<ureal R>` or `<decimal 10>`.
-    Finite {
-        kind: FiniteRealKind,
-        spelling: String,
-    },
-    /// One of the four `<infnan>` spellings.
-    Infnan(InfinityNan),
+pub struct RealRepr {
+    /// `None` means no explicit sign (implicit positive).
+    ///
+    /// Invariant: if `magnitude` is `Infinity` or `NaN`, then `sign.is_some()`.
+    pub sign: Option<Sign>,
+    pub magnitude: RealMagnitude,
+}
+
+impl RealRepr {
+    /// Returns the effective sign, treating an omitted sign as `+`.
+    pub fn effective_sign(&self) -> Sign {
+        self.sign.unwrap_or(Sign::Positive)
+    }
 }
 
 /// Complex-number structure corresponding to `<complex R>`.
@@ -364,20 +380,20 @@ pub struct NumberLiteral {
 
 // Conversions from lexer number representations to reader-owned numbers.
 
-impl<'a> From<lex::FiniteReal<'a>> for RealRepr {
-    fn from(lex_finite: lex::FiniteReal<'a>) -> Self {
-        RealRepr::Finite {
-            kind: lex_finite.kind,
-            spelling: lex_finite.spelling.to_string(),
-        }
-    }
-}
-
 impl<'a> From<lex::RealRepr<'a>> for RealRepr {
     fn from(lex_real: lex::RealRepr<'a>) -> Self {
-        match lex_real {
-            lex::RealRepr::Finite(f) => f.into(),
-            lex::RealRepr::Infnan(i) => RealRepr::Infnan(i),
+        let magnitude = match lex_real.magnitude {
+            lex::RealMagnitude::Finite(f) => RealMagnitude::Finite(FiniteRealMagnitude {
+                kind: f.kind,
+                spelling: f.spelling.to_string(),
+            }),
+            lex::RealMagnitude::Infinity => RealMagnitude::Infinity,
+            lex::RealMagnitude::NaN => RealMagnitude::NaN,
+        };
+
+        RealRepr {
+            sign: lex_real.sign,
+            magnitude,
         }
     }
 }

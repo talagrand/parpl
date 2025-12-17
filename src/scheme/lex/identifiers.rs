@@ -1,11 +1,9 @@
 use crate::common::{Span, Syntax};
-use crate::scheme::{
-    lex::{
-        FoldCaseMode, PResult, SpannedToken, Token, WinnowInput,
-        utils::{
-            InputExt, cut_lex_error_token, ensure_delimiter, is_delimiter, lex_error,
-            winnow_backtrack, winnow_incomplete,
-        },
+use crate::scheme::lex::{
+    FoldCaseMode, PResult, SpannedToken, Token, WinnowInput,
+    utils::{
+        InputExt, cut_lex_error_token, ensure_delimiter, is_delimiter, lex_error, winnow_backtrack,
+        winnow_incomplete,
     },
 };
 use std::borrow::Cow;

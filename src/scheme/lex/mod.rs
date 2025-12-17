@@ -41,13 +41,10 @@ pub type PResult<O> = Result<O, ErrMode<ContextError>>;
 /// <radix 10> ::= <empty> | #d
 /// <radix 16> ::= #x
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NumberRadix {
-    Binary,
-    Octal,
-    Decimal,
-    Hexadecimal,
-}
+/// Radix base for a Scheme number literal.
+///
+/// Invariant: only 2, 8, 10, or 16.
+pub type NumberRadix = u32;
 
 /// Exactness marker of a Scheme number literal.
 ///
@@ -63,43 +60,65 @@ pub enum NumberExactness {
     Unspecified,
 }
 
-/// The four special infinities / NaNs used by `<infnan>`.
+/// Sign prefix used by `<sign>`.
 ///
-/// ```text
-/// <infnan> ::= +inf.0 | -inf.0 | +nan.0 | -nan.0
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum InfinityNan {
-    PositiveInfinity,
-    NegativeInfinity,
-    PositiveNaN,
-    NegativeNaN,
+/// Note: we track whether a sign was explicitly present separately
+/// in `RealRepr`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sign {
+    Positive,
+    Negative,
 }
 
 /// Finite real-number spellings built from `<ureal R>` and
 /// `<decimal 10>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FiniteRealKind {
-    /// A (possibly signed) integer, e.g. "42", "-7".
+    /// An integer, e.g. "42".
     Integer,
-    /// A (possibly signed) rational, e.g. "3/4", "-5/16".
+    /// A rational, e.g. "3/4".
     Rational,
-    /// A (possibly signed) decimal, e.g. "3.14", "-.5", "1e3".
+    /// A decimal, e.g. "3.14", ".5", "1e3".
     Decimal,
 }
 
 // --- Lexer-specific Number Representations (Zero-Copy) ---
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FiniteReal<'a> {
+pub struct FiniteRealMagnitude<'a> {
     pub kind: FiniteRealKind,
+    /// Signless spelling of the finite real.
+    ///
+    /// Invariant: never includes a leading '+' or '-'.
     pub spelling: &'a str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RealRepr<'a> {
-    Finite(FiniteReal<'a>),
-    Infnan(InfinityNan),
+pub enum RealMagnitude<'a> {
+    Finite(FiniteRealMagnitude<'a>),
+    Infinity,
+    NaN,
+}
+
+/// Signed real-number representation used inside complex numbers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RealRepr<'a> {
+    /// Explicit sign from the source (`+` / `-`).
+    ///
+    /// - `None` means no explicit sign was present (implicit positive).
+    /// - `Some(Sign::Positive)` means an explicit `+` was present.
+    /// - `Some(Sign::Negative)` means an explicit `-` was present.
+    ///
+    /// Invariant: if `magnitude` is `Infinity` or `NaN`, then `sign.is_some()`.
+    pub sign: Option<Sign>,
+    pub magnitude: RealMagnitude<'a>,
+}
+
+impl<'a> RealRepr<'a> {
+    /// Returns the effective sign, treating an omitted sign as `+`.
+    pub fn effective_sign(&self) -> Sign {
+        self.sign.unwrap_or(Sign::Positive)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

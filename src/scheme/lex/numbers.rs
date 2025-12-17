@@ -1,6 +1,6 @@
 use crate::scheme::lex::{
-    FiniteReal, FiniteRealKind, InfinityNan, NumberExactness, NumberLiteral, NumberLiteralKind,
-    NumberRadix, NumberValue, PResult, RealRepr, WinnowInput,
+    FiniteRealKind, FiniteRealMagnitude, NumberExactness, NumberLiteral, NumberLiteralKind,
+    NumberRadix, NumberValue, PResult, RealMagnitude, RealRepr, Sign, WinnowInput,
     utils::{
         InputExt, cut_lex_error_token, ensure_delimiter, is_delimiter, lex_error, winnow_backtrack,
         winnow_incomplete_token,
@@ -96,59 +96,56 @@ fn parse_exponent_suffix<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
 /// This first tries `<infnan>` and, on backtrack,
 /// falls back to `<sign> <ureal R>`.
 fn lex_real_repr<'i>(input: &mut WinnowInput<'i>, radix: NumberRadix) -> PResult<RealRepr<'i>> {
-    let start = *input;
-
     // Check for sign
-    let sign = input.eat_if(|c| c == '+' || c == '-');
+    let sign_ch = input.eat_if(|c| c == '+' || c == '-');
+    let sign = match sign_ch {
+        Some('-') => Some(Sign::Negative),
+        Some('+') => Some(Sign::Positive),
+        None => None,
+        _ => unreachable!("eat_if only returns '+' or '-'"),
+    };
 
     // Check for inf/nan
     // Must start with i/I or n/N (after sign)
-    // Note: if no sign, can't be infnan (grammar: +inf.0 | -inf.0 ...)
-    if let (Some(s), Some(c)) = (sign, input.peek_token()) {
-        match c {
-            'i' | 'I' => {
-                let mut probe = *input;
-                let res: Result<&str, ErrMode<ContextError>> =
-                    Caseless("inf.0").parse_next(&mut probe);
-                if res.is_ok() {
-                    *input = probe;
-                    return Ok(RealRepr::Infnan(if s == '+' {
-                        InfinityNan::PositiveInfinity
-                    } else {
-                        InfinityNan::NegativeInfinity
-                    }));
+    // Note: if no explicit sign, can't be infnan (grammar: +inf.0 | -inf.0 ...)
+    if sign.is_some() {
+        if let Some(c) = input.peek_token() {
+            match c {
+                'i' | 'I' => {
+                    let mut probe = *input;
+                    let res: Result<&str, ErrMode<ContextError>> =
+                        Caseless("inf.0").parse_next(&mut probe);
+                    if res.is_ok() {
+                        *input = probe;
+                        return Ok(RealRepr {
+                            sign,
+                            magnitude: RealMagnitude::Infinity,
+                        });
+                    }
                 }
-            }
-            'n' | 'N' => {
-                let mut probe = *input;
-                let res: Result<&str, ErrMode<ContextError>> =
-                    Caseless("nan.0").parse_next(&mut probe);
-                if res.is_ok() {
-                    *input = probe;
-                    return Ok(RealRepr::Infnan(if s == '+' {
-                        InfinityNan::PositiveNaN
-                    } else {
-                        InfinityNan::NegativeNaN
-                    }));
+                'n' | 'N' => {
+                    let mut probe = *input;
+                    let res: Result<&str, ErrMode<ContextError>> =
+                        Caseless("nan.0").parse_next(&mut probe);
+                    if res.is_ok() {
+                        *input = probe;
+                        return Ok(RealRepr {
+                            sign,
+                            magnitude: RealMagnitude::NaN,
+                        });
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         }
     }
 
-    // Not infnan. Try ureal.
-    // If we consumed a sign, we need to pass it to ureal or handle it.
-    // lex_ureal parses unsigned real.
-
+    // Not infnan. Try ureal (signless).
     match lex_ureal(input, radix) {
-        Ok(mut finite) => {
-            if sign.is_some() {
-                let len = finite.spelling.len() + 1;
-                let s: &'i str = *start;
-                finite.spelling = &s[..len];
-            }
-            Ok(RealRepr::Finite(finite))
-        }
+        Ok(finite) => Ok(RealRepr {
+            sign,
+            magnitude: RealMagnitude::Finite(finite),
+        }),
         Err(e) => Err(e),
     }
 }
@@ -222,12 +219,7 @@ fn lex_complex_with_radix<'i>(
                     // The R7RS grammar does *not* allow bare `2i` (no sign),
                     // so we only accept this branch when the parsed `<real R>`
                     // carried an explicit sign or is an `<infnan>`.
-                    let allow_pure_imag = match &repr1 {
-                        RealRepr::Infnan(_) => true,
-                        RealRepr::Finite(finite) => {
-                            finite.spelling.starts_with('+') || finite.spelling.starts_with('-')
-                        }
-                    };
+                    let allow_pure_imag = repr1.sign.is_some();
 
                     if !allow_pure_imag {
                         return lex_error("<number>");
@@ -269,7 +261,18 @@ fn lex_complex_with_radix<'i>(
                     .into_literal());
                 }
                 '+' | '-' => {
-                    // Rectangular: `<real R> +/- <ureal R> i` or `<real R> +/- i`.
+                    // Rectangular cases.
+                    //
+                    // In `syn.tex`, these appear as:
+                    // - `<real R> + <ureal R> i` / `<real R> - <ureal R> i`
+                    // - `<real R> + i` / `<real R> - i`
+                    // - `<real R> <infnan> i` (e.g. `1+inf.0i`)
+                    //
+                    // Implementation detail: once we see a `+`/`-`, we attempt to parse the
+                    // remainder using `lex_real_repr` starting at that sign. This yields a
+                    // signed `RealRepr` which represents either:
+                    // - `+/- <ureal R>` (the operator supplies the sign), or
+                    // - `<infnan>` (whose sign is part of the token).
                     let mut probe = *input;
                     match lex_real_repr(&mut probe, radix) {
                         Ok(repr2) => {
@@ -291,7 +294,14 @@ fn lex_complex_with_radix<'i>(
                             // Fall back to `+i` / `-i` (implicit 1).
                             probe = *input;
                             if let Some(sign_ch) = try_parse_unit_imaginary(&mut probe)? {
-                                let imag = int_repr(if sign_ch == '-' { "-1" } else { "1" });
+                                let imag = signed_int_repr(
+                                    if sign_ch == '-' {
+                                        Sign::Negative
+                                    } else {
+                                        Sign::Positive
+                                    },
+                                    "1",
+                                );
                                 *input = probe;
                                 return Ok(NumberLiteralKind {
                                     radix,
@@ -320,7 +330,14 @@ fn lex_complex_with_radix<'i>(
 
     // Handle `+i` / `-i` without an explicit real part.
     if let Some(sign_ch) = try_parse_unit_imaginary(input)? {
-        let imag = int_repr(if sign_ch == '-' { "-1" } else { "1" });
+        let imag = signed_int_repr(
+            if sign_ch == '-' {
+                Sign::Negative
+            } else {
+                Sign::Positive
+            },
+            "1",
+        );
         return Ok(NumberLiteralKind {
             radix,
             exactness,
@@ -340,7 +357,7 @@ fn lex_complex_with_radix<'i>(
 /// This is a thin wrapper around `lex_complex_with_radix` with
 /// `R = 10` and unspecified exactness.
 pub(crate) fn lex_complex_decimal<'i>(input: &mut WinnowInput<'i>) -> PResult<NumberLiteral<'i>> {
-    lex_complex_with_radix(input, NumberRadix::Decimal, NumberExactness::Unspecified)
+    lex_complex_with_radix(input, 10, NumberExactness::Unspecified)
 }
 
 /// Canonical `<number>` parser for prefixed numbers.
@@ -397,10 +414,10 @@ pub(crate) fn lex_prefixed_number<'i>(input: &mut WinnowInput<'i>) -> PResult<Nu
                     return lex_error("<number>");
                 }
                 radix = Some(match lower {
-                    'b' => NumberRadix::Binary,
-                    'o' => NumberRadix::Octal,
-                    'd' => NumberRadix::Decimal,
-                    'x' => NumberRadix::Hexadecimal,
+                    'b' => 2,
+                    'o' => 8,
+                    'd' => 10,
+                    'x' => 16,
                     _ => return lex_error("<number>"),
                 });
             }
@@ -428,7 +445,7 @@ pub(crate) fn lex_prefixed_number<'i>(input: &mut WinnowInput<'i>) -> PResult<Nu
         return winnow_backtrack();
     }
 
-    let radix_value = radix.unwrap_or(NumberRadix::Decimal);
+    let radix_value = radix.unwrap_or(10);
     let exactness_value = exactness.unwrap_or(NumberExactness::Unspecified);
 
     let _ = probe.peek_or_incomplete_token()?;
@@ -460,8 +477,11 @@ pub(crate) fn lex_prefixed_number<'i>(input: &mut WinnowInput<'i>) -> PResult<Nu
 /// productions, so decimal points and exponents are only valid for
 /// radix 10. This function handles all radixes uniformly, with the
 /// decimal-specific forms enabled only when `radix == Decimal`.
-fn lex_ureal<'i>(input: &mut WinnowInput<'i>, radix: NumberRadix) -> PResult<FiniteReal<'i>> {
-    let is_decimal = radix == NumberRadix::Decimal;
+fn lex_ureal<'i>(
+    input: &mut WinnowInput<'i>,
+    radix: NumberRadix,
+) -> PResult<FiniteRealMagnitude<'i>> {
+    let is_decimal = radix == 10;
     let first = input.peek_or_backtrack()?;
 
     let (kind, slice) = (move |input: &mut WinnowInput<'i>| -> PResult<FiniteRealKind> {
@@ -525,7 +545,7 @@ fn lex_ureal<'i>(input: &mut WinnowInput<'i>, radix: NumberRadix) -> PResult<Fin
     .with_taken()
     .parse_next(input)?;
 
-    Ok(FiniteReal {
+    Ok(FiniteRealMagnitude {
         kind,
         spelling: slice,
     })
@@ -533,17 +553,31 @@ fn lex_ureal<'i>(input: &mut WinnowInput<'i>, radix: NumberRadix) -> PResult<Fin
 
 fn is_digit_for_radix(ch: char, radix: NumberRadix) -> bool {
     match radix {
-        NumberRadix::Binary => matches!(ch, '0' | '1'),
-        NumberRadix::Octal => matches!(ch, '0'..='7'),
-        NumberRadix::Decimal => ch.is_ascii_digit(),
-        NumberRadix::Hexadecimal => ch.is_ascii_hexdigit(),
+        2 => matches!(ch, '0' | '1'),
+        8 => matches!(ch, '0'..='7'),
+        10 => ch.is_ascii_digit(),
+        16 => ch.is_ascii_hexdigit(),
+        _ => false,
     }
 }
 
 /// Create an integer `RealRepr` from a spelling string.
 pub(crate) fn int_repr(spelling: &str) -> RealRepr<'_> {
-    RealRepr::Finite(FiniteReal {
-        kind: FiniteRealKind::Integer,
-        spelling,
-    })
+    RealRepr {
+        sign: None,
+        magnitude: RealMagnitude::Finite(FiniteRealMagnitude {
+            kind: FiniteRealKind::Integer,
+            spelling,
+        }),
+    }
+}
+
+pub(crate) fn signed_int_repr(sign: Sign, digits: &str) -> RealRepr<'_> {
+    RealRepr {
+        sign: Some(sign),
+        magnitude: RealMagnitude::Finite(FiniteRealMagnitude {
+            kind: FiniteRealKind::Integer,
+            spelling: digits,
+        }),
+    }
 }

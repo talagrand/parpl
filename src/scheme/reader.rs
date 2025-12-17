@@ -1,8 +1,9 @@
 use crate::common::{Span, Syntax};
 use crate::scheme::datumtraits::{
-    NumberLiteral, NumberValue, PrimitiveOps, RealRepr, SchemeNumberOps, SimpleNumber,
+    FiniteRealMagnitude, NumberLiteral, NumberValue, PrimitiveOps, RealMagnitude, SchemeNumberOps,
+    SimpleNumber,
 };
-use crate::scheme::lex::{self, FiniteRealKind, NumberExactness, NumberRadix, SpannedToken, Token};
+use crate::scheme::lex::{self, FiniteRealKind, NumberExactness, SpannedToken, Token};
 use crate::scheme::{ParseError, Unsupported};
 
 /// Datum syntax as defined in the "External representations" section
@@ -568,37 +569,36 @@ fn number_literal_to_byte(literal: &NumberLiteral) -> Option<u8> {
         NumberExactness::Exact | NumberExactness::Unspecified => {}
     }
 
-    let radix = match literal.kind.radix {
-        NumberRadix::Binary => 2,
-        NumberRadix::Octal => 8,
-        NumberRadix::Decimal => 10,
-        NumberRadix::Hexadecimal => 16,
-    };
+    let radix = literal.kind.radix;
 
     match &literal.kind.value {
-        NumberValue::Real(RealRepr::Finite {
-            kind: FiniteRealKind::Integer,
-            spelling,
-        }) => integer_spelling_to_byte(spelling, radix),
+        NumberValue::Real(real) => match &real.magnitude {
+            RealMagnitude::Finite(FiniteRealMagnitude {
+                kind: FiniteRealKind::Integer,
+                spelling,
+            }) => {
+                let value = integer_spelling_to_byte(spelling.as_str(), radix)?;
+
+                match real.sign {
+                    Some(crate::scheme::lex::Sign::Negative) => {
+                        if value == 0 { Some(0) } else { None }
+                    }
+                    _ => Some(value),
+                }
+            }
+            _ => None,
+        },
         _ => None,
     }
 }
 
 fn integer_spelling_to_byte(spelling: &str, radix: u32) -> Option<u8> {
-    let digits = if let Some(rest) = spelling.strip_prefix('+') {
-        rest
-    } else if spelling.starts_with('-') {
-        return None;
-    } else {
-        spelling
-    };
-
-    if digits.is_empty() {
+    if spelling.is_empty() {
         return None;
     }
 
     let mut value: u32 = 0;
-    for ch in digits.chars() {
+    for ch in spelling.chars() {
         let digit = ch.to_digit(radix)?;
         value = value.checked_mul(radix)?;
         value = value.checked_add(digit)?;
@@ -669,7 +669,6 @@ mod tests {
     #[derive(Debug)]
     enum DatumMatcher {
         Bool(bool),
-        Num(&'static str),
         Int(i64),
         Float(f64),
         Char(char),
@@ -752,14 +751,15 @@ mod tests {
                 (DatumMatcher::Bool(e), Datum::Boolean(a)) => {
                     assert_eq!(e, a, "{}: boolean mismatch", test_name)
                 }
-                (DatumMatcher::Num(e), Datum::Number(SimpleNumber::Literal(a))) => {
-                    assert_eq!(e, &a.text, "{}: number text mismatch", test_name)
-                }
                 (DatumMatcher::Int(e), Datum::Number(SimpleNumber::Integer(a))) => {
                     assert_eq!(e, a, "{}: integer mismatch", test_name)
                 }
                 (DatumMatcher::Float(e), Datum::Number(SimpleNumber::Float(a))) => {
-                    assert!((e - a).abs() < f64::EPSILON, "{}: float mismatch", test_name)
+                    assert!(
+                        (e - a).abs() < f64::EPSILON,
+                        "{}: float mismatch",
+                        test_name
+                    )
                 }
                 (DatumMatcher::Char(e), Datum::Character(a)) => {
                     assert_eq!(e, a, "{}: character mismatch", test_name)
@@ -993,6 +993,11 @@ mod tests {
                 mode: TestMode::Datum(Expected::Success(DatumMatcher::ByteVector(vec![
                     255, 8, 3, 0, 7, 10,
                 ]))),
+            },
+            TestCase {
+                name: "bytevector_negative_zero",
+                input: "#u8(-0 0)",
+                mode: TestMode::Datum(Expected::Success(DatumMatcher::ByteVector(vec![0, 0]))),
             },
             TestCase {
                 name: "bytevector_inexact",

@@ -63,6 +63,107 @@ enum NumCheck {
     Radix(NumberRadix, Box<NumCheck>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InfinityNan {
+    PositiveInfinity,
+    NegativeInfinity,
+    PositiveNaN,
+    NegativeNaN,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpecialMagnitude {
+    Infinity,
+    NaN,
+}
+
+impl InfinityNan {
+    fn expected(self) -> (Option<Sign>, SpecialMagnitude) {
+        match self {
+            InfinityNan::PositiveInfinity => (Some(Sign::Positive), SpecialMagnitude::Infinity),
+            InfinityNan::NegativeInfinity => (Some(Sign::Negative), SpecialMagnitude::Infinity),
+            InfinityNan::PositiveNaN => (Some(Sign::Positive), SpecialMagnitude::NaN),
+            InfinityNan::NegativeNaN => (Some(Sign::Negative), SpecialMagnitude::NaN),
+        }
+    }
+}
+
+fn split_expected_sign(expected: &str) -> (Option<Sign>, &str) {
+    if let Some(rest) = expected.strip_prefix('-') {
+        (Some(Sign::Negative), rest)
+    } else if let Some(rest) = expected.strip_prefix('+') {
+        (Some(Sign::Positive), rest)
+    } else {
+        (None, expected)
+    }
+}
+
+fn assert_finite(
+    repr: &RealRepr<'_>,
+    expected_kind: FiniteRealKind,
+    expected: &str,
+    test_name: &str,
+    index: usize,
+    part: &str,
+) {
+    let (expected_sign, expected_spelling) = split_expected_sign(expected);
+    assert_eq!(
+        repr.sign, expected_sign,
+        "{}: token {} {} sign mismatch",
+        test_name, index, part
+    );
+
+    match &repr.magnitude {
+        RealMagnitude::Finite(FiniteRealMagnitude { kind, spelling }) => {
+            assert_eq!(
+                *kind, expected_kind,
+                "{}: token {} {} kind mismatch",
+                test_name, index, part
+            );
+            assert_eq!(
+                *spelling, expected_spelling,
+                "{}: token {} {} spelling mismatch",
+                test_name, index, part
+            );
+        }
+        _ => panic!("{}: token {} expected finite {}", test_name, index, part),
+    }
+}
+
+fn assert_infnan(
+    repr: &RealRepr<'_>,
+    expected: InfinityNan,
+    test_name: &str,
+    index: usize,
+    part: &str,
+) {
+    let (expected_sign, expected_kind) = expected.expected();
+    assert_eq!(
+        repr.sign, expected_sign,
+        "{}: token {} {} sign mismatch",
+        test_name, index, part
+    );
+    match &repr.magnitude {
+        RealMagnitude::Infinity => assert_eq!(
+            expected_kind,
+            SpecialMagnitude::Infinity,
+            "{}: token {} {} magnitude mismatch",
+            test_name,
+            index,
+            part
+        ),
+        RealMagnitude::NaN => assert_eq!(
+            expected_kind,
+            SpecialMagnitude::NaN,
+            "{}: token {} {} magnitude mismatch",
+            test_name,
+            index,
+            part
+        ),
+        _ => panic!("{}: token {} expected infnan {}", test_name, index, part),
+    }
+}
+
 impl TestCase {
     fn run(&self) {
         let result: Result<Vec<SpannedToken>, ParseError> = lex(self.input).collect();
@@ -238,191 +339,127 @@ impl NumCheck {
         match self {
             NumCheck::Any => {}
             NumCheck::Int(s) => {
-                if let NumberValue::Real(RealRepr::Finite(FiniteReal {
-                    kind: FiniteRealKind::Integer,
-                    spelling,
-                })) = &kind.value
-                {
-                    assert_eq!(
-                        spelling, s,
-                        "{}: token {} integer spelling mismatch",
-                        test_name, index
-                    );
+                if let NumberValue::Real(real) = &kind.value {
+                    assert_finite(real, FiniteRealKind::Integer, s, test_name, index, "real");
                 } else {
                     panic!(
-                        "{}: token {} expected Integer, got {:?}",
+                        "{}: token {} expected Real, got {:?}",
                         test_name, index, kind
                     );
                 }
             }
             NumCheck::Dec(s) => {
-                if let NumberValue::Real(RealRepr::Finite(FiniteReal {
-                    kind: FiniteRealKind::Decimal,
-                    spelling,
-                })) = &kind.value
-                {
-                    assert_eq!(
-                        spelling, s,
-                        "{}: token {} decimal spelling mismatch",
-                        test_name, index
-                    );
+                if let NumberValue::Real(real) = &kind.value {
+                    assert_finite(real, FiniteRealKind::Decimal, s, test_name, index, "real");
                 } else {
                     panic!(
-                        "{}: token {} expected Decimal, got {:?}",
+                        "{}: token {} expected Real, got {:?}",
                         test_name, index, kind
                     );
                 }
             }
             NumCheck::Rat(s) => {
-                if let NumberValue::Real(RealRepr::Finite(FiniteReal {
-                    kind: FiniteRealKind::Rational,
-                    spelling,
-                })) = &kind.value
-                {
-                    assert_eq!(
-                        spelling, s,
-                        "{}: token {} rational spelling mismatch",
-                        test_name, index
-                    );
+                if let NumberValue::Real(real) = &kind.value {
+                    assert_finite(real, FiniteRealKind::Rational, s, test_name, index, "real");
                 } else {
                     panic!(
-                        "{}: token {} expected Rational, got {:?}",
+                        "{}: token {} expected Real, got {:?}",
                         test_name, index, kind
                     );
                 }
             }
             NumCheck::RectInt(r, i) => {
                 if let NumberValue::Rectangular { real, imag } = &kind.value {
-                    match real {
-                        RealRepr::Finite(FiniteReal {
-                            kind: FiniteRealKind::Integer,
-                            spelling,
-                        }) => {
-                            assert_eq!(spelling, r)
-                        }
-                        _ => {
-                            panic!("{}: token {} expected Integer real part", test_name, index)
-                        }
-                    }
-                    match imag {
-                        RealRepr::Finite(FiniteReal {
-                            kind: FiniteRealKind::Integer,
-                            spelling,
-                        }) => {
-                            assert_eq!(spelling, i)
-                        }
-                        _ => {
-                            panic!("{}: token {} expected Integer imag part", test_name, index)
-                        }
-                    }
+                    assert_finite(
+                        real,
+                        FiniteRealKind::Integer,
+                        r,
+                        test_name,
+                        index,
+                        "real part",
+                    );
+                    assert_finite(
+                        imag,
+                        FiniteRealKind::Integer,
+                        i,
+                        test_name,
+                        index,
+                        "imag part",
+                    );
                 } else {
                     panic!("{}: token {} expected Rectangular", test_name, index);
                 }
             }
             NumCheck::RectRat(r, i) => {
                 if let NumberValue::Rectangular { real, imag } = &kind.value {
-                    match real {
-                        RealRepr::Finite(FiniteReal {
-                            kind: FiniteRealKind::Integer,
-                            spelling,
-                        }) => {
-                            assert_eq!(spelling, r)
-                        }
-                        _ => {
-                            panic!("{}: token {} expected Integer real part", test_name, index)
-                        }
-                    }
-                    match imag {
-                        RealRepr::Finite(FiniteReal {
-                            kind: FiniteRealKind::Rational,
-                            spelling,
-                        }) => {
-                            assert_eq!(spelling, i)
-                        }
-                        _ => {
-                            panic!("{}: token {} expected Rational imag part", test_name, index)
-                        }
-                    }
+                    assert_finite(
+                        real,
+                        FiniteRealKind::Integer,
+                        r,
+                        test_name,
+                        index,
+                        "real part",
+                    );
+                    assert_finite(
+                        imag,
+                        FiniteRealKind::Rational,
+                        i,
+                        test_name,
+                        index,
+                        "imag part",
+                    );
                 } else {
                     panic!("{}: token {} expected Rectangular", test_name, index);
                 }
             }
             NumCheck::PolarInt(m, a) => {
                 if let NumberValue::Polar { magnitude, angle } = &kind.value {
-                    match magnitude {
-                        RealRepr::Finite(FiniteReal {
-                            kind: FiniteRealKind::Integer,
-                            spelling,
-                        }) => {
-                            assert_eq!(spelling, m)
-                        }
-                        _ => {
-                            panic!("{}: token {} expected Integer magnitude", test_name, index)
-                        }
-                    }
-                    match angle {
-                        RealRepr::Finite(FiniteReal {
-                            kind: FiniteRealKind::Integer,
-                            spelling,
-                        }) => {
-                            assert_eq!(spelling, a)
-                        }
-                        _ => panic!("{}: token {} expected Integer angle", test_name, index),
-                    }
+                    assert_finite(
+                        magnitude,
+                        FiniteRealKind::Integer,
+                        m,
+                        test_name,
+                        index,
+                        "magnitude",
+                    );
+                    assert_finite(angle, FiniteRealKind::Integer, a, test_name, index, "angle");
                 } else {
                     panic!("{}: token {} expected Polar", test_name, index);
                 }
             }
             NumCheck::PolarRatDec(m, a) => {
                 if let NumberValue::Polar { magnitude, angle } = &kind.value {
-                    match magnitude {
-                        RealRepr::Finite(FiniteReal {
-                            kind: FiniteRealKind::Rational,
-                            spelling,
-                        }) => {
-                            assert_eq!(spelling, m)
-                        }
-                        _ => {
-                            panic!("{}: token {} expected Rational magnitude", test_name, index)
-                        }
-                    }
-                    match angle {
-                        RealRepr::Finite(FiniteReal {
-                            kind: FiniteRealKind::Decimal,
-                            spelling,
-                        }) => {
-                            assert_eq!(spelling, a)
-                        }
-                        _ => panic!("{}: token {} expected Decimal angle", test_name, index),
-                    }
+                    assert_finite(
+                        magnitude,
+                        FiniteRealKind::Rational,
+                        m,
+                        test_name,
+                        index,
+                        "magnitude",
+                    );
+                    assert_finite(angle, FiniteRealKind::Decimal, a, test_name, index, "angle");
                 } else {
                     panic!("{}: token {} expected Polar", test_name, index);
                 }
             }
             NumCheck::Inf(k) => {
-                if let NumberValue::Real(RealRepr::Infnan(val)) = &kind.value {
-                    assert_eq!(val, k, "{}: token {} infnan mismatch", test_name, index);
+                if let NumberValue::Real(real) = &kind.value {
+                    assert_infnan(real, *k, test_name, index, "real");
                 } else {
-                    panic!("{}: token {} expected Infnan", test_name, index);
+                    panic!("{}: token {} expected Real", test_name, index);
                 }
             }
             NumCheck::RectInfImag(r, k) => {
                 if let NumberValue::Rectangular { real, imag } = &kind.value {
-                    match real {
-                        RealRepr::Finite(FiniteReal {
-                            kind: FiniteRealKind::Integer,
-                            spelling,
-                        }) => {
-                            assert_eq!(spelling, r)
-                        }
-                        _ => {
-                            panic!("{}: token {} expected Integer real part", test_name, index)
-                        }
-                    }
-                    match imag {
-                        RealRepr::Infnan(val) => assert_eq!(val, k),
-                        _ => panic!("{}: token {} expected Infnan imag part", test_name, index),
-                    }
+                    assert_finite(
+                        real,
+                        FiniteRealKind::Integer,
+                        r,
+                        test_name,
+                        index,
+                        "real part",
+                    );
+                    assert_infnan(imag, *k, test_name, index, "imag part");
                 } else {
                     panic!("{}: token {} expected Rectangular", test_name, index);
                 }
@@ -551,7 +588,7 @@ fn number_test_cases() -> Vec<TestCase> {
             name: "decimal_complex_unit_imaginary_with_real",
             input: "1+i 1-i",
             expected: Expected::Tokens(vec![
-                TokenMatcher::Num("1+i", NumCheck::RectInt("1", "1")),
+                TokenMatcher::Num("1+i", NumCheck::RectInt("1", "+1")),
                 TokenMatcher::Num("1-i", NumCheck::RectInt("1", "-1")),
             ]),
         },
@@ -559,7 +596,7 @@ fn number_test_cases() -> Vec<TestCase> {
             name: "pure_imaginary_and_polar",
             input: "+i -i +2i -3/4i 1@2 -3/4@5.0 +inf.0i 1+inf.0i",
             expected: Expected::Tokens(vec![
-                TokenMatcher::Num("+i", NumCheck::RectInt("0", "1")),
+                TokenMatcher::Num("+i", NumCheck::RectInt("0", "+1")),
                 TokenMatcher::Num("-i", NumCheck::RectInt("0", "-1")),
                 TokenMatcher::Num("+2i", NumCheck::RectInt("0", "+2")),
                 TokenMatcher::Num("-3/4i", NumCheck::RectRat("0", "-3/4")),
@@ -624,14 +661,11 @@ fn number_test_cases() -> Vec<TestCase> {
             expected: Expected::Tokens(vec![
                 TokenMatcher::Num(
                     "#b1+i",
-                    NumCheck::Radix(NumberRadix::Binary, Box::new(NumCheck::RectInt("1", "1"))),
+                    NumCheck::Radix(2, Box::new(NumCheck::RectInt("1", "+1"))),
                 ),
                 TokenMatcher::Num(
                     "#x1-i",
-                    NumCheck::Radix(
-                        NumberRadix::Hexadecimal,
-                        Box::new(NumCheck::RectInt("1", "-1")),
-                    ),
+                    NumCheck::Radix(16, Box::new(NumCheck::RectInt("1", "-1"))),
                 ),
             ]),
         },
@@ -699,10 +733,7 @@ fn number_test_cases() -> Vec<TestCase> {
                     NumCheck::Exact(Box::new(NumCheck::PolarInt("1", "2"))),
                 ),
                 TokenMatcher::Num("#d-3/4@5.0", NumCheck::PolarRatDec("-3/4", "5.0")),
-                TokenMatcher::Num(
-                    "#b+inf.0@1",
-                    NumCheck::Radix(NumberRadix::Binary, Box::new(NumCheck::Any)),
-                ), // Simplified check
+                TokenMatcher::Num("#b+inf.0@1", NumCheck::Radix(2, Box::new(NumCheck::Any))), // Simplified check
                 TokenMatcher::Num("-3/4@5.0", NumCheck::PolarRatDec("-3/4", "5.0")),
             ]),
         },
@@ -750,29 +781,23 @@ fn number_test_cases() -> Vec<TestCase> {
                 ),
                 TokenMatcher::Num(
                     "#b+inf.0",
-                    NumCheck::Radix(
-                        NumberRadix::Binary,
-                        Box::new(NumCheck::Inf(InfinityNan::PositiveInfinity)),
-                    ),
+                    NumCheck::Radix(2, Box::new(NumCheck::Inf(InfinityNan::PositiveInfinity))),
                 ),
                 TokenMatcher::Num(
                     "#x-nan.0",
-                    NumCheck::Radix(
-                        NumberRadix::Hexadecimal,
-                        Box::new(NumCheck::Inf(InfinityNan::NegativeNaN)),
-                    ),
+                    NumCheck::Radix(16, Box::new(NumCheck::Inf(InfinityNan::NegativeNaN))),
                 ),
                 TokenMatcher::Num(
                     "#b#e+inf.0",
                     NumCheck::Exact(Box::new(NumCheck::Radix(
-                        NumberRadix::Binary,
+                        2,
                         Box::new(NumCheck::Inf(InfinityNan::PositiveInfinity)),
                     ))),
                 ),
                 TokenMatcher::Num(
                     "#i#x-nan.0",
                     NumCheck::Inexact(Box::new(NumCheck::Radix(
-                        NumberRadix::Hexadecimal,
+                        16,
                         Box::new(NumCheck::Inf(InfinityNan::NegativeNaN)),
                     ))),
                 ),
@@ -784,37 +809,22 @@ fn number_test_cases() -> Vec<TestCase> {
             expected: Expected::Tokens(vec![
                 TokenMatcher::Num(
                     "#b1010",
-                    NumCheck::Radix(NumberRadix::Binary, Box::new(NumCheck::Int("1010"))),
+                    NumCheck::Radix(2, Box::new(NumCheck::Int("1010"))),
                 ),
-                TokenMatcher::Num(
-                    "#o77",
-                    NumCheck::Radix(NumberRadix::Octal, Box::new(NumCheck::Int("77"))),
-                ),
-                TokenMatcher::Num(
-                    "#x1f",
-                    NumCheck::Radix(NumberRadix::Hexadecimal, Box::new(NumCheck::Int("1f"))),
-                ),
+                TokenMatcher::Num("#o77", NumCheck::Radix(8, Box::new(NumCheck::Int("77")))),
+                TokenMatcher::Num("#x1f", NumCheck::Radix(16, Box::new(NumCheck::Int("1f")))),
                 TokenMatcher::Num(
                     "#b101/11",
-                    NumCheck::Radix(NumberRadix::Binary, Box::new(NumCheck::Rat("101/11"))),
+                    NumCheck::Radix(2, Box::new(NumCheck::Rat("101/11"))),
                 ),
-                TokenMatcher::Num(
-                    "#xA/F",
-                    NumCheck::Radix(NumberRadix::Hexadecimal, Box::new(NumCheck::Rat("A/F"))),
-                ),
+                TokenMatcher::Num("#xA/F", NumCheck::Radix(16, Box::new(NumCheck::Rat("A/F")))),
                 TokenMatcher::Num(
                     "#b#e1",
-                    NumCheck::Exact(Box::new(NumCheck::Radix(
-                        NumberRadix::Binary,
-                        Box::new(NumCheck::Int("1")),
-                    ))),
+                    NumCheck::Exact(Box::new(NumCheck::Radix(2, Box::new(NumCheck::Int("1"))))),
                 ),
                 TokenMatcher::Num(
                     "#i#o7",
-                    NumCheck::Inexact(Box::new(NumCheck::Radix(
-                        NumberRadix::Octal,
-                        Box::new(NumCheck::Int("7")),
-                    ))),
+                    NumCheck::Inexact(Box::new(NumCheck::Radix(8, Box::new(NumCheck::Int("7"))))),
                 ),
             ]),
         },
@@ -864,38 +874,35 @@ fn number_test_cases() -> Vec<TestCase> {
             expected: Expected::Tokens(vec![
                 TokenMatcher::Num(
                     "#b1+10i",
-                    NumCheck::Radix(NumberRadix::Binary, Box::new(NumCheck::RectInt("1", "+10"))),
+                    NumCheck::Radix(2, Box::new(NumCheck::RectInt("1", "+10"))),
                 ),
                 TokenMatcher::Num(
                     "#x1-2i",
-                    NumCheck::Radix(
-                        NumberRadix::Hexadecimal,
-                        Box::new(NumCheck::RectInt("1", "-2")),
-                    ),
+                    NumCheck::Radix(16, Box::new(NumCheck::RectInt("1", "-2"))),
                 ),
                 TokenMatcher::Num(
                     "#b+i",
-                    NumCheck::Radix(NumberRadix::Binary, Box::new(NumCheck::RectInt("0", "1"))),
+                    NumCheck::Radix(2, Box::new(NumCheck::RectInt("0", "+1"))),
                 ),
                 TokenMatcher::Num(
                     "#o-i",
-                    NumCheck::Radix(NumberRadix::Octal, Box::new(NumCheck::RectInt("0", "-1"))),
+                    NumCheck::Radix(8, Box::new(NumCheck::RectInt("0", "-1"))),
                 ),
                 TokenMatcher::Num(
                     "#b1@10",
-                    NumCheck::Radix(NumberRadix::Binary, Box::new(NumCheck::PolarInt("1", "10"))),
+                    NumCheck::Radix(2, Box::new(NumCheck::PolarInt("1", "10"))),
                 ),
                 TokenMatcher::Num(
                     "#x1+inf.0i",
                     NumCheck::Radix(
-                        NumberRadix::Hexadecimal,
+                        16,
                         Box::new(NumCheck::RectInfImag("1", InfinityNan::PositiveInfinity)),
                     ),
                 ),
                 TokenMatcher::Num(
                     "#b+inf.0i",
                     NumCheck::Radix(
-                        NumberRadix::Binary,
+                        2,
                         Box::new(NumCheck::RectInfImag("0", InfinityNan::PositiveInfinity)),
                     ),
                 ),
