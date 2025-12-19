@@ -1,7 +1,9 @@
 pub mod datumtraits;
 pub mod lex;
 pub mod minireader;
+pub mod primitivenumbers;
 pub mod reader;
+pub mod samplescheme;
 
 use crate::common::Span;
 
@@ -54,6 +56,9 @@ pub enum ParseError {
     /// instead of reporting a hard error.
     #[error("input is incomplete; more data required")]
     Incomplete,
+
+    #[error("writer error: {0}")]
+    WriterError(String),
 
     /// The input ends in the middle of a token (e.g., `#\`, `1e+`, `3/`).
     ///

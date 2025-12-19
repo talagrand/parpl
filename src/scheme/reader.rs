@@ -1,32 +1,13 @@
 use crate::{
-    common::{Span, Syntax},
+    common::{Interner, Span},
     scheme::{
         ParseError, Unsupported,
-        datumtraits::{PrimitiveOps, SchemeNumberOps, SimpleNumber},
+        datumtraits::{DatumWriter, SchemeNumberOps},
         lex::{self, FiniteRealKind, NumberExactness, SpannedToken, Token},
     },
 };
 
-/// Datum syntax as defined in the "External representations" section
-/// of `spec/syn.md`.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Datum {
-    Boolean(bool),
-    Number(SimpleNumber),
-    Character(char),
-    String(String),
-    Symbol(String),
-    ByteVector(Vec<u8>),
-    /// The empty list `()`.
-    EmptyList,
-    /// Proper and improper lists are represented via pairs.
-    Pair(Box<Syntax<Datum>>, Box<Syntax<Datum>>),
-    Vector(Vec<Syntax<Datum>>),
-    /// A labeled datum: #n=datum
-    Labeled(u64, Box<Syntax<Datum>>),
-    /// A reference to a previously defined label: #n#
-    LabelRef(u64),
-}
+// Datum enum removed. Use generic DatumWriter.
 
 // ============================================================================
 // Token Stream with Datum Comment Handling
@@ -284,11 +265,15 @@ impl<'i> TokenStream<'i> {
     /// This consumes tokens from the stream to form a complete datum,
     /// covering the currently implemented `<simple datum>` and
     /// `<compound datum>` alternatives plus label forms (`#n=` / `#n#`).
-    pub fn parse_datum(&mut self) -> Result<Syntax<Datum>, ParseError> {
-        self.parse_datum_with_max_depth(DEFAULT_MAX_DEPTH)
+    pub fn parse_datum<W: DatumWriter>(&mut self, writer: &mut W) -> Result<(W::Output, Span), ParseError> {
+        self.parse_datum_with_max_depth(writer, DEFAULT_MAX_DEPTH)
     }
 
-    fn parse_datum_with_max_depth(&mut self, depth: u32) -> Result<Syntax<Datum>, ParseError> {
+    fn parse_datum_with_max_depth<W: DatumWriter>(
+        &mut self,
+        writer: &mut W,
+        depth: u32,
+    ) -> Result<(W::Output, Span), ParseError> {
         let token = self
             .next_token_with_max_depth(depth)?
             .ok_or(ParseError::Incomplete)?;
@@ -299,31 +284,63 @@ impl<'i> TokenStream<'i> {
         }
 
         match token.value {
-            Token::Boolean(b) => Ok(Syntax::new(span, Datum::Boolean(b))),
+            Token::Boolean(b) => writer
+                .bool(b, span)
+                .map(|d| (d, span))
+                .map_err(|e| ParseError::WriterError(format!("{:?}", e))),
             Token::Number(n) => {
-                let num = PrimitiveOps::from_literal(&n, span)?;
-                Ok(Syntax::new(span, Datum::Number(num)))
+                let num = W::N::from_literal(&n, span)?;
+                writer
+                    .number(num, span)
+                    .map(|d| (d, span))
+                    .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
             }
-            Token::Character(c) => Ok(Syntax::new(span, Datum::Character(c))),
-            Token::String(s) => Ok(Syntax::new(span, Datum::String(s.into_owned()))),
-            Token::Identifier(s) => Ok(Syntax::new(span, Datum::Symbol(s.into_owned()))),
-
-            Token::LParen => self.parse_list_with_max_depth(span, depth),
-            Token::VectorStart => self.parse_vector_with_max_depth(span, depth),
-            Token::ByteVectorStart => self.parse_bytevector_with_max_depth(span, depth),
-            Token::Quote => self.parse_abbreviation_with_max_depth("quote", span, depth),
-            Token::Backquote => self.parse_abbreviation_with_max_depth("quasiquote", span, depth),
-            Token::Comma => self.parse_abbreviation_with_max_depth("unquote", span, depth),
+            Token::Character(c) => writer
+                .char(c, span)
+                .map(|d| (d, span))
+                .map_err(|e| ParseError::WriterError(format!("{:?}", e))),
+            Token::String(s) => {
+                let id = writer.interner().intern(&s);
+                writer
+                    .string(id, span)
+                    .map(|d| (d, span))
+                    .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
+            }
+            Token::Identifier(s) => {
+                let id = writer.interner().intern(&s);
+                writer
+                    .symbol(id, span)
+                    .map(|d| (d, span))
+                    .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
+            }
+            Token::LParen => self.parse_list_with_max_depth(writer, span, depth),
+            Token::VectorStart => self.parse_vector_with_max_depth(writer, span, depth),
+            Token::ByteVectorStart => self.parse_bytevector_with_max_depth(writer, span, depth),
+            Token::Quote => {
+                self.parse_abbreviation_with_max_depth(writer, "quote", span, depth)
+            }
+            Token::Backquote => {
+                self.parse_abbreviation_with_max_depth(writer, "quasiquote", span, depth)
+            }
+            Token::Comma => {
+                self.parse_abbreviation_with_max_depth(writer, "unquote", span, depth)
+            }
             Token::CommaAt => {
-                self.parse_abbreviation_with_max_depth("unquote-splicing", span, depth)
+                self.parse_abbreviation_with_max_depth(writer, "unquote-splicing", span, depth)
             }
 
             Token::LabelDef(n) => {
-                let datum = self.parse_datum_with_max_depth(depth - 1)?;
-                let span = span.merge(datum.span);
-                Ok(Syntax::new(span, Datum::Labeled(n, Box::new(datum))))
+                let (datum, datum_span) = self.parse_datum_with_max_depth(writer, depth - 1)?;
+                let full_span = span.merge(datum_span);
+                writer
+                    .labeled(n, datum, full_span)
+                    .map(|d| (d, full_span))
+                    .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
             }
-            Token::LabelRef(n) => Ok(Syntax::new(span, Datum::LabelRef(n))),
+            Token::LabelRef(n) => writer
+                .label_ref(n, span)
+                .map(|d| (d, span))
+                .map_err(|e| ParseError::WriterError(format!("{:?}", e))),
 
             // Invalid start of datum
             Token::RParen | Token::Dot => Err(ParseError::syntax(
@@ -344,11 +361,12 @@ impl<'i> TokenStream<'i> {
     /// <list> ::= ( <datum>* )
     ///          | ( <datum>+ . <datum> )
     /// ```
-    fn parse_list_with_max_depth(
+    fn parse_list_with_max_depth<W: DatumWriter>(
         &mut self,
+        writer: &mut W,
         start_span: Span,
         depth: u32,
-    ) -> Result<Syntax<Datum>, ParseError> {
+    ) -> Result<(W::Output, Span), ParseError> {
         if depth == 0 {
             return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
         }
@@ -365,9 +383,6 @@ impl<'i> TokenStream<'i> {
                         .next_token_with_max_depth(depth)?
                         .ok_or(ParseError::Incomplete)?;
                     end_span = token.span;
-                    if tail.is_none() {
-                        tail = Some(Syntax::new(end_span, Datum::EmptyList));
-                    }
                     break;
                 }
                 Some(Token::Dot) => {
@@ -383,7 +398,7 @@ impl<'i> TokenStream<'i> {
                         ));
                     }
                     self.next_token_with_max_depth(depth)?; // consume dot
-                    let tail_datum = self.parse_datum_with_max_depth(depth - 1)?;
+                    let (tail_datum, _) = self.parse_datum_with_max_depth(writer, depth - 1)?;
                     tail = Some(tail_datum);
 
                     // Expect RParen
@@ -404,20 +419,23 @@ impl<'i> TokenStream<'i> {
                 }
                 None => return Err(ParseError::Incomplete),
                 _ => {
-                    elements.push(self.parse_datum_with_max_depth(depth - 1)?);
+                    elements.push(self.parse_datum_with_max_depth(writer, depth - 1)?.0);
                 }
             }
         }
 
-        // Construct the list from right to left
-        let mut current = tail.unwrap();
-
-        for elem in elements.into_iter().rev() {
-            let span = elem.span.merge(current.span);
-            current = Syntax::new(span, Datum::Pair(Box::new(elem), Box::new(current)));
+        let span = start_span.merge(end_span);
+        if let Some(tail) = tail {
+            writer
+                .improper_list(elements, tail, span)
+                .map(|d| (d, span))
+                .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
+        } else {
+            writer
+                .list(elements, span)
+                .map(|d| (d, span))
+                .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
         }
-
-        Ok(Syntax::new(start_span.merge(end_span), current.value))
     }
 
     /// Parse a `<vector>` once the `#(` prefix has been consumed.
@@ -427,11 +445,12 @@ impl<'i> TokenStream<'i> {
     /// ```text
     /// <vector> ::= #( <datum>* )
     /// ```
-    fn parse_vector_with_max_depth(
+    fn parse_vector_with_max_depth<W: DatumWriter>(
         &mut self,
+        writer: &mut W,
         start_span: Span,
         depth: u32,
-    ) -> Result<Syntax<Datum>, ParseError> {
+    ) -> Result<(W::Output, Span), ParseError> {
         if depth == 0 {
             return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
         }
@@ -450,15 +469,16 @@ impl<'i> TokenStream<'i> {
                 }
                 None => return Err(ParseError::Incomplete),
                 _ => {
-                    elements.push(self.parse_datum_with_max_depth(depth - 1)?);
+                    elements.push(self.parse_datum_with_max_depth(writer, depth - 1)?.0);
                 }
             }
         }
 
-        Ok(Syntax::new(
-            start_span.merge(end_span),
-            Datum::Vector(elements),
-        ))
+        let span = start_span.merge(end_span);
+        writer
+            .vector(elements, span)
+            .map(|d| (d, span))
+            .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
     }
 
     /// Parse an `<abbreviation>` (quote, quasiquote, unquote variants).
@@ -471,33 +491,27 @@ impl<'i> TokenStream<'i> {
     /// ```
     ///
     /// Each abbreviation expands into its desugared list form (e.g., `'x` ⇒ `(quote x)`).
-    fn parse_abbreviation_with_max_depth(
+    fn parse_abbreviation_with_max_depth<W: DatumWriter>(
         &mut self,
+        writer: &mut W,
         name: &str,
         start_span: Span,
         depth: u32,
-    ) -> Result<Syntax<Datum>, ParseError> {
+    ) -> Result<(W::Output, Span), ParseError> {
         if depth == 0 {
             return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
         }
 
-        let datum = self.parse_datum_with_max_depth(depth - 1)?;
-        let end_span = datum.span;
-
-        // Construct (name datum)
-        // tail = Pair(datum, EmptyList)
-        // We use the datum's span for the tail parts as they don't have their own source tokens
-        let empty = Syntax::new(end_span, Datum::EmptyList);
-        let tail = Syntax::new(end_span, Datum::Pair(Box::new(datum), Box::new(empty)));
-
-        // head = Pair(name, tail)
-        let sym = Syntax::new(start_span, Datum::Symbol(name.to_string()));
-        let head = Syntax::new(
-            start_span.merge(end_span),
-            Datum::Pair(Box::new(sym), Box::new(tail)),
-        );
-
-        Ok(head)
+        let (datum, datum_span) = self.parse_datum_with_max_depth(writer, depth - 1)?;
+        let span = start_span.merge(datum_span);
+        
+        let sym_id = writer.interner().intern(name);
+        let sym = writer.symbol(sym_id, start_span).map_err(|e| ParseError::WriterError(format!("{:?}", e)))?;
+        
+        // Build (name datum)
+        writer.list([sym, datum], span)
+            .map(|d| (d, span))
+            .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
     }
 
     /// Parse a `<bytevector>` datum once the `#u8(` prefix has been consumed.
@@ -508,11 +522,12 @@ impl<'i> TokenStream<'i> {
     /// <bytevector> ::= #u8( <byte>* )
     /// <byte> ::= any exact integer between 0 and 255
     /// ```
-    fn parse_bytevector_with_max_depth(
+    fn parse_bytevector_with_max_depth<W: DatumWriter>(
         &mut self,
+        writer: &mut W,
         start_span: Span,
         depth: u32,
-    ) -> Result<Syntax<Datum>, ParseError> {
+    ) -> Result<(W::Output, Span), ParseError> {
         if depth == 0 {
             return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
         }
@@ -556,10 +571,10 @@ impl<'i> TokenStream<'i> {
             }
         }
 
-        Ok(Syntax::new(
-            start_span.merge(end_span),
-            Datum::ByteVector(elements),
-        ))
+        let span = start_span.merge(end_span);
+        writer.bytevector(&elements, span)
+            .map(|d| (d, span))
+            .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
     }
 }
 
@@ -624,18 +639,19 @@ fn integer_spelling_to_byte(spelling: &str, radix: u32) -> Option<u8> {
 /// <datum> ::= <simple datum> | <compound datum>
 ///           | <label> = <datum> | <label> #
 /// ```
-pub fn parse_datum(source: &str) -> Result<Syntax<Datum>, ParseError> {
-    parse_datum_with_max_depth(source, DEFAULT_MAX_DEPTH)
+pub fn parse_datum<W: DatumWriter>(source: &str, writer: &mut W) -> Result<(W::Output, Span), ParseError> {
+    parse_datum_with_max_depth(source, writer, DEFAULT_MAX_DEPTH)
 }
 
 /// Parse a single `<datum>` from the given source string with an
 /// explicit maximum nesting depth.
-pub fn parse_datum_with_max_depth(
+pub fn parse_datum_with_max_depth<W: DatumWriter>(
     source: &str,
+    writer: &mut W,
     max_depth: u32,
-) -> Result<Syntax<Datum>, ParseError> {
+) -> Result<(W::Output, Span), ParseError> {
     let mut stream = TokenStream::from_source(source);
-    let datum = stream.parse_datum_with_max_depth(max_depth)?;
+    let datum = stream.parse_datum_with_max_depth(writer, max_depth)?;
 
     if !stream.is_empty() {
         // If there are remaining tokens, it's an error for a single datum parse
@@ -643,7 +659,7 @@ pub fn parse_datum_with_max_depth(
         return Err(ParseError::lexical(
             next.span,
             "<datum>",
-            "extra tokens after datum",
+            "unexpected token after datum",
         ));
     }
 
@@ -654,6 +670,8 @@ pub fn parse_datum_with_max_depth(
 mod tests {
     use super::*;
     use crate::scheme::{Unsupported, lex::Token};
+    use crate::scheme::samplescheme::{Datum, SampleWriter};
+    use crate::scheme::primitivenumbers::SimpleNumber;
 
     struct TestCase {
         name: &'static str,
@@ -708,10 +726,11 @@ mod tests {
         }
 
         fn run_datum(&self, expected: &Expected<DatumMatcher>) {
-            let result = parse_datum(self.input);
+            let mut writer = SampleWriter::new();
+            let result = parse_datum(self.input, &mut writer);
             match expected {
                 Expected::Success(matcher) => {
-                    let syntax = result
+                    let (syntax, _) = result
                         .unwrap_or_else(|e| panic!("{}: expected success, got {:?}", self.name, e));
                     matcher.check(&syntax.value, self.name);
                 }
@@ -863,7 +882,8 @@ mod tests {
             input.push(')');
         }
 
-        let result = parse_datum(&input);
+        let mut writer = SampleWriter::new();
+        let result = parse_datum(&input, &mut writer);
         let err = result.expect_err("expected depth-limit error");
         ErrorMatcher::UnsupportedDepth.check(&err, "depth_limit_enforced_by_default");
     }
@@ -881,7 +901,8 @@ mod tests {
             input.push(')');
         }
 
-        let syntax = parse_datum_with_max_depth(&input, 128)
+        let mut writer = SampleWriter::new();
+        let (syntax, _) = parse_datum_with_max_depth(&input, &mut writer, 128)
             .expect("expected success with increased max depth");
         if let Datum::Pair(_, _) = syntax.value {
             // Shallow sanity check: we at least parsed a non-trivial list.
