@@ -1,7 +1,6 @@
-use crate::common::{Interner, Span, StringId};
-use crate::scheme::{
-    ParseError,
-    lex,
+use crate::{
+    common::{Interner, Span, StringId},
+    scheme::{ParseError, lex},
 };
 use std::fmt::Debug;
 
@@ -23,7 +22,6 @@ pub enum DatumKind {
     // For opaque host objects or other extensions
     Other,
 }
-
 
 /// Abstract interface for Scheme number operations.
 /// This decouples the Reader and Inspector from the concrete number representation.
@@ -101,11 +99,16 @@ pub trait DatumInspector: Sized {
     }
 
     /// Returns an iterator over list elements (proper or improper).
-    type ListIter<'a>: Iterator<Item = Self::Child<'a>>
+    type ListIter<'a>: Iterator<Item = Self::Child<'a>> + ExactSizeIterator
     where
         Self: 'a;
-    
+
     fn list_iter<'a>(&'a self) -> Self::ListIter<'a>;
+
+    /// Returns the improper tail of the list, if one exists.
+    /// For `(a b . c)`, this returns `Some(c)`.
+    /// For `(a b)`, this returns `None`.
+    fn improper_tail<'a>(&'a self) -> Option<Self::Child<'a>>;
 }
 
 pub trait DatumWriter {
@@ -166,7 +169,12 @@ pub trait DatumWriter {
         I: IntoIterator<Item = Self::Output>,
         I::IntoIter: ExactSizeIterator;
 
-    fn labeled(&mut self, id: u64, inner: Self::Output, s: Span) -> Result<Self::Output, Self::Error>;
+    fn labeled(
+        &mut self,
+        id: u64,
+        inner: Self::Output,
+        s: Span,
+    ) -> Result<Self::Output, Self::Error>;
 
     fn label_ref(&mut self, id: u64, s: Span) -> Result<Self::Output, Self::Error>;
 

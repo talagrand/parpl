@@ -1,6 +1,10 @@
-use crate::common::{Interner, Span, Syntax};
-use crate::scheme::datumtraits::{DatumInspector, DatumKind, DatumWriter};
-use crate::scheme::primitivenumbers::{PrimitiveOps, SimpleNumber};
+use crate::{
+    common::{Interner, Span, Syntax},
+    scheme::{
+        datumtraits::{DatumInspector, DatumKind, DatumWriter},
+        primitivenumbers::{PrimitiveOps, SimpleNumber},
+    },
+};
 use std::collections::HashMap;
 
 /// A simple string ID for our sample implementation.
@@ -82,11 +86,7 @@ impl DatumWriter for SampleWriter {
         Ok(Syntax::new(s, Datum::Boolean(v)))
     }
 
-    fn number(
-        &mut self,
-        v: SimpleNumber,
-        s: Span,
-    ) -> Result<Self::Output, Self::Error> {
+    fn number(&mut self, v: SimpleNumber, s: Span) -> Result<Self::Output, Self::Error> {
         Ok(Syntax::new(s, Datum::Number(v)))
     }
 
@@ -121,7 +121,7 @@ impl DatumWriter for SampleWriter {
         // Standard cons-list is built right-to-left or using a builder.
         // Since we have ExactSizeIterator, we can collect and reverse.
         let elements: Vec<_> = iter.into_iter().collect();
-        
+
         // The span `s` covers the whole list.
         // For the intermediate pairs, we might not have precise spans unless we synthesize them.
         // But `Datum::Pair` takes `Box<Syntax<Datum>>`.
@@ -129,7 +129,7 @@ impl DatumWriter for SampleWriter {
         // The empty list at the end usually has the span of the closing parenthesis or is implicit.
         // Let's use `s` for the final empty list for now, or a dummy span.
         // Actually, `Datum::EmptyList` is a Datum. `Syntax::new(Datum::EmptyList, ...)`
-        
+
         let mut tail = Syntax::new(s, Datum::EmptyList); // Use the list span for the nil?
 
         for elem in elements.into_iter().rev() {
@@ -142,7 +142,7 @@ impl DatumWriter for SampleWriter {
             let pair = Datum::Pair(Box::new(elem), Box::new(tail));
             tail = Syntax::new(s, pair);
         }
-        
+
         Ok(tail)
     }
 
@@ -158,7 +158,7 @@ impl DatumWriter for SampleWriter {
     {
         let mut result_tail = tail;
         let elements: Vec<_> = head.into_iter().collect();
-        
+
         for elem in elements.into_iter().rev() {
             let pair = Datum::Pair(Box::new(elem), Box::new(result_tail));
             result_tail = Syntax::new(s, pair);
@@ -204,52 +204,78 @@ pub struct StrId<'a>(&'a str);
 
 pub struct SampleListIter<'a> {
     current: Option<&'a Syntax<Datum>>,
+    len: usize,
 }
 
 impl<'a> Iterator for SampleListIter<'a> {
     type Item = &'a Syntax<Datum>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.len == 0 {
+            return None;
+        }
         let current = self.current?;
         match &current.value {
             Datum::Pair(head, tail) => {
+                self.len -= 1;
                 self.current = Some(tail);
                 Some(head)
             }
-            Datum::EmptyList => {
-                self.current = None;
-                None
-            }
             _ => {
-                // Improper list end. Stop iteration.
+                // Should not happen if len > 0 and structure is immutable/consistent
+                self.len = 0;
                 self.current = None;
                 None
             }
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
 }
+
+impl<'a> ExactSizeIterator for SampleListIter<'a> {}
 
 impl<'a> SampleListIter<'a> {
     fn new(start: &'a Syntax<Datum>) -> Self {
+        let mut len = 0;
+        let mut curr = start;
+        while let Datum::Pair(_, tail) = &curr.value {
+            len += 1;
+            curr = tail;
+        }
         Self {
             current: Some(start),
+            len,
         }
     }
 }
 
 impl<'a> DatumInspector for &'a Syntax<Datum> {
     type N = PrimitiveOps;
-    type StringId<'b> = StrId<'b> where Self: 'b;
-    type Child<'b> = &'b Syntax<Datum> where Self: 'b;
-    type VectorIter<'b> = std::slice::Iter<'b, Syntax<Datum>> where Self: 'b;
-    type ListIter<'b> = SampleListIter<'b> where Self: 'b;
+    type StringId<'b>
+        = StrId<'b>
+    where
+        Self: 'b;
+    type Child<'b>
+        = &'b Syntax<Datum>
+    where
+        Self: 'b;
+    type VectorIter<'b>
+        = std::slice::Iter<'b, Syntax<Datum>>
+    where
+        Self: 'b;
+    type ListIter<'b>
+        = SampleListIter<'b>
+    where
+        Self: 'b;
 
     fn kind(&self) -> DatumKind {
         match &self.value {
             Datum::Boolean(_) => DatumKind::Bool,
             Datum::Number(SimpleNumber::Integer(_)) => DatumKind::Integer,
             Datum::Number(SimpleNumber::Float(_)) => DatumKind::Float,
-            Datum::Number(SimpleNumber::Literal(_)) => DatumKind::Number,
             Datum::Character(_) => DatumKind::Character,
             Datum::String(_) => DatumKind::String,
             Datum::Symbol(_) => DatumKind::Symbol,
@@ -340,5 +366,16 @@ impl<'a> DatumInspector for &'a Syntax<Datum> {
 
     fn list_iter<'b>(&'b self) -> Self::ListIter<'b> {
         SampleListIter::new(self)
+    }
+
+    fn improper_tail<'b>(&'b self) -> Option<Self::Child<'b>> {
+        let mut curr = *self;
+        loop {
+            match &curr.value {
+                Datum::Pair(_, tail) => curr = tail.as_ref(),
+                Datum::EmptyList => return None,
+                _ => return Some(curr),
+            }
+        }
     }
 }

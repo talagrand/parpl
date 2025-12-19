@@ -1,9 +1,11 @@
-use crate::common::Span;
-use crate::scheme::{
-    lex::{self, FiniteRealKind, NumberExactness, Sign},
-    ParseError,
+use crate::{
+    common::Span,
+    scheme::{
+        ParseError, Unsupported,
+        datumtraits::SchemeNumberOps,
+        lex::{self, FiniteRealKind, NumberExactness, Sign},
+    },
 };
-use crate::scheme::datumtraits::SchemeNumberOps;
 
 /// A simple number representation that can hold integers, floats, or
 /// fall back to the raw literal for complex cases.
@@ -11,8 +13,6 @@ use crate::scheme::datumtraits::SchemeNumberOps;
 pub enum SimpleNumber {
     Integer(i64),
     Float(f64),
-    // Fallback for big/rational/complex/exact-decimals
-    Literal(String),
 }
 
 /// Default implementation using `SimpleNumber`.
@@ -22,7 +22,7 @@ pub struct PrimitiveOps;
 impl SchemeNumberOps for PrimitiveOps {
     type Number = SimpleNumber;
 
-    fn from_literal(lit: &lex::NumberLiteral<'_>, _span: Span) -> Result<Self::Number, ParseError> {
+    fn from_literal(lit: &lex::NumberLiteral<'_>, span: Span) -> Result<Self::Number, ParseError> {
         let kind = &lit.kind;
 
         let radix = kind.radix;
@@ -73,7 +73,10 @@ impl SchemeNumberOps for PrimitiveOps {
                     }
                     (_, FiniteRealKind::Decimal) => {
                         if kind.exactness == NumberExactness::Exact {
-                            return Ok(SimpleNumber::Literal(lit.text.to_string()));
+                            return Err(ParseError::unsupported(
+                                span,
+                                Unsupported::InvalidIntegerFormat,
+                            ));
                         }
 
                         // Stdlib float parsing only supports base 10 decimal spellings.
@@ -106,7 +109,7 @@ impl SchemeNumberOps for PrimitiveOps {
         }
 
         // Fallback
-        Ok(SimpleNumber::Literal(lit.text.to_string()))
+        Err(ParseError::unsupported(span, Unsupported::NonIntegerNumber))
     }
 
     fn eqv(a: &Self::Number, b: &Self::Number) -> bool {
@@ -116,11 +119,6 @@ impl SchemeNumberOps for PrimitiveOps {
                 // Scheme eqv? on floats is usually IEEE equality,
                 // but exact behavior on NaNs is unspecified/implementation-dependent.
                 // For now, standard PartialEq is a reasonable start.
-                a == b
-            }
-            (SimpleNumber::Literal(a), SimpleNumber::Literal(b)) => {
-                // Fallback: compare source spellings.
-                // This is imperfect for `1` vs `01` but sufficient for the example `SimpleNumber`.
                 a == b
             }
             _ => false,

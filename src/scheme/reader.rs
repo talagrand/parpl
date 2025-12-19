@@ -265,7 +265,10 @@ impl<'i> TokenStream<'i> {
     /// This consumes tokens from the stream to form a complete datum,
     /// covering the currently implemented `<simple datum>` and
     /// `<compound datum>` alternatives plus label forms (`#n=` / `#n#`).
-    pub fn parse_datum<W: DatumWriter>(&mut self, writer: &mut W) -> Result<(W::Output, Span), ParseError> {
+    pub fn parse_datum<W: DatumWriter>(
+        &mut self,
+        writer: &mut W,
+    ) -> Result<(W::Output, Span), ParseError> {
         self.parse_datum_with_max_depth(writer, DEFAULT_MAX_DEPTH)
     }
 
@@ -316,15 +319,11 @@ impl<'i> TokenStream<'i> {
             Token::LParen => self.parse_list_with_max_depth(writer, span, depth),
             Token::VectorStart => self.parse_vector_with_max_depth(writer, span, depth),
             Token::ByteVectorStart => self.parse_bytevector_with_max_depth(writer, span, depth),
-            Token::Quote => {
-                self.parse_abbreviation_with_max_depth(writer, "quote", span, depth)
-            }
+            Token::Quote => self.parse_abbreviation_with_max_depth(writer, "quote", span, depth),
             Token::Backquote => {
                 self.parse_abbreviation_with_max_depth(writer, "quasiquote", span, depth)
             }
-            Token::Comma => {
-                self.parse_abbreviation_with_max_depth(writer, "unquote", span, depth)
-            }
+            Token::Comma => self.parse_abbreviation_with_max_depth(writer, "unquote", span, depth),
             Token::CommaAt => {
                 self.parse_abbreviation_with_max_depth(writer, "unquote-splicing", span, depth)
             }
@@ -504,12 +503,15 @@ impl<'i> TokenStream<'i> {
 
         let (datum, datum_span) = self.parse_datum_with_max_depth(writer, depth - 1)?;
         let span = start_span.merge(datum_span);
-        
+
         let sym_id = writer.interner().intern(name);
-        let sym = writer.symbol(sym_id, start_span).map_err(|e| ParseError::WriterError(format!("{:?}", e)))?;
-        
+        let sym = writer
+            .symbol(sym_id, start_span)
+            .map_err(|e| ParseError::WriterError(format!("{:?}", e)))?;
+
         // Build (name datum)
-        writer.list([sym, datum], span)
+        writer
+            .list([sym, datum], span)
             .map(|d| (d, span))
             .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
     }
@@ -572,7 +574,8 @@ impl<'i> TokenStream<'i> {
         }
 
         let span = start_span.merge(end_span);
-        writer.bytevector(&elements, span)
+        writer
+            .bytevector(&elements, span)
             .map(|d| (d, span))
             .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
     }
@@ -639,7 +642,10 @@ fn integer_spelling_to_byte(spelling: &str, radix: u32) -> Option<u8> {
 /// <datum> ::= <simple datum> | <compound datum>
 ///           | <label> = <datum> | <label> #
 /// ```
-pub fn parse_datum<W: DatumWriter>(source: &str, writer: &mut W) -> Result<(W::Output, Span), ParseError> {
+pub fn parse_datum<W: DatumWriter>(
+    source: &str,
+    writer: &mut W,
+) -> Result<(W::Output, Span), ParseError> {
     parse_datum_with_max_depth(source, writer, DEFAULT_MAX_DEPTH)
 }
 
@@ -669,9 +675,9 @@ pub fn parse_datum_with_max_depth<W: DatumWriter>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scheme::{Unsupported, lex::Token};
-    use crate::scheme::samplescheme::{Datum, SampleWriter};
     use crate::scheme::primitivenumbers::SimpleNumber;
+    use crate::scheme::samplescheme::{Datum, SampleWriter};
+    use crate::scheme::{Unsupported, lex::Token};
 
     struct TestCase {
         name: &'static str,
