@@ -7,6 +7,7 @@ edition = "2024"
 default = ["cel", "scheme"]
 cel = ["dep:pest", "dep:pest_derive"]
 scheme = ["dep:winnow", "dep:unicase", "dep:thiserror"]
+samples = []
 
 [dependencies]
 winnow = { version = "0.7.13", optional = true }

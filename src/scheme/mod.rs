@@ -1,9 +1,9 @@
 pub mod datumtraits;
 pub mod lex;
-pub mod minireader;
 pub mod primitivenumbers;
 pub mod reader;
-pub mod samplescheme;
+#[cfg(any(test, feature = "samples"))]
+pub mod samples;
 
 use crate::common::Span;
 

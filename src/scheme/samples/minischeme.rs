@@ -1,10 +1,8 @@
-use crate::common::{Span, Syntax};
-use crate::scheme::lex::{
-    FiniteRealKind, Lexer, NumberExactness, NumberLiteral, NumberValue, RealMagnitude,
-    SpannedToken, Token,
-};
+use crate::common::{Interner, Span};
+use crate::scheme::datumtraits::{DatumInspector, DatumWriter, SchemeNumberOps};
+use crate::scheme::lex::{self, FiniteRealKind, NumberExactness, Sign};
 use crate::scheme::{ParseError, Unsupported};
-use std::iter::Peekable;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -16,138 +14,52 @@ pub enum Value {
     String(String),
     /// Boolean values
     Bool(bool),
-    /// Lists (including proper and improper lists, empty list represents nil)
-    List(Vec<Syntax<Value>>),
+    /// Lists (proper lists only)
+    List(Vec<Value>),
 }
 
-pub struct MiniReader<'a> {
-    lexer: Peekable<Lexer<'a>>,
+/// A simple string ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MiniStringId(u32);
+
+// impl StringId for MiniStringId {}
+
+/// A simple interner.
+#[derive(Default)]
+pub struct MiniInterner {
+    map: HashMap<String, u32>,
+    vec: Vec<String>,
 }
 
-const DEFAULT_MAX_DEPTH: u32 = 64;
+impl Interner for MiniInterner {
+    type Id = MiniStringId;
 
-impl<'a> MiniReader<'a> {
-    pub fn new(source: &'a str) -> Self {
-        let lexer = crate::scheme::lex::lex_with_config(
-            source,
-            crate::scheme::lex::LexConfig {
-                // MiniReader intentionally does not support fold-case
-                // semantics or directives.
-                reject_fold_case: true,
-                // MiniReader also does not support comments of any kind;
-                // encountering a comment is reported as Unsupported::Comments.
-                reject_comments: true,
-            },
-        );
-        Self {
-            lexer: lexer.peekable(),
+    fn intern(&mut self, text: &str) -> Self::Id {
+        if let Some(&id) = self.map.get(text) {
+            return MiniStringId(id);
         }
+        let id = self.vec.len() as u32;
+        self.vec.push(text.to_string());
+        self.map.insert(text.to_string(), id);
+        MiniStringId(id)
     }
 
-    fn peek(&mut self) -> Result<Option<&SpannedToken<'a>>, ParseError> {
-        match self.lexer.peek() {
-            Some(Ok(token)) => Ok(Some(token)),
-            Some(Err(e)) => Err(e.clone()),
-            None => Ok(None),
-        }
+    fn resolve(&self, id: Self::Id) -> &str {
+        self.vec.get(id.0 as usize).map(|s| s.as_str()).unwrap()
     }
+}
 
-    fn next(&mut self) -> Result<Option<SpannedToken<'a>>, ParseError> {
-        match self.lexer.next() {
-            Some(Ok(token)) => Ok(Some(token)),
-            Some(Err(e)) => Err(e),
-            None => Ok(None),
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MiniNumberOps;
 
-    pub fn parse_value(&mut self) -> Result<Syntax<Value>, ParseError> {
-        self.parse_value_with_max_depth(DEFAULT_MAX_DEPTH)
-    }
+impl SchemeNumberOps for MiniNumberOps {
+    type Number = i64;
 
-    fn parse_value_with_max_depth(&mut self, depth: u32) -> Result<Syntax<Value>, ParseError> {
-        let token = self.next()?.ok_or(ParseError::Incomplete)?;
-        let span = token.span;
+    fn from_literal(lit: &lex::NumberLiteral<'_>, span: Span) -> Result<Self::Number, ParseError> {
+        // MiniScheme only supports integers.
+        // Logic adapted from minireader.rs parse_number
 
-        if depth == 0 {
-            return Err(ParseError::unsupported(span, Unsupported::DepthLimit));
-        }
-
-        match token.value {
-            Token::DatumComment => {
-                // Recursively parse the next datum and discard it
-                let _ = self.parse_value_with_max_depth(depth - 1)?;
-                // After discarding, parse the next value at the same
-                // depth level.
-                self.parse_value_with_max_depth(depth - 1)
-            }
-            Token::Boolean(b) => Ok(Syntax::new(span, Value::Bool(b))),
-            Token::Identifier(s) => Ok(Syntax::new(span, Value::Symbol(s.to_string()))),
-            Token::String(s) => Ok(Syntax::new(span, Value::String(s.into_owned()))),
-            Token::Number(n) => self.parse_number(n, span),
-            Token::LParen => self.parse_list_with_max_depth(span, depth - 1),
-            Token::Quote => {
-                // Expand 'x to (quote x)
-                let datum = self.parse_value_with_max_depth(depth - 1)?;
-                let quote = Syntax::new(span, Value::Symbol("quote".to_string()));
-                let list_span = span.merge(datum.span);
-                Ok(Syntax::new(list_span, Value::List(vec![quote, datum])))
-            }
-            Token::VectorStart => Err(ParseError::unsupported(span, Unsupported::Vectors)),
-            Token::ByteVectorStart => Err(ParseError::unsupported(span, Unsupported::Bytevectors)),
-            Token::RParen => Err(ParseError::syntax(span, "datum", "unexpected ')'")),
-            Token::Dot => Err(ParseError::syntax(span, "datum", "unexpected '.'")),
-            Token::Comma | Token::CommaAt | Token::Backquote => {
-                Err(ParseError::unsupported(span, Unsupported::Quasiquote))
-            }
-            Token::LabelDef(_) | Token::LabelRef(_) => {
-                Err(ParseError::unsupported(span, Unsupported::Labels))
-            }
-            Token::Character(_) => Err(ParseError::unsupported(span, Unsupported::Characters)),
-        }
-    }
-
-    fn parse_list_with_max_depth(
-        &mut self,
-        start_span: Span,
-        depth: u32,
-    ) -> Result<Syntax<Value>, ParseError> {
-        if depth == 0 {
-            return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
-        }
-
-        let mut elements: Vec<Syntax<Value>> = Vec::new();
-        loop {
-            let peeked = self.peek()?;
-            match peeked {
-                Some(t) => match t.value {
-                    Token::RParen => {
-                        let closing = self.next()?.ok_or(ParseError::Incomplete)?;
-                        return Ok(Syntax::new(
-                            start_span.merge(closing.span),
-                            Value::List(elements),
-                        ));
-                    }
-                    Token::Dot => {
-                        return Err(ParseError::unsupported(t.span, Unsupported::ImproperLists));
-                    }
-                    Token::DatumComment => {
-                        // We must handle datum comments here to support lists ending with a comment,
-                        // e.g. `(1 2 #; 3)`. If we delegated to `parse_value`, it would consume
-                        // the comment and then fail to find a value before the closing `)`.
-                        self.next()?; // consume #;
-                        let _ = self.parse_value_with_max_depth(depth - 1)?; // parse and discard
-                    }
-                    _ => {
-                        elements.push(self.parse_value_with_max_depth(depth - 1)?);
-                    }
-                },
-                None => return Err(ParseError::Incomplete),
-            }
-        }
-    }
-
-    fn parse_number(&self, n: NumberLiteral, span: Span) -> Result<Syntax<Value>, ParseError> {
-        match n.kind.exactness {
+        match lit.kind.exactness {
             NumberExactness::Unspecified => {}
             NumberExactness::Exact | NumberExactness::Inexact => {
                 return Err(ParseError::unsupported(
@@ -157,11 +69,11 @@ impl<'a> MiniReader<'a> {
             }
         }
 
-        match n.kind.value {
-            NumberValue::Real(real) => match real.magnitude {
-                RealMagnitude::Finite(ref finite) if finite.kind == FiniteRealKind::Integer => {
-                    let radix = n.kind.radix;
-                    let val = match u64::from_str_radix(finite.spelling, radix) {
+        match &lit.kind.value {
+            lex::NumberValue::Real(real) => match &real.magnitude {
+                lex::RealMagnitude::Finite(finite) if finite.kind == FiniteRealKind::Integer => {
+                    let radix = lit.kind.radix;
+                    let val = match u64::from_str_radix(&finite.spelling, radix) {
                         Ok(v) => v,
                         Err(e) => {
                             let feature = match e.kind() {
@@ -169,7 +81,6 @@ impl<'a> MiniReader<'a> {
                                 | std::num::IntErrorKind::NegOverflow => {
                                     Unsupported::IntegerOverflow
                                 }
-                                // This should never happen, given our lexer's enforcement
                                 _ => Unsupported::InvalidIntegerFormat,
                             };
                             return Err(ParseError::unsupported(span, feature));
@@ -177,10 +88,10 @@ impl<'a> MiniReader<'a> {
                     };
 
                     let result = match real.effective_sign() {
-                        crate::scheme::lex::Sign::Positive => i64::try_from(val).map_err(|_| {
+                        Sign::Positive => i64::try_from(val).map_err(|_| {
                             ParseError::unsupported(span, Unsupported::IntegerOverflow)
                         })?,
-                        crate::scheme::lex::Sign::Negative => {
+                        Sign::Negative => {
                             if val > i64::MIN.unsigned_abs() {
                                 return Err(ParseError::unsupported(
                                     span,
@@ -191,21 +102,149 @@ impl<'a> MiniReader<'a> {
                         }
                     };
 
-                    Ok(Syntax::new(span, Value::Number(result)))
+                    Ok(result)
                 }
                 _ => Err(ParseError::unsupported(span, Unsupported::NonIntegerNumber)),
             },
             _ => Err(ParseError::unsupported(span, Unsupported::NonIntegerNumber)),
         }
     }
-}
-pub fn read(source: &str) -> Result<Syntax<Value>, ParseError> {
-    read_with_max_depth(source, DEFAULT_MAX_DEPTH)
+
+    fn eqv(a: &Self::Number, b: &Self::Number) -> bool {
+        a == b
+    }
 }
 
-pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<Syntax<Value>, ParseError> {
-    let mut reader = MiniReader::new(source);
-    reader.parse_value_with_max_depth(max_depth)
+pub struct MiniWriter {
+    interner: MiniInterner,
+}
+
+impl MiniWriter {
+    pub fn new() -> Self {
+        Self {
+            interner: MiniInterner::default(),
+        }
+    }
+}
+
+impl DatumWriter for MiniWriter {
+    type Output = Value;
+    type Error = ParseError;
+    type Interner = MiniInterner;
+    type StringId = MiniStringId;
+    type N = MiniNumberOps;
+
+    fn interner(&mut self) -> &mut Self::Interner {
+        &mut self.interner
+    }
+
+    fn bool(&mut self, v: bool, _s: Span) -> Result<Self::Output, Self::Error> {
+        Ok(Value::Bool(v))
+    }
+
+    fn number(&mut self, v: i64, _s: Span) -> Result<Self::Output, Self::Error> {
+        Ok(Value::Number(v))
+    }
+
+    fn char(&mut self, _v: char, s: Span) -> Result<Self::Output, Self::Error> {
+        Err(ParseError::unsupported(s, Unsupported::Characters))
+    }
+
+    fn string(&mut self, v: Self::StringId, _s: Span) -> Result<Self::Output, Self::Error> {
+        let str_val = self.interner.resolve(v).to_string();
+        Ok(Value::String(str_val))
+    }
+
+    fn symbol(&mut self, v: Self::StringId, _s: Span) -> Result<Self::Output, Self::Error> {
+        let sym_val = self.interner.resolve(v).to_string();
+        Ok(Value::Symbol(sym_val))
+    }
+
+    fn bytevector(&mut self, _v: &[u8], s: Span) -> Result<Self::Output, Self::Error> {
+        Err(ParseError::unsupported(s, Unsupported::Bytevectors))
+    }
+
+    fn null(&mut self, _s: Span) -> Result<Self::Output, Self::Error> {
+        // Empty list is represented as List(vec![]) in Value::List?
+        // Or maybe we should have an EmptyList variant?
+        // minireader.rs says: "Lists (including proper and improper lists, empty list represents nil) List(Vec<Syntax<Value>>)"
+        // But wait, minireader.rs Value definition:
+        // List(Vec<Syntax<Value>>),
+        // It doesn't have EmptyList.
+        // So null is List(vec![]).
+        // But we need a span for it.
+        // Syntax::new(s, Value::List(vec![]))
+        Ok(Value::List(vec![]))
+    }
+
+    fn list<I>(&mut self, iter: I, _s: Span) -> Result<Self::Output, Self::Error>
+    where
+        I: IntoIterator<Item = Self::Output>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let elements: Vec<_> = iter.into_iter().collect();
+        Ok(Value::List(elements))
+    }
+
+    fn improper_list<I>(
+        &mut self,
+        _head: I,
+        _tail: Self::Output,
+        s: Span,
+    ) -> Result<Self::Output, Self::Error>
+    where
+        I: IntoIterator<Item = Self::Output>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        Err(ParseError::unsupported(s, Unsupported::ImproperLists))
+    }
+
+    fn vector<I>(&mut self, _iter: I, s: Span) -> Result<Self::Output, Self::Error>
+    where
+        I: IntoIterator<Item = Self::Output>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        Err(ParseError::unsupported(s, Unsupported::Vectors))
+    }
+
+    fn labeled(
+        &mut self,
+        _id: u64,
+        _inner: Self::Output,
+        s: Span,
+    ) -> Result<Self::Output, Self::Error> {
+        Err(ParseError::unsupported(s, Unsupported::Labels))
+    }
+
+    fn label_ref(&mut self, _id: u64, s: Span) -> Result<Self::Output, Self::Error> {
+        Err(ParseError::unsupported(s, Unsupported::Labels))
+    }
+
+    fn copy<I>(&mut self, _inspector: &I) -> Result<Self::Output, Self::Error>
+    where
+        I: DatumInspector,
+    {
+        Err(ParseError::unsupported(Span::new(0, 0), Unsupported::Quasiquote)) // Just a dummy error, copy not supported
+    }
+}
+
+pub fn read(source: &str) -> Result<Value, ParseError> {
+    read_with_max_depth(source, 64)
+}
+
+pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<Value, ParseError> {
+    let lexer = crate::scheme::lex::lex_with_config(
+        source,
+        crate::scheme::lex::LexConfig {
+            reject_fold_case: true,
+            reject_comments: true,
+        },
+    );
+    let mut stream = crate::scheme::reader::TokenStream::new(lexer);
+    let mut writer = MiniWriter::new();
+    stream
+        .parse_datum_with_max_depth(&mut writer, max_depth)
+        .map(|(datum, _span)| datum)
 }
 
 #[cfg(test)]
@@ -245,9 +284,9 @@ mod tests {
             let result = read(self.input);
             match &self.expected {
                 Expected::Success(matcher) => {
-                    let syntax = result
+                    let value = result
                         .unwrap_or_else(|e| panic!("{}: expected success, got {:?}", self.name, e));
-                    matcher.check(&syntax.value, self.name);
+                    matcher.check(&value, self.name);
                 }
                 Expected::Error(matcher) => {
                     let err =
@@ -281,7 +320,7 @@ mod tests {
                         test_name
                     );
                     for (e, a) in elems.iter().zip(actual.iter()) {
-                        e.check(&a.value, test_name);
+                        e.check(a, test_name);
                     }
                 }
                 _ => panic!(
@@ -312,6 +351,20 @@ mod tests {
                         "{}: unsupported feature mismatch",
                         test_name
                     )
+                }
+                (
+                    ErrorMatcher::Unsupported(expected_feature),
+                    ParseError::WriterError(msg),
+                ) => {
+                    // The generic reader wraps writer errors in WriterError(String).
+                    // We check if the debug string of the feature is present in the message.
+                    let feature_str = format!("{:?}", expected_feature);
+                    if !msg.contains(&feature_str) {
+                        panic!(
+                            "{}: expected WriterError containing {:?}, got {:?}",
+                            test_name, feature_str, msg
+                        );
+                    }
                 }
                 _ => panic!(
                     "{}: error mismatch. Expected {:?}, got {:?}",
@@ -417,7 +470,7 @@ mod tests {
             TestCase {
                 name: "syntax_unexpected_rparen",
                 input: ")",
-                expected: Error(ErrorMatcher::Syntax("unexpected ')'")),
+                expected: Error(ErrorMatcher::Syntax("unexpected token RParen")),
             },
             TestCase {
                 name: "incomplete_list",

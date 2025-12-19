@@ -272,7 +272,7 @@ impl<'i> TokenStream<'i> {
         self.parse_datum_with_max_depth(writer, DEFAULT_MAX_DEPTH)
     }
 
-    fn parse_datum_with_max_depth<W: DatumWriter>(
+    pub fn parse_datum_with_max_depth<W: DatumWriter>(
         &mut self,
         writer: &mut W,
         depth: u32,
@@ -675,9 +675,12 @@ pub fn parse_datum_with_max_depth<W: DatumWriter>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scheme::primitivenumbers::SimpleNumber;
-    use crate::scheme::samplescheme::{Datum, SampleWriter};
-    use crate::scheme::{Unsupported, lex::Token};
+    use crate::scheme::{
+        Unsupported,
+        lex::Token,
+        primitivenumbers::SimpleNumber,
+        samples::scheme::{Datum, SampleWriter},
+    };
 
     struct TestCase {
         name: &'static str,
