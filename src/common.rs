@@ -46,8 +46,8 @@ impl<T> Syntax<T> {
 /// Common implementations:
 /// - `u64` or `u32` (for interned strings)
 /// - `&'a str` (for non-interned strings)
-pub trait StringId: Copy + Eq + Hash + Debug {}
-impl<T: Copy + Eq + Hash + Debug> StringId for T {}
+pub trait StringId: Clone + Eq + Hash + Debug {}
+impl<T: Clone + Eq + Hash + Debug> StringId for T {}
 
 /// The source of truth that converts between `&str` and `StringId`.
 ///
@@ -56,5 +56,22 @@ impl<T: Copy + Eq + Hash + Debug> StringId for T {}
 pub trait Interner {
     type Id: StringId;
     fn intern(&mut self, text: &str) -> Self::Id;
-    fn resolve(&self, id: Self::Id) -> &str;
+    fn resolve<'a>(&'a self, id: &'a Self::Id) -> &'a str;
+}
+
+/// A no-op interner that uses `String` as the ID.
+/// Useful for simple implementations or testing where interning is not required.
+#[derive(Default, Debug, Clone, Copy)]
+pub struct NoOpInterner;
+
+impl Interner for NoOpInterner {
+    type Id = String;
+
+    fn intern(&mut self, text: &str) -> Self::Id {
+        text.to_string()
+    }
+
+    fn resolve<'a>(&'a self, id: &'a Self::Id) -> &'a str {
+        id.as_str()
+    }
 }

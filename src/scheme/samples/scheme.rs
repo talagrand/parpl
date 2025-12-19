@@ -1,47 +1,34 @@
 use crate::{
     common::{Interner, Span, Syntax},
     scheme::{
+        ParseError,
         datumtraits::{DatumInspector, DatumKind, DatumWriter},
         primitivenumbers::{PrimitiveOps, SimpleNumber},
     },
 };
-use std::collections::HashMap;
-
-/// A simple string ID for our sample implementation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SampleStringId(u32);
-
-// impl StringId for SampleStringId {}
+use bumpalo::Bump;
+use string_interner::{DefaultSymbol, StringInterner, backend::DefaultBackend};
 
 /// A simple interner for our sample implementation.
 #[derive(Default)]
-pub struct SampleInterner {
-    map: HashMap<String, u32>,
-    vec: Vec<String>,
-}
+pub struct SampleInterner(StringInterner<DefaultBackend>);
 
 impl Interner for SampleInterner {
-    type Id = SampleStringId;
+    type Id = DefaultSymbol;
 
     fn intern(&mut self, text: &str) -> Self::Id {
-        if let Some(&id) = self.map.get(text) {
-            return SampleStringId(id);
-        }
-        let id = self.vec.len() as u32;
-        self.vec.push(text.to_string());
-        self.map.insert(text.to_string(), id);
-        SampleStringId(id)
+        self.0.get_or_intern(text)
     }
 
-    fn resolve(&self, id: Self::Id) -> &str {
-        self.vec.get(id.0 as usize).map(|s| s.as_str()).unwrap()
+    fn resolve<'a>(&'a self, id: &'a Self::Id) -> &'a str {
+        self.0.resolve(*id).expect("Invalid string ID")
     }
 }
 
 /// Datum syntax as defined in the "External representations" section
 /// of `spec/syn.md`.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Datum {
+pub enum Datum<'a> {
     Boolean(bool),
     Number(SimpleNumber),
     Character(char),
@@ -51,31 +38,33 @@ pub enum Datum {
     /// The empty list `()`.
     EmptyList,
     /// Proper and improper lists are represented via pairs.
-    Pair(Box<Syntax<Datum>>, Box<Syntax<Datum>>),
-    Vector(Vec<Syntax<Datum>>),
+    Pair(&'a Syntax<Datum<'a>>, &'a Syntax<Datum<'a>>),
+    Vector(Vec<Syntax<Datum<'a>>>),
     /// A labeled datum: #n=datum
-    Labeled(u64, Box<Syntax<Datum>>),
+    Labeled(u64, &'a Syntax<Datum<'a>>),
     /// A reference to a previously defined label: #n#
     LabelRef(u64),
 }
 
-pub struct SampleWriter {
+pub struct SampleWriter<'a> {
     interner: SampleInterner,
+    arena: &'a Bump,
 }
 
-impl SampleWriter {
-    pub fn new() -> Self {
+impl<'a> SampleWriter<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
         Self {
             interner: SampleInterner::default(),
+            arena,
         }
     }
 }
 
-impl DatumWriter for SampleWriter {
-    type Output = Syntax<Datum>;
+impl<'a> DatumWriter for SampleWriter<'a> {
+    type Output = Syntax<Datum<'a>>;
     type Error = (); // Infallible for this sample
     type Interner = SampleInterner;
-    type StringId = SampleStringId;
+    type StringId = DefaultSymbol;
     type N = PrimitiveOps;
 
     fn interner(&mut self) -> &mut Self::Interner {
@@ -95,12 +84,12 @@ impl DatumWriter for SampleWriter {
     }
 
     fn string(&mut self, v: Self::StringId, s: Span) -> Result<Self::Output, Self::Error> {
-        let str_val = self.interner.resolve(v).to_string();
+        let str_val = self.interner.resolve(&v).to_string();
         Ok(Syntax::new(s, Datum::String(str_val)))
     }
 
     fn symbol(&mut self, v: Self::StringId, s: Span) -> Result<Self::Output, Self::Error> {
-        let str_val = self.interner.resolve(v).to_string();
+        let str_val = self.interner.resolve(&v).to_string();
         Ok(Syntax::new(s, Datum::Symbol(str_val)))
     }
 
@@ -117,30 +106,13 @@ impl DatumWriter for SampleWriter {
         I: IntoIterator<Item = Self::Output>,
         I::IntoIter: ExactSizeIterator,
     {
-        // We need to build the list. The iterator gives us elements.
-        // Standard cons-list is built right-to-left or using a builder.
-        // Since we have ExactSizeIterator, we can collect and reverse.
         let elements: Vec<_> = iter.into_iter().collect();
-
-        // The span `s` covers the whole list.
-        // For the intermediate pairs, we might not have precise spans unless we synthesize them.
-        // But `Datum::Pair` takes `Box<Syntax<Datum>>`.
-        // The `result` starts as EmptyList. We should probably give it a span?
-        // The empty list at the end usually has the span of the closing parenthesis or is implicit.
-        // Let's use `s` for the final empty list for now, or a dummy span.
-        // Actually, `Datum::EmptyList` is a Datum. `Syntax::new(Datum::EmptyList, ...)`
-
-        let mut tail = Syntax::new(s, Datum::EmptyList); // Use the list span for the nil?
+        let mut tail = Syntax::new(s, Datum::EmptyList);
 
         for elem in elements.into_iter().rev() {
-            // elem is Syntax<Datum>
-            // We create a Pair(elem, tail)
-            // What is the span of this pair?
-            // Ideally it covers from elem.span.start to tail.span.end.
-            // For now, let's use `s` for all generated pairs, or try to be smarter.
-            // Using `s` is safe.
-            let pair = Datum::Pair(Box::new(elem), Box::new(tail));
-            tail = Syntax::new(s, pair);
+            let span = Span::new(elem.span.start, s.end);
+            let pair = Datum::Pair(self.arena.alloc(elem), self.arena.alloc(tail));
+            tail = Syntax::new(span, pair);
         }
 
         Ok(tail)
@@ -160,8 +132,9 @@ impl DatumWriter for SampleWriter {
         let elements: Vec<_> = head.into_iter().collect();
 
         for elem in elements.into_iter().rev() {
-            let pair = Datum::Pair(Box::new(elem), Box::new(result_tail));
-            result_tail = Syntax::new(s, pair);
+            let span = Span::new(elem.span.start, s.end);
+            let pair = Datum::Pair(self.arena.alloc(elem), self.arena.alloc(result_tail));
+            result_tail = Syntax::new(span, pair);
         }
         Ok(result_tail)
     }
@@ -180,7 +153,7 @@ impl DatumWriter for SampleWriter {
         inner: Self::Output,
         s: Span,
     ) -> Result<Self::Output, Self::Error> {
-        Ok(Syntax::new(s, Datum::Labeled(id, Box::new(inner))))
+        Ok(Syntax::new(s, Datum::Labeled(id, self.arena.alloc(inner))))
     }
 
     fn label_ref(&mut self, id: u64, s: Span) -> Result<Self::Output, Self::Error> {
@@ -202,13 +175,13 @@ impl DatumWriter for SampleWriter {
 pub struct StrId<'a>(&'a str);
 // impl<'a> StringId for StrId<'a> {}
 
-pub struct SampleListIter<'a> {
-    current: Option<&'a Syntax<Datum>>,
+pub struct SampleListIter<'a, 'd> {
+    current: Option<&'a Syntax<Datum<'d>>>,
     len: usize,
 }
 
-impl<'a> Iterator for SampleListIter<'a> {
-    type Item = &'a Syntax<Datum>;
+impl<'a, 'd> Iterator for SampleListIter<'a, 'd> {
+    type Item = &'a Syntax<Datum<'d>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.len == 0 {
@@ -235,10 +208,10 @@ impl<'a> Iterator for SampleListIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for SampleListIter<'a> {}
+impl<'a, 'd> ExactSizeIterator for SampleListIter<'a, 'd> {}
 
-impl<'a> SampleListIter<'a> {
-    fn new(start: &'a Syntax<Datum>) -> Self {
+impl<'a, 'd> SampleListIter<'a, 'd> {
+    fn new(start: &'a Syntax<Datum<'d>>) -> Self {
         let mut len = 0;
         let mut curr = start;
         while let Datum::Pair(_, tail) = &curr.value {
@@ -252,22 +225,22 @@ impl<'a> SampleListIter<'a> {
     }
 }
 
-impl<'a> DatumInspector for &'a Syntax<Datum> {
+impl<'d> DatumInspector for &Syntax<Datum<'d>> {
     type N = PrimitiveOps;
     type StringId<'b>
         = StrId<'b>
     where
         Self: 'b;
     type Child<'b>
-        = &'b Syntax<Datum>
+        = &'b Syntax<Datum<'d>>
     where
         Self: 'b;
     type VectorIter<'b>
-        = std::slice::Iter<'b, Syntax<Datum>>
+        = std::slice::Iter<'b, Syntax<Datum<'d>>>
     where
         Self: 'b;
     type ListIter<'b>
-        = SampleListIter<'b>
+        = SampleListIter<'b, 'd>
     where
         Self: 'b;
 
@@ -324,7 +297,7 @@ impl<'a> DatumInspector for &'a Syntax<Datum> {
         }
     }
 
-    fn as_bytes<'b>(&'b self) -> Option<&'b [u8]> {
+    fn as_bytes(&self) -> Option<&[u8]> {
         if let Datum::ByteVector(v) = &self.value {
             Some(v)
         } else {
@@ -372,10 +345,33 @@ impl<'a> DatumInspector for &'a Syntax<Datum> {
         let mut curr = *self;
         loop {
             match &curr.value {
-                Datum::Pair(_, tail) => curr = tail.as_ref(),
+                Datum::Pair(_, tail) => curr = tail,
                 Datum::EmptyList => return None,
                 _ => return Some(curr),
             }
         }
     }
+}
+
+pub fn read<'a>(source: &str, arena: &'a Bump) -> Result<Syntax<Datum<'a>>, ParseError> {
+    read_with_max_depth(source, arena, 64)
+}
+
+pub fn read_with_max_depth<'a>(
+    source: &str,
+    arena: &'a Bump,
+    max_depth: u32,
+) -> Result<Syntax<Datum<'a>>, ParseError> {
+    let lexer = crate::scheme::lex::lex_with_config(
+        source,
+        crate::scheme::lex::LexConfig {
+            reject_fold_case: true,
+            reject_comments: true,
+        },
+    );
+    let mut stream = crate::scheme::reader::TokenStream::new(lexer);
+    let mut writer = SampleWriter::new(arena);
+    stream
+        .parse_datum_with_max_depth(&mut writer, max_depth)
+        .map(|(datum, _span)| datum)
 }

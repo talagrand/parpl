@@ -7,8 +7,7 @@ use crate::{
     },
 };
 
-/// A simple number representation that can hold integers, floats, or
-/// fall back to the raw literal for complex cases.
+/// A simple number representation that can hold integers and floats and nothing else.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SimpleNumber {
     Integer(i64),
@@ -56,14 +55,14 @@ impl SchemeNumberOps for PrimitiveOps {
                         NumberExactness::Exact | NumberExactness::Unspecified,
                         FiniteRealKind::Integer,
                     ) => {
-                        if let Some(mag) = parse_mag_u64(&finite.spelling) {
-                            if let Some(i) = mag_to_i64(mag, sign) {
-                                return Ok(SimpleNumber::Integer(i));
-                            }
+                        if let Some(mag) = parse_mag_u64(finite.spelling)
+                            && let Some(i) = mag_to_i64(mag, sign)
+                        {
+                            return Ok(SimpleNumber::Integer(i));
                         }
                     }
                     (NumberExactness::Inexact, FiniteRealKind::Integer) => {
-                        if let Some(mag) = parse_mag_u64(&finite.spelling) {
+                        if let Some(mag) = parse_mag_u64(finite.spelling) {
                             let mut f = mag as f64;
                             if sign == Sign::Negative {
                                 f = -f;
@@ -79,14 +78,14 @@ impl SchemeNumberOps for PrimitiveOps {
                             ));
                         }
 
-                        // Stdlib float parsing only supports base 10 decimal spellings.
-                        if radix == 10 {
-                            if let Ok(mut f) = finite.spelling.parse::<f64>() {
-                                if sign == Sign::Negative {
-                                    f = -f;
-                                }
-                                return Ok(SimpleNumber::Float(f));
+                        // Per R7RS, decimal notation is only valid for radix 10.
+                        if radix == 10
+                            && let Ok(mut f) = finite.spelling.parse::<f64>()
+                        {
+                            if sign == Sign::Negative {
+                                f = -f;
                             }
+                            return Ok(SimpleNumber::Float(f));
                         }
                     }
                     _ => {}

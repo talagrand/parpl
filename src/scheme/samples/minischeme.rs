@@ -1,8 +1,11 @@
-use crate::common::{Interner, Span};
-use crate::scheme::datumtraits::{DatumInspector, DatumWriter, SchemeNumberOps};
-use crate::scheme::lex::{self, FiniteRealKind, NumberExactness, Sign};
-use crate::scheme::{ParseError, Unsupported};
-use std::collections::HashMap;
+use crate::{
+    common::{NoOpInterner, Span},
+    scheme::{
+        ParseError, Unsupported,
+        datumtraits::{DatumInspector, DatumWriter, SchemeNumberOps},
+        lex::{self, FiniteRealKind, NumberExactness, Sign},
+    },
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -16,37 +19,6 @@ pub enum Value {
     Bool(bool),
     /// Lists (proper lists only)
     List(Vec<Value>),
-}
-
-/// A simple string ID.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MiniStringId(u32);
-
-// impl StringId for MiniStringId {}
-
-/// A simple interner.
-#[derive(Default)]
-pub struct MiniInterner {
-    map: HashMap<String, u32>,
-    vec: Vec<String>,
-}
-
-impl Interner for MiniInterner {
-    type Id = MiniStringId;
-
-    fn intern(&mut self, text: &str) -> Self::Id {
-        if let Some(&id) = self.map.get(text) {
-            return MiniStringId(id);
-        }
-        let id = self.vec.len() as u32;
-        self.vec.push(text.to_string());
-        self.map.insert(text.to_string(), id);
-        MiniStringId(id)
-    }
-
-    fn resolve(&self, id: Self::Id) -> &str {
-        self.vec.get(id.0 as usize).map(|s| s.as_str()).unwrap()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,7 +45,7 @@ impl SchemeNumberOps for MiniNumberOps {
             lex::NumberValue::Real(real) => match &real.magnitude {
                 lex::RealMagnitude::Finite(finite) if finite.kind == FiniteRealKind::Integer => {
                     let radix = lit.kind.radix;
-                    let val = match u64::from_str_radix(&finite.spelling, radix) {
+                    let val = match u64::from_str_radix(finite.spelling, radix) {
                         Ok(v) => v,
                         Err(e) => {
                             let feature = match e.kind() {
@@ -116,13 +88,13 @@ impl SchemeNumberOps for MiniNumberOps {
 }
 
 pub struct MiniWriter {
-    interner: MiniInterner,
+    interner: NoOpInterner,
 }
 
-impl MiniWriter {
-    pub fn new() -> Self {
+impl Default for MiniWriter {
+    fn default() -> Self {
         Self {
-            interner: MiniInterner::default(),
+            interner: NoOpInterner::default(),
         }
     }
 }
@@ -130,8 +102,8 @@ impl MiniWriter {
 impl DatumWriter for MiniWriter {
     type Output = Value;
     type Error = ParseError;
-    type Interner = MiniInterner;
-    type StringId = MiniStringId;
+    type Interner = NoOpInterner;
+    type StringId = String;
     type N = MiniNumberOps;
 
     fn interner(&mut self) -> &mut Self::Interner {
@@ -151,13 +123,11 @@ impl DatumWriter for MiniWriter {
     }
 
     fn string(&mut self, v: Self::StringId, _s: Span) -> Result<Self::Output, Self::Error> {
-        let str_val = self.interner.resolve(v).to_string();
-        Ok(Value::String(str_val))
+        Ok(Value::String(v))
     }
 
     fn symbol(&mut self, v: Self::StringId, _s: Span) -> Result<Self::Output, Self::Error> {
-        let sym_val = self.interner.resolve(v).to_string();
-        Ok(Value::Symbol(sym_val))
+        Ok(Value::Symbol(v))
     }
 
     fn bytevector(&mut self, _v: &[u8], s: Span) -> Result<Self::Output, Self::Error> {
@@ -224,7 +194,10 @@ impl DatumWriter for MiniWriter {
     where
         I: DatumInspector,
     {
-        Err(ParseError::unsupported(Span::new(0, 0), Unsupported::Quasiquote)) // Just a dummy error, copy not supported
+        Err(ParseError::unsupported(
+            Span::new(0, 0),
+            Unsupported::Quasiquote,
+        )) // Just a dummy error, copy not supported
     }
 }
 
@@ -241,7 +214,7 @@ pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<Value, ParseE
         },
     );
     let mut stream = crate::scheme::reader::TokenStream::new(lexer);
-    let mut writer = MiniWriter::new();
+    let mut writer = MiniWriter::default();
     stream
         .parse_datum_with_max_depth(&mut writer, max_depth)
         .map(|(datum, _span)| datum)
@@ -352,10 +325,7 @@ mod tests {
                         test_name
                     )
                 }
-                (
-                    ErrorMatcher::Unsupported(expected_feature),
-                    ParseError::WriterError(msg),
-                ) => {
+                (ErrorMatcher::Unsupported(expected_feature), ParseError::WriterError(msg)) => {
                     // The generic reader wraps writer errors in WriterError(String).
                     // We check if the debug string of the feature is present in the message.
                     let feature_str = format!("{:?}", expected_feature);

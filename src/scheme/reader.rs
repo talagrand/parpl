@@ -681,6 +681,7 @@ mod tests {
         primitivenumbers::SimpleNumber,
         samples::scheme::{Datum, SampleWriter},
     };
+    use bumpalo::Bump;
 
     struct TestCase {
         name: &'static str,
@@ -735,7 +736,8 @@ mod tests {
         }
 
         fn run_datum(&self, expected: &Expected<DatumMatcher>) {
-            let mut writer = SampleWriter::new();
+            let arena = Bump::new();
+            let mut writer = SampleWriter::new(&arena);
             let result = parse_datum(self.input, &mut writer);
             match expected {
                 Expected::Success(matcher) => {
@@ -891,7 +893,8 @@ mod tests {
             input.push(')');
         }
 
-        let mut writer = SampleWriter::new();
+        let arena = Bump::new();
+        let mut writer = SampleWriter::new(&arena);
         let result = parse_datum(&input, &mut writer);
         let err = result.expect_err("expected depth-limit error");
         ErrorMatcher::UnsupportedDepth.check(&err, "depth_limit_enforced_by_default");
@@ -910,7 +913,8 @@ mod tests {
             input.push(')');
         }
 
-        let mut writer = SampleWriter::new();
+        let arena = Bump::new();
+        let mut writer = SampleWriter::new(&arena);
         let (syntax, _) = parse_datum_with_max_depth(&input, &mut writer, 128)
             .expect("expected success with increased max depth");
         if let Datum::Pair(_, _) = syntax.value {
@@ -1120,6 +1124,26 @@ mod tests {
             TestCase {
                 name: "string_incomplete",
                 input: "\"unterminated",
+                mode: TestMode::Datum(Expected::Error(ErrorMatcher::Incomplete)),
+            },
+            TestCase {
+                name: "number_simple_123",
+                input: "123",
+                mode: TestMode::Datum(Expected::Success(DatumMatcher::Int(123))),
+            },
+            TestCase {
+                name: "symbol_simple_abc",
+                input: "abc",
+                mode: TestMode::Datum(Expected::Success(DatumMatcher::Sym("abc"))),
+            },
+            TestCase {
+                name: "syntax_unexpected_rparen",
+                input: ")",
+                mode: TestMode::Datum(Expected::Error(ErrorMatcher::Syntax("<datum>"))),
+            },
+            TestCase {
+                name: "incomplete_list",
+                input: "(1 2",
                 mode: TestMode::Datum(Expected::Error(ErrorMatcher::Incomplete)),
             },
             // --- TokenStream Tests (Datum Comments) ---

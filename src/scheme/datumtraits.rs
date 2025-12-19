@@ -65,7 +65,7 @@ pub trait DatumInspector: Sized {
     /// To get the text, pass this ID to the `Interner`.
     fn as_str<'a>(&'a self) -> Option<Self::StringId<'a>>;
 
-    fn as_bytes<'a>(&'a self) -> Option<&'a [u8]>;
+    fn as_bytes(&self) -> Option<&[u8]>;
 
     // --- Compounds (Recursive Views) ---
 

@@ -108,35 +108,35 @@ fn lex_real_repr<'i>(input: &mut WinnowInput<'i>, radix: NumberRadix) -> PResult
     // Check for inf/nan
     // Must start with i/I or n/N (after sign)
     // Note: if no explicit sign, can't be infnan (grammar: +inf.0 | -inf.0 ...)
-    if sign.is_some() {
-        if let Some(c) = input.peek_token() {
-            match c {
-                'i' | 'I' => {
-                    let mut probe = *input;
-                    let res: Result<&str, ErrMode<ContextError>> =
-                        Caseless("inf.0").parse_next(&mut probe);
-                    if res.is_ok() {
-                        *input = probe;
-                        return Ok(RealRepr {
-                            sign,
-                            magnitude: RealMagnitude::Infinity,
-                        });
-                    }
+    if sign.is_some()
+        && let Some(c) = input.peek_token()
+    {
+        match c {
+            'i' | 'I' => {
+                let mut probe = *input;
+                let res: Result<&str, ErrMode<ContextError>> =
+                    Caseless("inf.0").parse_next(&mut probe);
+                if res.is_ok() {
+                    *input = probe;
+                    return Ok(RealRepr {
+                        sign,
+                        magnitude: RealMagnitude::Infinity,
+                    });
                 }
-                'n' | 'N' => {
-                    let mut probe = *input;
-                    let res: Result<&str, ErrMode<ContextError>> =
-                        Caseless("nan.0").parse_next(&mut probe);
-                    if res.is_ok() {
-                        *input = probe;
-                        return Ok(RealRepr {
-                            sign,
-                            magnitude: RealMagnitude::NaN,
-                        });
-                    }
-                }
-                _ => {}
             }
+            'n' | 'N' => {
+                let mut probe = *input;
+                let res: Result<&str, ErrMode<ContextError>> =
+                    Caseless("nan.0").parse_next(&mut probe);
+                if res.is_ok() {
+                    *input = probe;
+                    return Ok(RealRepr {
+                        sign,
+                        magnitude: RealMagnitude::NaN,
+                    });
+                }
+            }
+            _ => {}
         }
     }
 
