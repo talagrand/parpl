@@ -532,22 +532,22 @@ impl<'i> TokenStream<'i> {
                 None => return Err(ParseError::Incomplete),
                 _ => {
                     // Bytevectors must contain exact integers in the closed range [0, 255].
-                    let datum = self.parse_datum_with_max_depth(depth - 1)?;
-                    if let Some(value) = match &datum.value {
-                        Datum::Number(SimpleNumber::Literal(text)) => number_text_to_byte(text),
-                        Datum::Number(SimpleNumber::Integer(i)) => {
-                            if *i >= 0 && *i <= 255 {
-                                Some(*i as u8)
-                            } else {
-                                None
-                            }
-                        }
+                    // Parse `<byte>` directly from the token stream so this does not depend on
+                    // any particular number backend.
+                    let token = self
+                        .next_token_with_max_depth(depth)?
+                        .ok_or(ParseError::Incomplete)?;
+
+                    let value = match token.value {
+                        Token::Number(lit) => number_literal_to_byte(&lit),
                         _ => None,
-                    } {
+                    };
+
+                    if let Some(value) = value {
                         elements.push(value);
                     } else {
                         return Err(ParseError::syntax(
-                            datum.span,
+                            token.span,
                             "<bytevector>",
                             "expected exact integer 0-255",
                         ));
@@ -560,23 +560,6 @@ impl<'i> TokenStream<'i> {
             start_span.merge(end_span),
             Datum::ByteVector(elements),
         ))
-    }
-}
-
-/// Attempt to interpret `text` as a `<byte>` value (exact integer 0-255).
-///
-/// This is only used when the number backend preserved an unlowered number
-/// literal as raw text.
-fn number_text_to_byte(text: &str) -> Option<u8> {
-    let mut lexer = lex::lex(text);
-    let first = lexer.next()?.ok()?;
-    if lexer.next().is_some() {
-        return None;
-    }
-
-    match &first.value {
-        Token::Number(lit) => number_literal_to_byte(lit),
-        _ => None,
     }
 }
 

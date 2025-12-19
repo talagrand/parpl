@@ -1,4 +1,4 @@
-use crate::common::{Span, StringId};
+use crate::common::{Interner, Span, StringId};
 use crate::scheme::{
     ParseError,
     lex::{self, FiniteRealKind, NumberExactness, Sign},
@@ -18,9 +18,12 @@ pub enum DatumKind {
     Pair,
     Null,
     Vector,
+    Labeled,
+    LabelRef,
     // For opaque host objects or other extensions
     Other,
 }
+
 
 /// Abstract interface for Scheme number operations.
 /// This decouples the Reader and Inspector from the concrete number representation.
@@ -191,14 +194,28 @@ pub trait DatumInspector: Sized {
 
     // --- Compounds (Recursive Views) ---
 
+    /// The type of a "child" handle.
+    /// For ASTs, this can be `&Self`.
+    /// For Rc Graphs, this can be `Self` (the Rc itself).
+    /// For Arenas, this can be `Self` (the Index).
+    type Child<'a>: DatumInspector
+    where
+        Self: 'a;
+
     /// Returns references to the head and tail.
-    fn as_pair(&self) -> Option<(&Self, &Self)>;
+    fn as_pair<'a>(&'a self) -> Option<(Self::Child<'a>, Self::Child<'a>)>;
 
     /// Returns an iterator over vector elements.
-    type VectorIter<'a>: Iterator<Item = &'a Self>
+    type VectorIter<'a>: Iterator<Item = Self::Child<'a>>
     where
         Self: 'a;
     fn vector_iter<'a>(&'a self) -> Option<Self::VectorIter<'a>>;
+
+    /// Returns the label ID and the inner datum if this is a labeled datum.
+    fn as_labeled<'a>(&'a self) -> Option<(u64, Self::Child<'a>)>;
+
+    /// Returns the label ID if this is a label reference.
+    fn as_label_ref(&self) -> Option<u64>;
 
     // --- Utilities ---
 
@@ -206,36 +223,50 @@ pub trait DatumInspector: Sized {
         matches!(self.kind(), DatumKind::Null)
     }
 
-    /// Helper to iterate a proper list.
-    fn list_iter<'a>(&'a self) -> ListIter<'a, Self> {
-        ListIter { current: self }
-    }
+    /// Returns an iterator over list elements (proper or improper).
+    type ListIter<'a>: Iterator<Item = Self::Child<'a>>
+    where
+        Self: 'a;
+    
+    fn list_iter<'a>(&'a self) -> Self::ListIter<'a>;
 }
 
-/// Standard iterator for walking generic Scheme lists
-pub struct ListIter<'a, T: DatumInspector> {
-    current: &'a T,
+/// Standard iterator struct for walking generic Scheme lists.
+/// Implementations of `DatumInspector` can use this struct for their `ListIter` associated type
+/// by implementing `Iterator` for it.
+pub struct ListIter<'a, T: DatumInspector + ?Sized>
+where
+    T: 'a,
+{
+    pub current: Option<T::Child<'a>>,
 }
 
-impl<'a, T: DatumInspector> Iterator for ListIter<'a, T> {
-    type Item = &'a T;
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some((head, tail)) = self.current.as_pair() {
-            self.current = tail;
-            Some(head)
-        } else {
-            None
+impl<'a, T: DatumInspector + ?Sized> ListIter<'a, T> {
+    pub fn new(start: T::Child<'a>) -> Self {
+        Self {
+            current: Some(start),
         }
     }
 }
+
+
 
 pub trait DatumWriter {
     /// The concrete type being built
     type Output;
     type Error;
 
-    /// The type of string ID this writer expects.
-    type StringId<'a>: StringId;
+    /// The interner used by this writer.
+    ///
+    /// The Reader will call `writer.interner().intern(text)` to obtain IDs
+    /// for symbols and strings.
+    type Interner: Interner<Id = Self::StringId>;
+
+    /// The stable ID type for interned strings/symbols.
+    type StringId: StringId;
+
+    /// Mutable access to the writer's interner.
+    fn interner(&mut self) -> &mut Self::Interner;
 
     type N: SchemeNumberOps;
 
@@ -250,8 +281,8 @@ pub trait DatumWriter {
 
     // Both strings and symbols now take IDs.
     // The caller (Reader/Expander) must use their Interner to produce these IDs.
-    fn string<'a>(&mut self, v: Self::StringId<'a>, s: Span) -> Result<Self::Output, Self::Error>;
-    fn symbol<'a>(&mut self, v: Self::StringId<'a>, s: Span) -> Result<Self::Output, Self::Error>;
+    fn string(&mut self, v: Self::StringId, s: Span) -> Result<Self::Output, Self::Error>;
+    fn symbol(&mut self, v: Self::StringId, s: Span) -> Result<Self::Output, Self::Error>;
 
     fn bytevector(&mut self, v: &[u8], s: Span) -> Result<Self::Output, Self::Error>;
     fn null(&mut self, s: Span) -> Result<Self::Output, Self::Error>;
@@ -277,6 +308,10 @@ pub trait DatumWriter {
     where
         I: IntoIterator<Item = Self::Output>,
         I::IntoIter: ExactSizeIterator;
+
+    fn labeled(&mut self, id: u64, inner: Self::Output, s: Span) -> Result<Self::Output, Self::Error>;
+
+    fn label_ref(&mut self, id: u64, s: Span) -> Result<Self::Output, Self::Error>;
 
     // --- Optimization Hook ---
 
