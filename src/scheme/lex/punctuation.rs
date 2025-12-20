@@ -86,13 +86,19 @@ pub fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<
                             Some('=') => {
                                 let _ = label_probe.next_token();
                                 *input = label_probe;
-                                let n = digits.parse::<u64>().unwrap(); // Safe because we only ate digits
+                                let n = match digits.parse::<u64>() {
+                                    Ok(n) => n,
+                                    Err(_) => return lex_error("label definition or reference"),
+                                };
                                 Token::LabelDef(n)
                             }
                             Some('#') => {
                                 let _ = label_probe.next_token();
                                 *input = label_probe;
-                                let n = digits.parse::<u64>().unwrap();
+                                let n = match digits.parse::<u64>() {
+                                    Ok(n) => n,
+                                    Err(_) => return lex_error("label definition or reference"),
+                                };
                                 Token::LabelRef(n)
                             }
                             None => return winnow_incomplete_token(),

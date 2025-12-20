@@ -29,7 +29,7 @@ pub fn parse<F>(input: &str, f: F)
 where
     F: for<'a> FnOnce(&Expr<'a>),
 {
-    Builder::new()
+    Builder::default()
         .parse_scoped(input, |ctx| {
             f(ctx.ast()?);
             Ok(())
@@ -57,7 +57,7 @@ pub fn parse_with_config<F>(input: &str, config: ParseConfig, f: F)
 where
     F: for<'a> FnOnce(&Expr<'a>),
 {
-    Builder::new()
+    Builder::default()
         .max_parse_depth(config.max_parse_depth)
         .max_ast_depth(config.max_ast_depth)
         .max_call_limit(config.max_call_limit)
@@ -91,7 +91,7 @@ pub fn assert_parses(input: &str) {
 /// ```
 #[track_caller]
 pub fn assert_parse_fails(input: &str) {
-    let result = Builder::new().parse_scoped(input, |ctx| ctx.ast().map(|_| ()));
+    let result = Builder::default().parse_scoped(input, |ctx| ctx.ast().map(|_| ()));
     if result.is_ok() {
         panic!("Expected '{}' to fail parsing, but it succeeded", input);
     }
@@ -107,7 +107,7 @@ pub fn assert_parse_fails(input: &str) {
 /// ```
 #[track_caller]
 pub fn assert_parse_fails_with(input: &str, expected_kind: ErrorKind) {
-    let result = Builder::new().parse_scoped(input, |ctx| ctx.ast().map(|_| ()));
+    let result = Builder::default().parse_scoped(input, |ctx| ctx.ast().map(|_| ()));
     match result {
         Ok(()) => panic!(
             "Expected '{}' to fail with {:?}, but it succeeded",
@@ -307,7 +307,7 @@ pub fn assert_map(input: &str, expected_len: usize) {
 /// println!("{}", output);
 /// ```
 pub fn parse_and_pretty(input: &str) -> String {
-    Builder::new()
+    Builder::default()
         .parse_scoped(input, |ctx| Ok(pretty_print(ctx.ast()?)))
         .unwrap_or_else(|e| format!("Parse error: {}", e))
 }

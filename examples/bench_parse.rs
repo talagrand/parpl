@@ -20,7 +20,7 @@ fn main() -> Result<()> {
     println!("Target iterations: {}", ITERATIONS);
 
     // Reuse a single context to avoid measuring builder construction each time.
-    let mut ctx = Builder::new().build();
+    let mut ctx = Builder::default().build();
 
     let start = Instant::now();
     let mut iterations: u64 = 0;

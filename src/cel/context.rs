@@ -29,14 +29,6 @@ pub(crate) struct StringInterner<'arena> {
 }
 
 impl<'arena> StringInterner<'arena> {
-    /// Create a new string interner
-    pub(crate) fn new() -> Self {
-        Self {
-            interner: InnerInterner::new(),
-            _phantom: std::marker::PhantomData,
-        }
-    }
-
     /// Intern a string, returning a reference with arena lifetime
     ///
     /// If the string has been interned before, returns the existing
@@ -60,7 +52,10 @@ impl<'arena> StringInterner<'arena> {
 
 impl<'arena> Default for StringInterner<'arena> {
     fn default() -> Self {
-        Self::new()
+        Self {
+            interner: InnerInterner::new(),
+            _phantom: std::marker::PhantomData,
+        }
     }
 }
 
@@ -76,7 +71,7 @@ impl<'arena> Default for StringInterner<'arena> {
 /// ```
 /// use parpl::cel::Builder;
 ///
-/// let mut ctx = Builder::new().build();
+/// let mut ctx = Builder::default().build();
 /// ctx.parse("1 + 2")?;
 /// let ast = ctx.ast()?;
 /// # Ok::<(), parpl::cel::Error>(())
@@ -86,7 +81,7 @@ impl<'arena> Default for StringInterner<'arena> {
 /// ```
 /// use parpl::cel::Builder;
 ///
-/// let mut ctx = Builder::new()
+/// let mut ctx = Builder::default()
 ///     .max_parse_depth(128)
 ///     .max_ast_depth(24)
 ///     .max_call_limit(50_000_000)
@@ -108,7 +103,7 @@ pub struct Builder {
     strict_mode: bool,
 }
 
-impl Builder {
+impl Default for Builder {
     /// Create a new builder with default configuration
     ///
     /// Defaults:
@@ -116,7 +111,7 @@ impl Builder {
     /// - `max_ast_depth`: 24 (precise AST recursion limit, 2x CEL spec minimum)
     /// - `max_call_limit`: 10,000,000
     /// - `strict_mode`: false
-    pub fn new() -> Self {
+    fn default() -> Self {
         Self {
             max_parse_depth: constants::DEFAULT_MAX_PARSE_DEPTH,
             max_ast_depth: constants::DEFAULT_MAX_AST_DEPTH,
@@ -124,7 +119,9 @@ impl Builder {
             strict_mode: false,
         }
     }
+}
 
+impl Builder {
     /// Set maximum parse depth for heuristic pre-validation
     ///
     /// This protects against Pest parser stack overflow (~171 depth on 1MB stack).
@@ -134,7 +131,7 @@ impl Builder {
     /// ```
     /// use parpl::cel::Builder;
     ///
-    /// let ctx = Builder::new()
+    /// let ctx = Builder::default()
     ///     .max_parse_depth(128)
     ///     .build();
     /// ```
@@ -153,7 +150,7 @@ impl Builder {
     /// ```
     /// use parpl::cel::Builder;
     ///
-    /// let ctx = Builder::new()
+    /// let ctx = Builder::default()
     ///     .max_ast_depth(30)
     ///     .build();
     /// ```
@@ -171,7 +168,7 @@ impl Builder {
     /// ```
     /// use parpl::cel::Builder;
     ///
-    /// let ctx = Builder::new()
+    /// let ctx = Builder::default()
     ///     .max_nesting_depth(100)
     ///     .build();
     /// ```
@@ -190,7 +187,7 @@ impl Builder {
     /// ```
     /// use parpl::cel::Builder;
     ///
-    /// let ctx = Builder::new()
+    /// let ctx = Builder::default()
     ///     .max_call_limit(50_000_000)
     ///     .build();
     /// ```
@@ -208,7 +205,7 @@ impl Builder {
     /// ```
     /// use parpl::cel::Builder;
     ///
-    /// let ctx = Builder::new()
+    /// let ctx = Builder::default()
     ///     .strict_mode(true)
     ///     .build();
     /// ```
@@ -225,14 +222,14 @@ impl Builder {
     /// ```
     /// use parpl::cel::Builder;
     ///
-    /// let mut ctx = Builder::new().build();
+    /// let mut ctx = Builder::default().build();
     /// ctx.parse("1 + 2")?;
     /// let ast = ctx.ast()?;
     /// # Ok::<(), parpl::cel::Error>(())
     /// ```
     pub fn build(self) -> Context {
         let arena = Bump::new();
-        let interner = StringInterner::new();
+        let interner = StringInterner::default();
 
         Context {
             arena,
@@ -252,7 +249,7 @@ impl Builder {
     /// ```
     /// use parpl::cel::Builder;
     ///
-    /// let result = Builder::new()
+    /// let result = Builder::default()
     ///     .max_nesting_depth(100)
     ///     .parse_scoped("1 + 2", |ctx| {
     ///         let ast = ctx.ast()?;
@@ -300,12 +297,6 @@ impl Builder {
     }
 }
 
-impl Default for Builder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// CEL processing context
 ///
 /// The context manages the state of a parsed CEL expression and will eventually
@@ -317,7 +308,7 @@ impl Default for Builder {
 /// ```
 /// use parpl::cel::Builder;
 ///
-/// let mut ctx = Builder::new().build();
+/// let mut ctx = Builder::default().build();
 ///
 /// // Parse first expression
 /// ctx.parse("1 + 2")?;
@@ -346,7 +337,7 @@ impl Context {
     /// ```
     /// use parpl::cel::Builder;
     ///
-    /// let mut ctx = Builder::new().build();
+    /// let mut ctx = Builder::default().build();
     /// ctx.parse("1 + 2")?;
     /// # Ok::<(), parpl::cel::Error>(())
     /// ```
@@ -355,7 +346,7 @@ impl Context {
         self.arena.reset();
 
         // Reset interner - just create a new one
-        *self.interner.borrow_mut() = StringInterner::new();
+        *self.interner.borrow_mut() = StringInterner::default();
 
         self.input = Some(input.to_string());
         self.ast = None;
@@ -392,7 +383,7 @@ impl Context {
     /// ```
     /// use parpl::cel::Builder;
     ///
-    /// let mut ctx = Builder::new().build();
+    /// let mut ctx = Builder::default().build();
     /// ctx.parse("42")?;
     /// let ast = ctx.ast()?;
     /// # Ok::<(), parpl::cel::Error>(())
@@ -432,7 +423,7 @@ impl Context {
     pub fn reset(&mut self) {
         self.arena.reset();
         // Reset interner - just create a new one
-        *self.interner.borrow_mut() = StringInterner::new();
+        *self.interner.borrow_mut() = StringInterner::default();
         self.input = None;
         self.ast = None;
     }
@@ -459,14 +450,14 @@ mod tests {
 
     test_cases! {
         test_builder_defaults: {
-            let builder = Builder::new();
+            let builder = Builder::default();
             assert_eq!(builder.get_max_nesting_depth(), 128);
             assert_eq!(builder.get_max_call_limit(), 10_000_000);
             assert!(!builder.is_strict_mode());
         },
 
         test_builder_configuration: {
-            let builder = Builder::new()
+            let builder = Builder::default()
                 .max_nesting_depth(100)
                 .max_call_limit(50_000_000)
                 .strict_mode(true);
@@ -488,7 +479,7 @@ mod tests {
 
     test_cases! {
         test_context_parse: {
-            let mut ctx = Builder::new().build();
+            let mut ctx = Builder::default().build();
             assert!(ctx.input().is_none());
             assert!(ctx.ast().is_err());
 
@@ -498,7 +489,7 @@ mod tests {
         },
 
         test_context_reuse: {
-            let mut ctx = Builder::new().build();
+            let mut ctx = Builder::default().build();
 
             // Parse first expression
             ctx.parse("1 + 2").unwrap();
@@ -515,7 +506,7 @@ mod tests {
         },
 
         test_context_reset: {
-            let mut ctx = Builder::new().build();
+            let mut ctx = Builder::default().build();
             ctx.parse("1 + 2").unwrap();
             assert!(ctx.input().is_some());
             assert!(ctx.ast().is_ok());
@@ -526,7 +517,7 @@ mod tests {
         },
 
         test_context_config_access: {
-            let ctx = Builder::new().max_nesting_depth(200).build();
+            let ctx = Builder::default().max_nesting_depth(200).build();
             assert_eq!(ctx.config().get_max_nesting_depth(), 200);
         },
     }
@@ -537,7 +528,7 @@ mod tests {
 
     test_cases! {
         test_scoped_api: {
-            let result = Builder::new()
+            let result = Builder::default()
                 .max_nesting_depth(100)
                 .parse_scoped("1 + 2", |ctx| {
                     let _ast = ctx.ast()?;
@@ -556,7 +547,7 @@ mod tests {
 
     test_cases! {
         test_ast_error_before_parse: {
-            let ctx = Builder::new().build();
+            let ctx = Builder::default().build();
             let result = ctx.ast();
             assert!(result.is_err());
 
@@ -575,7 +566,7 @@ mod tests {
         test_config_max_parse_depth_honored: {
             // Create a context with low parse depth but generous AST depth
             // so that the heuristic pre-validation is the limiting factor.
-            let mut ctx = Builder::new()
+            let mut ctx = Builder::default()
                 .max_parse_depth(3)
                 .max_ast_depth(128)
                 .build();
@@ -599,18 +590,20 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Causes stack overflow - needs investigation
     fn test_config_different_limits() {
         // Test with moderately permissive limits
-        let mut ctx = Builder::new().max_nesting_depth(20).build();
+        // Each logical nesting level consumes ~10 depth units.
+        let mut ctx = Builder::default().max_nesting_depth(200).build();
 
-        // Create deeply nested expression (depth 5 - reduced from 15 to avoid stack overflow)
-        // TODO: Investigate why this causes stack overflow - might be pest recursion limit
+        // Create deeply nested expression (depth 5)
         let deep = "(".repeat(5) + "1" + &")".repeat(5);
-        assert!(ctx.parse(&deep).is_ok());
+        if let Err(e) = ctx.parse(&deep) {
+            panic!("Parse failed for depth 5 with limit 200: {:?}", e);
+        }
 
         // Test with very restrictive limits
-        let mut ctx = Builder::new().max_nesting_depth(2).build();
+        // Even depth 2 requires ~20 units
+        let mut ctx = Builder::default().max_nesting_depth(30).build();
         assert!(ctx.parse("((1))").is_ok());
         assert!(ctx.parse("(((1)))").is_err());
     }

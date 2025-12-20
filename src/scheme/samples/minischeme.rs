@@ -87,16 +87,9 @@ impl SchemeNumberOps for MiniNumberOps {
     }
 }
 
+#[derive(Default)]
 pub struct MiniWriter {
     interner: NoOpInterner,
-}
-
-impl Default for MiniWriter {
-    fn default() -> Self {
-        Self {
-            interner: NoOpInterner::default(),
-        }
-    }
 }
 
 impl DatumWriter for MiniWriter {

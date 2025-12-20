@@ -978,8 +978,8 @@ mod tests {
             },
             TestCase {
                 name: "number_float",
-                input: "3.14",
-                mode: TestMode::Datum(Expected::Success(DatumMatcher::Float(3.14))),
+                input: "3.15",
+                mode: TestMode::Datum(Expected::Success(DatumMatcher::Float(3.15))),
             },
             TestCase {
                 name: "character_simple",

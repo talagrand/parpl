@@ -846,7 +846,7 @@ mod tests {
     // Test helper that leaks arena (acceptable in tests)
     fn build_ast(input: &str) -> Result<Expr<'static>> {
         let arena = Box::leak(Box::new(Bump::new()));
-        let interner = RefCell::new(StringInterner::new());
+        let interner = RefCell::new(StringInterner::default());
         build_ast_with_arena(input, ParseConfig::default(), arena, &interner).cloned()
     }
 

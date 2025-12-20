@@ -466,11 +466,11 @@ mod tests {
         interner: StringInterner<'a>,
     }
 
-    impl<'a> TestContext<'a> {
-        fn new() -> Self {
+    impl<'a> Default for TestContext<'a> {
+        fn default() -> Self {
             Self {
                 arena: Bump::new(),
-                interner: StringInterner::new(),
+                interner: StringInterner::default(),
             }
         }
     }
@@ -506,7 +506,7 @@ mod tests {
 
     #[test]
     fn test_string_escapes_simple() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::default();
 
         assert_eq!(
             process_string_escapes("hello\\nworld", &mut ctx.interner).unwrap(),
@@ -524,7 +524,7 @@ mod tests {
 
     #[test]
     fn test_string_escapes_hex() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::default();
 
         assert_eq!(
             process_string_escapes("\\x41", &mut ctx.interner).unwrap(),
@@ -538,7 +538,7 @@ mod tests {
 
     #[test]
     fn test_string_escapes_unicode() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::default();
 
         assert_eq!(
             process_string_escapes("\\u0041", &mut ctx.interner).unwrap(),
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn test_string_escapes_octal() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::default();
 
         assert_eq!(
             process_string_escapes("\\101", &mut ctx.interner).unwrap(),
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn test_string_escapes_invalid_surrogate() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::default();
 
         // UTF-16 surrogates should be rejected
         assert!(process_string_escapes("\\uD800", &mut ctx.interner).is_err());
@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn test_string_escapes_invalid_sequence() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::default();
 
         // Invalid escape sequences
         assert!(process_string_escapes("\\s", &mut ctx.interner).is_err());
@@ -588,7 +588,7 @@ mod tests {
 
     #[test]
     fn test_no_escapes_fast_path() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::default();
 
         let result = process_string_escapes("hello world", &mut ctx.interner).unwrap();
         assert_eq!(result, "hello world");
@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn test_process_literal_integers() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::default();
 
         // Decimal integers
         let raw = RawLiteral::Int("123");
@@ -628,7 +628,7 @@ mod tests {
 
     #[test]
     fn test_process_literal_floats() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::default();
 
         let raw = RawLiteral::Float("3.14");
         if let Literal::Float(val) = process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap() {
@@ -643,7 +643,7 @@ mod tests {
 
     #[test]
     fn test_process_literal_strings() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::default();
 
         // Raw string - no processing
         let raw = RawLiteral::String("hello\\nworld", true, QuoteStyle::DoubleQuote);
@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn test_process_literal_bools_and_null() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::default();
 
         let raw = RawLiteral::Bool(true);
         assert_eq!(
@@ -688,7 +688,7 @@ mod tests {
     /// CEL Spec (line 338-339): b"\377" is byte 255, not UTF-8 of ÿ
     #[test]
     fn test_bytes_invalid_utf8() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::default();
 
         // \xFF is byte 255 - NOT valid UTF-8 on its own
         let raw = RawLiteral::Bytes("\\xFF", false, QuoteStyle::DoubleQuote);
@@ -730,7 +730,7 @@ mod tests {
     /// Test that bytes containing valid UTF-8 still work
     #[test]
     fn test_bytes_valid_utf8() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::default();
 
         // ASCII is valid UTF-8
         let raw = RawLiteral::Bytes("abc", false, QuoteStyle::DoubleQuote);

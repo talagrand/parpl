@@ -17,7 +17,7 @@ fn find_max_safe_depth() {
     for depth in test_depths.iter() {
         let input = "(".repeat(*depth) + "1" + &")".repeat(*depth);
 
-        match Builder::new()
+        match Builder::default()
             .max_nesting_depth(100) // Allow higher than default
             .parse_scoped(&input, |ctx| ctx.ast().map(|_| ()))
         {
@@ -56,7 +56,7 @@ fn test_with_larger_stack() {
             for depth in [10, 50, 100, 150].iter() {
                 let input = "(".repeat(*depth) + "1" + &")".repeat(*depth);
 
-                match Builder::new()
+                match Builder::default()
                     .max_nesting_depth(500)
                     .parse_scoped(&input, |ctx| ctx.ast().map(|_| ()))
                 {
@@ -75,7 +75,7 @@ fn test_with_larger_stack() {
 fn test_builder_context_depth() {
     println!("\n=== Testing Context with various depths ===\n");
 
-    let mut ctx = Builder::new().max_nesting_depth(100).build();
+    let mut ctx = Builder::default().max_nesting_depth(100).build();
 
     for depth in [5, 10, 15, 20, 25, 30].iter() {
         let input = "(".repeat(*depth) + "1" + &")".repeat(*depth);

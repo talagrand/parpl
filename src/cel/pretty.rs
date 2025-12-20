@@ -26,10 +26,6 @@ impl Default for PrettyConfig {
 }
 
 impl PrettyConfig {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn with_spans(mut self) -> Self {
         self.show_spans = true;
         self
@@ -303,9 +299,9 @@ mod tests {
 
     test_cases! {
         test_pretty_print_with_spans: {
-            Builder::new()
+            Builder::default()
                 .parse_scoped("42", |ctx| {
-                    let config = PrettyConfig::new().with_spans();
+                    let config = PrettyConfig::default().with_spans();
                     let output = pretty_print_with_config(ctx.ast()?, &config);
                     assert!(output.contains("[0..2]"));
                     Ok(())
@@ -314,9 +310,9 @@ mod tests {
         },
 
         test_pretty_print_custom_indent: {
-            Builder::new()
+            Builder::default()
                 .parse_scoped("1 + 2", |ctx| {
-                    let config = PrettyConfig::new().with_indent(4);
+                    let config = PrettyConfig::default().with_indent(4);
                     let output = pretty_print_with_config(ctx.ast()?, &config);
                     assert!(output.contains("Binary (+)"));
                     Ok(())
