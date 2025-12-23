@@ -11,14 +11,14 @@
 // **CEL Spec Reference**: langdef.md lines 156-159 (escape sequences)
 // **CEL Spec Reference**: langdef.md lines 270-360 (string/bytes semantics)
 
-use crate::cel::{
-    ast::{Literal, RawLiteral},
-    error::{Error, Result},
+use crate::{
+    cel::{
+        ast::{Literal, RawLiteral},
+        error::{Error, ErrorKind, Phase, Result},
+    },
+    common::{InternId, Interner, SymbolInterner},
 };
 use bumpalo::Bump;
-
-// Re-export StringInterner from context for use in this module
-use crate::cel::context::StringInterner;
 
 //==============================================================================
 // Common Escape Processing
@@ -248,10 +248,7 @@ pub fn parse_float(s: &str) -> Result<f64> {
 /// This is **fully conformant** with the CEL spec.
 /// CEL Spec (line 347): Invalid Unicode code points are rejected
 /// CEL Spec (line 348): UTF-16 surrogate code points are rejected (even in valid pairs)
-pub fn process_string_escapes<'arena>(
-    s: &str,
-    interner: &mut StringInterner<'arena>,
-) -> Result<&'arena str> {
+pub fn process_string_escapes(s: &str, interner: &mut SymbolInterner) -> Result<InternId> {
     // Fast path: no escapes
     if !s.contains('\\') {
         return Ok(interner.intern(s));
@@ -409,39 +406,56 @@ pub fn process_bytes_escapes<'arena>(s: &str, arena: &'arena Bump) -> Result<&'a
 ///
 /// Returns a `Literal` with all values parsed and validated.
 pub fn process_literal<'arena>(
-    raw: &RawLiteral<'arena>,
-    interner: &mut StringInterner<'arena>,
+    raw: &RawLiteral,
+    interner: &mut SymbolInterner,
     arena: &'arena Bump,
 ) -> Result<Literal<'arena>> {
+    #[inline]
+    fn resolve_required<'a>(interner: &'a SymbolInterner, id: &'a InternId) -> Result<&'a str> {
+        interner.resolve(id).ok_or_else(|| {
+            Error::new(
+                Phase::AstConstruction,
+                ErrorKind::Custom("unresolved interned string id".to_string()),
+                format!("unresolved interned string id: {:?}", id),
+            )
+        })
+    }
+
     match raw {
-        RawLiteral::Int(s) => {
+        RawLiteral::Int(id) => {
+            let s = resolve_required(interner, id)?;
             let value = parse_int(s)?;
             Ok(Literal::Int(value))
         }
-        RawLiteral::UInt(s) => {
+        RawLiteral::UInt(id) => {
+            let s = resolve_required(interner, id)?;
             let value = parse_uint(s)?;
             Ok(Literal::UInt(value))
         }
-        RawLiteral::Float(s) => {
+        RawLiteral::Float(id) => {
+            let s = resolve_required(interner, id)?;
             let value = parse_float(s)?;
             Ok(Literal::Float(value))
         }
         RawLiteral::String(content, is_raw, _quote_style) => {
             if *is_raw {
                 // Raw strings: no escape processing
-                Ok(Literal::String(interner.intern(content)))
+                Ok(Literal::String(*content))
             } else {
                 // Process escape sequences
-                let processed = process_string_escapes(content, interner)?;
+                let content = resolve_required(interner, content)?.to_string();
+                let processed = process_string_escapes(&content, interner)?;
                 Ok(Literal::String(processed))
             }
         }
         RawLiteral::Bytes(content, is_raw, _quote_style) => {
             if *is_raw {
                 // Raw bytes: no escape processing, just convert string to bytes
+                let content = resolve_required(interner, content)?;
                 Ok(Literal::Bytes(arena.alloc_slice_copy(content.as_bytes())))
             } else {
                 // Process escape sequences
+                let content = resolve_required(interner, content)?;
                 let processed = process_bytes_escapes(content, arena)?;
                 Ok(Literal::Bytes(processed))
             }
@@ -461,16 +475,16 @@ mod tests {
     ///
     /// This provides a convenient way to create an arena and interner for tests.
     /// Access the fields directly: `ctx.arena` and `ctx.interner`.
-    struct TestContext<'a> {
+    struct TestContext {
         arena: Bump,
-        interner: StringInterner<'a>,
+        interner: SymbolInterner,
     }
 
-    impl<'a> Default for TestContext<'a> {
+    impl Default for TestContext {
         fn default() -> Self {
             Self {
                 arena: Bump::new(),
-                interner: StringInterner::default(),
+                interner: SymbolInterner::default(),
             }
         }
     }
@@ -508,64 +522,50 @@ mod tests {
     fn test_string_escapes_simple() {
         let mut ctx = TestContext::default();
 
-        assert_eq!(
-            process_string_escapes("hello\\nworld", &mut ctx.interner).unwrap(),
-            "hello\nworld"
-        );
-        assert_eq!(
-            process_string_escapes("tab\\there", &mut ctx.interner).unwrap(),
-            "tab\there"
-        );
-        assert_eq!(
-            process_string_escapes("quote\\\"test", &mut ctx.interner).unwrap(),
-            "quote\"test"
-        );
+        let id = process_string_escapes("hello\\nworld", &mut ctx.interner).unwrap();
+        assert_eq!(ctx.interner.resolve(&id).unwrap(), "hello\nworld");
+
+        let id = process_string_escapes("tab\\there", &mut ctx.interner).unwrap();
+        assert_eq!(ctx.interner.resolve(&id).unwrap(), "tab\there");
+
+        let id = process_string_escapes("quote\\\"test", &mut ctx.interner).unwrap();
+        assert_eq!(ctx.interner.resolve(&id).unwrap(), "quote\"test");
     }
 
     #[test]
     fn test_string_escapes_hex() {
         let mut ctx = TestContext::default();
 
-        assert_eq!(
-            process_string_escapes("\\x41", &mut ctx.interner).unwrap(),
-            "A"
-        );
-        assert_eq!(
-            process_string_escapes("\\xFF", &mut ctx.interner).unwrap(),
-            "\u{FF}"
-        );
+        let id = process_string_escapes("\\x41", &mut ctx.interner).unwrap();
+        assert_eq!(ctx.interner.resolve(&id).unwrap(), "A");
+
+        let id = process_string_escapes("\\xFF", &mut ctx.interner).unwrap();
+        assert_eq!(ctx.interner.resolve(&id).unwrap(), "\u{FF}");
     }
 
     #[test]
     fn test_string_escapes_unicode() {
         let mut ctx = TestContext::default();
 
-        assert_eq!(
-            process_string_escapes("\\u0041", &mut ctx.interner).unwrap(),
-            "A"
-        );
-        assert_eq!(
-            process_string_escapes("\\U00000041", &mut ctx.interner).unwrap(),
-            "A"
-        );
-        assert_eq!(
-            process_string_escapes("\\u2764", &mut ctx.interner).unwrap(),
-            "❤"
-        );
+        let id = process_string_escapes("\\u0041", &mut ctx.interner).unwrap();
+        assert_eq!(ctx.interner.resolve(&id).unwrap(), "A");
+
+        let id = process_string_escapes("\\U00000041", &mut ctx.interner).unwrap();
+        assert_eq!(ctx.interner.resolve(&id).unwrap(), "A");
+
+        let id = process_string_escapes("\\u2764", &mut ctx.interner).unwrap();
+        assert_eq!(ctx.interner.resolve(&id).unwrap(), "❤");
     }
 
     #[test]
     fn test_string_escapes_octal() {
         let mut ctx = TestContext::default();
 
-        assert_eq!(
-            process_string_escapes("\\101", &mut ctx.interner).unwrap(),
-            "A"
-        );
-        assert_eq!(
-            process_string_escapes("\\377", &mut ctx.interner).unwrap(),
-            "\u{FF}"
-        );
+        let id = process_string_escapes("\\101", &mut ctx.interner).unwrap();
+        assert_eq!(ctx.interner.resolve(&id).unwrap(), "A");
+
+        let id = process_string_escapes("\\377", &mut ctx.interner).unwrap();
+        assert_eq!(ctx.interner.resolve(&id).unwrap(), "\u{FF}");
     }
 
     #[test]
@@ -590,8 +590,8 @@ mod tests {
     fn test_no_escapes_fast_path() {
         let mut ctx = TestContext::default();
 
-        let result = process_string_escapes("hello world", &mut ctx.interner).unwrap();
-        assert_eq!(result, "hello world");
+        let id = process_string_escapes("hello world", &mut ctx.interner).unwrap();
+        assert_eq!(ctx.interner.resolve(&id).unwrap(), "hello world");
     }
 
     #[test]
@@ -599,27 +599,27 @@ mod tests {
         let mut ctx = TestContext::default();
 
         // Decimal integers
-        let raw = RawLiteral::Int("123");
+        let raw = RawLiteral::Int(ctx.interner.intern("123"));
         assert_eq!(
             process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap(),
             Literal::Int(123)
         );
 
-        let raw = RawLiteral::Int("-456");
+        let raw = RawLiteral::Int(ctx.interner.intern("-456"));
         assert_eq!(
             process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap(),
             Literal::Int(-456)
         );
 
         // Hex integers
-        let raw = RawLiteral::Int("0xFF");
+        let raw = RawLiteral::Int(ctx.interner.intern("0xFF"));
         assert_eq!(
             process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap(),
             Literal::Int(255)
         );
 
         // Unsigned integers
-        let raw = RawLiteral::UInt("789");
+        let raw = RawLiteral::UInt(ctx.interner.intern("789"));
         assert_eq!(
             process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap(),
             Literal::UInt(789)
@@ -630,7 +630,7 @@ mod tests {
     fn test_process_literal_floats() {
         let mut ctx = TestContext::default();
 
-        let raw = RawLiteral::Float("3.14");
+        let raw = RawLiteral::Float(ctx.interner.intern("3.14"));
         if let Literal::Float(val) = process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap() {
             #[allow(clippy::approx_constant)] // Test value, not using constant
             {
@@ -646,18 +646,23 @@ mod tests {
         let mut ctx = TestContext::default();
 
         // Raw string - no processing
-        let raw = RawLiteral::String("hello\\nworld", true, QuoteStyle::DoubleQuote);
+        let content = ctx.interner.intern("hello\\nworld");
+        let raw = RawLiteral::String(content, true, QuoteStyle::DoubleQuote);
         assert_eq!(
             process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap(),
-            Literal::String("hello\\nworld")
+            Literal::String(content)
         );
 
         // Non-raw string - process escapes
-        let raw = RawLiteral::String("hello\\nworld", false, QuoteStyle::DoubleQuote);
-        assert_eq!(
-            process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap(),
-            Literal::String("hello\nworld")
-        );
+        let content = ctx.interner.intern("hello\\nworld");
+        let raw = RawLiteral::String(content, false, QuoteStyle::DoubleQuote);
+        let lit = process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap();
+        match lit {
+            Literal::String(id) => {
+                assert_eq!(ctx.interner.resolve(&id).unwrap(), "hello\nworld");
+            }
+            _ => panic!("Expected String literal"),
+        }
     }
 
     #[test]
@@ -691,7 +696,7 @@ mod tests {
         let mut ctx = TestContext::default();
 
         // \xFF is byte 255 - NOT valid UTF-8 on its own
-        let raw = RawLiteral::Bytes("\\xFF", false, QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::Bytes(ctx.interner.intern("\\xFF"), false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap();
 
         if let Literal::Bytes(bytes) = result {
@@ -704,7 +709,7 @@ mod tests {
         }
 
         // \377 (octal) is also byte 255
-        let raw = RawLiteral::Bytes("\\377", false, QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::Bytes(ctx.interner.intern("\\377"), false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap();
 
         if let Literal::Bytes(bytes) = result {
@@ -715,7 +720,11 @@ mod tests {
         }
 
         // Sequence of invalid UTF-8 bytes
-        let raw = RawLiteral::Bytes("\\xFF\\xFE\\xFD", false, QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::Bytes(
+            ctx.interner.intern("\\xFF\\xFE\\xFD"),
+            false,
+            QuoteStyle::DoubleQuote,
+        );
         let result = process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap();
 
         if let Literal::Bytes(bytes) = result {
@@ -733,7 +742,7 @@ mod tests {
         let mut ctx = TestContext::default();
 
         // ASCII is valid UTF-8
-        let raw = RawLiteral::Bytes("abc", false, QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::Bytes(ctx.interner.intern("abc"), false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap();
 
         if let Literal::Bytes(bytes) = result {
@@ -744,7 +753,7 @@ mod tests {
         }
 
         // CEL Spec example (line 335): b"ÿ" is bytes [195, 191] (UTF-8 of ÿ)
-        let raw = RawLiteral::Bytes("ÿ", false, QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::Bytes(ctx.interner.intern("ÿ"), false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.interner, &ctx.arena).unwrap();
 
         if let Literal::Bytes(bytes) = result {

@@ -11,14 +11,13 @@
 
 use crate::cel::{
     ast::{BinaryOp, Expr, ExprKind, Literal, QuoteStyle, RawLiteral, Span, UnaryOp},
-    context::StringInterner,
     error::{Error, Result},
     literal,
     parser::{ParseConfig, Rule, parse_with_config},
 };
+use crate::common::{InternId, Interner, SymbolInterner};
 use bumpalo::Bump;
 use pest::iterators::Pair;
-use std::cell::RefCell;
 
 /// Check recursion depth remaining and return error if exhausted
 ///
@@ -46,7 +45,7 @@ pub fn build_ast_with_arena<'arena>(
     input: &str,
     config: ParseConfig,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<&'arena Expr<'arena>> {
     // First parse with pest
     let pairs = parse_with_config(input, config)?;
@@ -117,7 +116,7 @@ fn build_expr<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<&'arena Expr<'arena>> {
     // Check depth and decrement for recursive calls
     let depth_left = check_depth(depth_left)?;
@@ -141,7 +140,7 @@ fn build_expr<'arena>(
         }
         Rule::ident => {
             let span = span_from_pair(&pair);
-            let name = interner.borrow_mut().intern(pair.as_str());
+            let name = interner.intern(pair.as_str());
             Ok(arena.alloc(Expr::new(ExprKind::Ident(name), span)))
         }
         _ => unreachable!("Unexpected rule in build_expr: {:?}", pair.as_rule()),
@@ -154,7 +153,7 @@ fn build_expr_ternary<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -194,7 +193,7 @@ fn build_conditional_or<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -223,7 +222,7 @@ fn build_conditional_and<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -252,7 +251,7 @@ fn build_relation<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -298,7 +297,7 @@ fn build_addition<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -349,7 +348,7 @@ fn build_multiplication<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -401,7 +400,7 @@ fn build_unary<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -459,7 +458,7 @@ fn build_member<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -481,7 +480,7 @@ fn build_member<'arena>(
                 let selector = inner
                     .next()
                     .expect("Parser validated: member = { ... ~ (\".\" ~ selector ~ ...)* }");
-                let field_name = interner.borrow_mut().intern(selector.as_str());
+                let field_name = interner.intern(selector.as_str());
 
                 // Check if there's a function call
                 if let Some(peek) = inner.peek() {
@@ -554,7 +553,7 @@ fn build_primary<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -569,7 +568,7 @@ fn build_primary<'arena>(
             span,
         ))),
         Rule::ident => {
-            let name = interner.borrow_mut().intern(first.as_str());
+            let name = interner.intern(first.as_str());
             // Check for function call
             if inner.peek().map(|p| p.as_str()) == Some("(") {
                 inner.next(); // consume "("
@@ -661,7 +660,7 @@ fn build_literal<'arena>(
     pair: Pair<Rule>,
     span: Span,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<Literal<'arena>> {
     let inner = pair
         .into_inner()
@@ -670,7 +669,7 @@ fn build_literal<'arena>(
 
     // First, create a RawLiteral from the parser output
     let raw_literal = match inner.as_rule() {
-        Rule::int_lit => RawLiteral::Int(interner.borrow_mut().intern(inner.as_str())),
+        Rule::int_lit => RawLiteral::Int(interner.intern(inner.as_str())),
         Rule::uint_lit => {
             // Remove the 'u' suffix using strip_suffix
             let s = inner.as_str();
@@ -678,9 +677,9 @@ fn build_literal<'arena>(
                 .strip_suffix('u')
                 .or_else(|| s.strip_suffix('U'))
                 .expect("Parser validated: uint_lit ends with 'u' or 'U'");
-            RawLiteral::UInt(interner.borrow_mut().intern(s_without_suffix))
+            RawLiteral::UInt(interner.intern(s_without_suffix))
         }
-        Rule::float_lit => RawLiteral::Float(interner.borrow_mut().intern(inner.as_str())),
+        Rule::float_lit => RawLiteral::Float(interner.intern(inner.as_str())),
         Rule::string_lit => {
             let s = inner.as_str();
             let (content, is_raw, quote_style) = parse_string_literal(s, interner);
@@ -702,18 +701,14 @@ fn build_literal<'arena>(
     };
 
     // Process the RawLiteral into a Literal, adding span information to any errors
-    literal::process_literal(&raw_literal, &mut interner.borrow_mut(), arena)
-        .map_err(|e| e.with_span(span))
+    literal::process_literal(&raw_literal, interner, arena).map_err(|e| e.with_span(span))
 }
 
 /// Parse a string literal, extracting content, raw flag, and quote style
 ///
 /// **CEL-RESTRICTED**: Escape sequences are NOT processed here.
 /// They will be processed during value construction.
-fn parse_string_literal<'arena>(
-    s: &str,
-    interner: &RefCell<StringInterner<'arena>>,
-) -> (&'arena str, bool, QuoteStyle) {
+fn parse_string_literal(s: &str, interner: &mut SymbolInterner) -> (InternId, bool, QuoteStyle) {
     // Check for raw string prefix using pattern matching
     let (s, is_raw) = if let Some(rest) = s.strip_prefix('r').or_else(|| s.strip_prefix('R')) {
         (rest, true)
@@ -746,7 +741,7 @@ fn parse_string_literal<'arena>(
         unreachable!("invalid string literal: {}", s)
     };
 
-    (interner.borrow_mut().intern(content), is_raw, quote_style)
+    (interner.intern(content), is_raw, quote_style)
 }
 
 /// Build an expression list - collect into std Vec, then clone into arena slice
@@ -757,7 +752,7 @@ fn build_expr_list<'arena>(
     depth_left: usize,
     pair: Pair<Rule>,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<&'arena [Expr<'arena>]> {
     let exprs: Result<Vec<&Expr<'arena>>> = pair
         .into_inner()
@@ -777,7 +772,7 @@ fn build_map_inits<'arena>(
     depth_left: usize,
     pair: Pair<Rule>,
     arena: &'arena Bump,
-    interner: &RefCell<StringInterner<'arena>>,
+    interner: &mut SymbolInterner,
 ) -> Result<&'arena [(Expr<'arena>, Expr<'arena>)]> {
     let mut inner = pair.into_inner();
     let mut entries: Vec<(&Expr<'arena>, &Expr<'arena>)> = Vec::new();
@@ -843,11 +838,18 @@ fn apply_unary_repeated<'arena>(
 mod tests {
     use super::*;
 
+    struct BuiltAst {
+        ast: Expr<'static>,
+        interner: SymbolInterner,
+    }
+
     // Test helper that leaks arena (acceptable in tests)
-    fn build_ast(input: &str) -> Result<Expr<'static>> {
+    fn build_ast(input: &str) -> Result<BuiltAst> {
         let arena = Box::leak(Box::new(Bump::new()));
-        let interner = RefCell::new(StringInterner::default());
-        build_ast_with_arena(input, ParseConfig::default(), arena, &interner).cloned()
+        let mut interner = SymbolInterner::default();
+        let ast =
+            build_ast_with_arena(input, ParseConfig::default(), arena, &mut interner)?.clone();
+        Ok(BuiltAst { ast, interner })
     }
 
     macro_rules! test_cases {
@@ -868,23 +870,23 @@ mod tests {
 
     test_cases! {
         test_build_ast_literal_int: "42" => |ast| {
-            match ast.kind {
+            match ast.ast.kind {
                 ExprKind::Literal(Literal::Int(val)) => assert_eq!(val, 42),
                 _ => panic!("expected int literal"),
             }
         },
 
         test_build_ast_literal_string: r#""hello""# => |ast| {
-            match ast.kind {
+            match ast.ast.kind {
                 ExprKind::Literal(Literal::String(content)) => {
-                    assert_eq!(content, "hello");
+                    assert_eq!(ast.interner.resolve(&content).unwrap(), "hello");
                 }
                 _ => panic!("expected string literal"),
             }
         },
 
         test_build_ast_binary_add: "1 + 2" => |ast| {
-            match ast.kind {
+            match ast.ast.kind {
                 ExprKind::Binary(op, left, right) => {
                     assert_eq!(op, BinaryOp::Add);
                     match left.kind {
@@ -901,7 +903,7 @@ mod tests {
         },
 
         test_build_ast_ternary: "true ? 1 : 2" => |ast| {
-            match ast.kind {
+            match ast.ast.kind {
                 ExprKind::Ternary(cond, if_true, if_false) => {
                     match cond.kind {
                         ExprKind::Literal(Literal::Bool(true)) => {}
@@ -921,14 +923,14 @@ mod tests {
         },
 
         test_build_ast_identifier: "foo" => |ast| {
-            match ast.kind {
-                ExprKind::Ident(name) => assert_eq!(name, "foo"),
+            match ast.ast.kind {
+                ExprKind::Ident(name) => assert_eq!(ast.interner.resolve(&name).unwrap(), "foo"),
                 _ => panic!("expected identifier"),
             }
         },
 
         test_build_ast_list: "[1, 2, 3]" => |ast| {
-            match ast.kind {
+            match ast.ast.kind {
                 ExprKind::List(items) => {
                     assert_eq!(items.len(), 3);
                 }

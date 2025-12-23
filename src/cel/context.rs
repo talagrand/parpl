@@ -12,52 +12,8 @@ use crate::cel::{
     error::{Error, ErrorKind, Phase, Result},
     parser::ParseConfig,
 };
+use crate::common::{InternId, Interner, SymbolInterner};
 use bumpalo::Bump;
-use std::cell::RefCell;
-use string_interner::{StringInterner as InnerInterner, backend::StringBackend};
-
-// ============================================================================
-// String Interner
-// ============================================================================
-
-/// String interner with deduplication
-///
-/// A thin wrapper around string-interner that provides lifetime-safe access.
-pub(crate) struct StringInterner<'arena> {
-    interner: InnerInterner<StringBackend>,
-    _phantom: std::marker::PhantomData<&'arena ()>,
-}
-
-impl<'arena> StringInterner<'arena> {
-    /// Intern a string, returning a reference with arena lifetime
-    ///
-    /// If the string has been interned before, returns the existing
-    /// reference. Otherwise, allocates and caches it.
-    ///
-    /// Note: The returned &str has 'arena lifetime because this StringInterner
-    /// is stored in Context with 'arena lifetime.
-    pub(crate) fn intern(&mut self, s: &str) -> &'arena str {
-        let symbol = self.interner.get_or_intern(s);
-        // SAFETY: The string-interner stores strings with its own lifetime.
-        // Since self has 'arena lifetime (it's stored in Context),
-        // the strings it returns also have 'arena lifetime.
-        // We transmute to make this explicit to the compiler.
-        unsafe {
-            std::mem::transmute::<&str, &'arena str>(
-                self.interner.resolve(symbol).expect("Symbol must resolve"),
-            )
-        }
-    }
-}
-
-impl<'arena> Default for StringInterner<'arena> {
-    fn default() -> Self {
-        Self {
-            interner: InnerInterner::new(),
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
 
 // ============================================================================
 // Configuration Builder
@@ -229,11 +185,11 @@ impl Builder {
     /// ```
     pub fn build(self) -> Context {
         let arena = Bump::new();
-        let interner = StringInterner::default();
+        let interner = SymbolInterner::default();
 
         Context {
             arena,
-            interner: RefCell::new(interner),
+            interner,
             config: self,
             input: None,
             ast: None,
@@ -321,7 +277,7 @@ impl Builder {
 /// ```
 pub struct Context {
     arena: Bump,
-    interner: RefCell<StringInterner<'static>>, // Transmuted lifetime
+    interner: SymbolInterner,
     config: Builder,
     input: Option<String>,
     ast: Option<&'static Expr<'static>>, // Transmuted lifetime - actually tied to arena
@@ -345,8 +301,8 @@ impl Context {
         // Reset arena for new parse
         self.arena.reset();
 
-        // Reset interner - just create a new one
-        *self.interner.borrow_mut() = StringInterner::default();
+        // Reset interner
+        self.interner = SymbolInterner::default();
 
         self.input = Some(input.to_string());
         self.ast = None;
@@ -365,7 +321,7 @@ impl Context {
         // 2. We reset the arena on each parse
         // 3. References are transmuted back to correct lifetime in ast()
         let arena_ref: &'static Bump = unsafe { std::mem::transmute(&self.arena) };
-        let interner = &self.interner;
+        let interner = &mut self.interner;
 
         let ast = ast_builder::build_ast_with_arena(input, config, arena_ref, interner)?;
 
@@ -404,6 +360,11 @@ impl Context {
             })
     }
 
+    /// Resolve an interned string ID back to its string value.
+    pub fn resolve<'a>(&'a self, id: &'a InternId) -> Option<&'a str> {
+        self.interner.resolve(id)
+    }
+
     /// Get the input string that was parsed
     ///
     /// Returns `None` if no expression has been parsed yet.
@@ -422,10 +383,24 @@ impl Context {
     /// The arena and string interner are cleared.
     pub fn reset(&mut self) {
         self.arena.reset();
-        // Reset interner - just create a new one
-        *self.interner.borrow_mut() = StringInterner::default();
+        // Reset interner
+        self.interner = SymbolInterner::default();
         self.input = None;
         self.ast = None;
+    }
+}
+
+impl Interner for Context {
+    type Id = InternId;
+
+    #[inline]
+    fn intern(&mut self, text: &str) -> Self::Id {
+        self.interner.intern(text)
+    }
+
+    #[inline]
+    fn resolve<'a>(&'a self, id: &'a Self::Id) -> Option<&'a str> {
+        self.interner.resolve(id)
     }
 }
 

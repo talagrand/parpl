@@ -20,7 +20,7 @@ fn main() -> Result<()> {
     Builder::default().parse_scoped("1 + 2 * 3", |ctx| {
         let ast = ctx.ast()?;
         println!("   Expression: 1 + 2 * 3");
-        println!("   Result: {}", ast);
+        println!("{}", pretty_print(ast, ctx));
         Ok(())
     })?;
 
@@ -32,7 +32,7 @@ fn main() -> Result<()> {
     Builder::default().parse_scoped("x > 0 ? x : -x", |ctx| {
         let ast = ctx.ast()?;
         println!("   Expression: x > 0 ? x : -x");
-        println!("{}", pretty_print(ast));
+        println!("{}", pretty_print(ast, ctx));
         Ok(())
     })?;
 
@@ -42,7 +42,7 @@ fn main() -> Result<()> {
         let ast = ctx.ast()?;
         let config = PrettyConfig::default().with_spans();
         println!("   Expression: true && false");
-        println!("{}", pretty_print_with_config(ast, &config));
+        println!("{}", pretty_print_with_config(ast, &config, ctx));
         Ok(())
     })?;
 

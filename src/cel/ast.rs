@@ -7,6 +7,7 @@
 // - Deferred processing (escape sequences handled during value construction)
 // - Arena allocation for efficient memory management
 
+use crate::common::InternId;
 pub use crate::common::Span;
 use std::fmt;
 
@@ -45,7 +46,7 @@ pub enum ExprKind<'arena> {
     /// CEL Spec (line 79): Member "." SELECTOR \["(" \[ExprList\] ")"\]
     Member(
         &'arena Expr<'arena>,
-        &'arena str,
+        InternId,
         Option<&'arena [Expr<'arena>]>,
     ),
 
@@ -57,13 +58,13 @@ pub enum ExprKind<'arena> {
     /// CEL Spec (line 83): \["."\] IDENT "(" \[ExprList\] ")"
     Call(
         Option<&'arena Expr<'arena>>,
-        &'arena str,
+        InternId,
         &'arena [Expr<'arena>],
     ),
 
     /// Identifier reference
     /// CEL Spec (line 83): IDENT
-    Ident(&'arena str),
+    Ident(InternId),
 
     /// List literal: \[expr, ...\]
     /// CEL Spec (line 86): "\[" \[ExprList\] "\]"
@@ -77,8 +78,8 @@ pub enum ExprKind<'arena> {
     /// CEL Spec (line 88): \["."\] SELECTOR {"." SELECTOR} "{" \[FieldInits\] "}"
     Struct(
         Option<&'arena Expr<'arena>>,
-        &'arena [&'arena str],
-        &'arena [(&'arena str, Expr<'arena>)],
+        &'arena [InternId],
+        &'arena [(InternId, Expr<'arena>)],
     ),
 
     /// Literal value (processed and validated)
@@ -90,18 +91,18 @@ pub enum ExprKind<'arena> {
 /// This represents the literal as it appears in the source code, before any
 /// processing or validation. The ast_builder converts these to `Literal` nodes.
 #[derive(Debug, Clone, PartialEq)]
-pub enum RawLiteral<'arena> {
+pub enum RawLiteral {
     /// Integer literal: "123", "0xFF", "-456"
     /// CEL Spec (line 145): INT_LIT ::= -? DIGIT+ | -? 0x HEXDIGIT+
-    Int(&'arena str),
+    Int(InternId),
 
     /// Unsigned integer literal: "123", "0xFF" (without 'u' suffix)
     /// CEL Spec (line 146): UINT_LIT ::= INT_LIT [uU]
-    UInt(&'arena str),
+    UInt(InternId),
 
     /// Floating-point literal: "3.14", "1e10", ".5"
     /// CEL Spec (line 147): FLOAT_LIT
-    Float(&'arena str),
+    Float(InternId),
 
     /// String literal: raw content between quotes
     /// CEL Spec (lines 149-153): STRING_LIT
@@ -109,12 +110,12 @@ pub enum RawLiteral<'arena> {
     /// - content: the text between quotes (without the quotes themselves)
     /// - is_raw: true if prefixed with r/R (no escape processing needed)
     /// - quote_style: which quote delimiters were used
-    String(&'arena str, bool, QuoteStyle),
+    String(InternId, bool, QuoteStyle),
 
     /// Bytes literal: raw content between quotes
     /// CEL Spec (line 154): BYTES_LIT = [bB] STRING_LIT
     /// Stores: (content, is_raw, quote_style)
-    Bytes(&'arena str, bool, QuoteStyle),
+    Bytes(InternId, bool, QuoteStyle),
 
     /// Boolean literal: true, false
     /// CEL Spec (line 160): BOOL_LIT
@@ -232,7 +233,7 @@ pub enum Literal<'arena> {
     /// String literal: processed with escape sequences resolved
     /// CEL Spec (lines 149-153): STRING_LIT
     /// All escape sequences (\n, \t, \xHH, \uHHHH, \UHHHHHHHH, octal) are processed
-    String(&'arena str),
+    String(InternId),
 
     /// Bytes literal: processed with escape sequences resolved
     /// CEL Spec (line 154): BYTES_LIT = [bB] STRING_LIT

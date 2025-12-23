@@ -1,6 +1,8 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
+use string_interner::{DefaultSymbol, StringInterner, backend::DefaultBackend};
+
 /// A byte-offset span into the original source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
@@ -56,7 +58,7 @@ impl<T: Clone + Eq + Hash + Debug> StringId for T {}
 pub trait Interner {
     type Id: StringId;
     fn intern(&mut self, text: &str) -> Self::Id;
-    fn resolve<'a>(&'a self, id: &'a Self::Id) -> &'a str;
+    fn resolve<'a>(&'a self, id: &'a Self::Id) -> Option<&'a str>;
 }
 
 /// A no-op interner that uses `String` as the ID.
@@ -71,7 +73,37 @@ impl Interner for NoOpInterner {
         text.to_string()
     }
 
-    fn resolve<'a>(&'a self, id: &'a Self::Id) -> &'a str {
-        id.as_str()
+    fn resolve<'a>(&'a self, id: &'a Self::Id) -> Option<&'a str> {
+        Some(id.as_str())
     }
 }
+
+/// A general-purpose interner backed by `string_interner`.
+///
+/// This is suitable for both Scheme and CEL usage when you want stable IDs.
+#[derive(Default, Debug, Clone)]
+pub struct SymbolInterner(StringInterner<DefaultBackend>);
+
+impl SymbolInterner {
+    #[inline]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Interner for SymbolInterner {
+    type Id = DefaultSymbol;
+
+    #[inline]
+    fn intern(&mut self, text: &str) -> Self::Id {
+        self.0.get_or_intern(text)
+    }
+
+    #[inline]
+    fn resolve<'a>(&'a self, id: &'a Self::Id) -> Option<&'a str> {
+        self.0.resolve(*id)
+    }
+}
+
+/// The default string ID used by `SymbolInterner`.
+pub type InternId = DefaultSymbol;

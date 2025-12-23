@@ -5,6 +5,7 @@
 // the boilerplate of creating contexts.
 
 use crate::cel::{
+    Context,
     ast::{BinaryOp, Expr, ExprKind, Literal},
     context::Builder,
     error::ErrorKind,
@@ -20,18 +21,18 @@ use crate::cel::{
 /// ```
 /// # use parpl::cel::test_util::*;
 /// # use parpl::cel::ExprKind;
-/// parse("1 + 2", |ast| {
+/// parse("1 + 2", |_, ast| {
 ///     assert!(matches!(ast.kind, ExprKind::Binary(..)));
 /// });
 /// ```
 #[track_caller]
 pub fn parse<F>(input: &str, f: F)
 where
-    F: for<'a> FnOnce(&Expr<'a>),
+    F: for<'a> FnOnce(&Context, &Expr<'a>),
 {
     Builder::default()
         .parse_scoped(input, |ctx| {
-            f(ctx.ast()?);
+            f(ctx, ctx.ast()?);
             Ok(())
         })
         .unwrap_or_else(|e| panic!("Parse failed for '{}': {}", input, e));
@@ -48,21 +49,21 @@ where
 ///     max_ast_depth: 24,
 ///     max_call_limit: 100,
 /// };
-/// parse_with_config("1 + 2", config, |ast| {
+/// parse_with_config("1 + 2", config, |_, ast| {
 ///     assert!(matches!(ast.kind, ExprKind::Binary(..)));
 /// });
 /// ```
 #[track_caller]
 pub fn parse_with_config<F>(input: &str, config: ParseConfig, f: F)
 where
-    F: for<'a> FnOnce(&Expr<'a>),
+    F: for<'a> FnOnce(&Context, &Expr<'a>),
 {
     Builder::default()
         .max_parse_depth(config.max_parse_depth)
         .max_ast_depth(config.max_ast_depth)
         .max_call_limit(config.max_call_limit)
         .parse_scoped(input, |ctx| {
-            f(ctx.ast()?);
+            f(ctx, ctx.ast()?);
             Ok(())
         })
         .unwrap_or_else(|e| panic!("Parse failed for '{}': {}", input, e));
@@ -78,7 +79,7 @@ where
 /// ```
 #[track_caller]
 pub fn assert_parses(input: &str) {
-    parse(input, |_| {});
+    parse(input, |_, _| {});
 }
 
 /// Assert that parsing fails
@@ -137,12 +138,12 @@ pub fn assert_ast_kind<F>(input: &str, predicate: F)
 where
     F: for<'a> FnOnce(&ExprKind<'a>) -> bool,
 {
-    parse(input, |ast| {
+    parse(input, |ctx, ast| {
         if !predicate(&ast.kind) {
             panic!(
                 "AST kind predicate failed for '{}':\n{}",
                 input,
-                pretty_print(ast)
+                pretty_print(ast, ctx)
             );
         }
     });
@@ -162,7 +163,7 @@ pub fn assert_literal<F>(input: &str, predicate: F)
 where
     F: FnOnce(&Literal) -> bool,
 {
-    parse(input, |ast| match &ast.kind {
+    parse(input, |ctx, ast| match &ast.kind {
         ExprKind::Literal(lit) => {
             if !predicate(lit) {
                 panic!("Literal predicate failed for '{}':\n{:?}", input, lit);
@@ -171,7 +172,7 @@ where
         _ => panic!(
             "Expected literal for '{}', got:\n{}",
             input,
-            pretty_print(ast)
+            pretty_print(ast, ctx)
         ),
     });
 }
@@ -186,19 +187,20 @@ where
 /// ```
 #[track_caller]
 pub fn assert_ident(input: &str, expected_name: &str) {
-    parse(input, |ast| match &ast.kind {
+    parse(input, |ctx, ast| match &ast.kind {
         ExprKind::Ident(name) => {
-            if *name != expected_name {
+            let actual = ctx.resolve(name).unwrap_or("<unresolved>");
+            if actual != expected_name {
                 panic!(
                     "Expected identifier '{}' for '{}', got '{}'",
-                    expected_name, input, name
+                    expected_name, input, actual
                 );
             }
         }
         _ => panic!(
             "Expected identifier for '{}', got:\n{}",
             input,
-            pretty_print(ast)
+            pretty_print(ast, ctx)
         ),
     });
 }
@@ -214,7 +216,7 @@ pub fn assert_ident(input: &str, expected_name: &str) {
 /// ```
 #[track_caller]
 pub fn assert_binary(input: &str, expected_op: BinaryOp) {
-    parse(input, |ast| match &ast.kind {
+    parse(input, |ctx, ast| match &ast.kind {
         ExprKind::Binary(op, _, _) => {
             if *op != expected_op {
                 panic!(
@@ -226,7 +228,7 @@ pub fn assert_binary(input: &str, expected_op: BinaryOp) {
         _ => panic!(
             "Expected binary operation for '{}', got:\n{}",
             input,
-            pretty_print(ast)
+            pretty_print(ast, ctx)
         ),
     });
 }
@@ -240,12 +242,12 @@ pub fn assert_binary(input: &str, expected_op: BinaryOp) {
 /// ```
 #[track_caller]
 pub fn assert_ternary(input: &str) {
-    parse(input, |ast| match &ast.kind {
+    parse(input, |ctx, ast| match &ast.kind {
         ExprKind::Ternary(_, _, _) => {}
         _ => panic!(
             "Expected ternary operation for '{}', got:\n{}",
             input,
-            pretty_print(ast)
+            pretty_print(ast, ctx)
         ),
     });
 }
@@ -259,7 +261,7 @@ pub fn assert_ternary(input: &str) {
 /// ```
 #[track_caller]
 pub fn assert_list(input: &str, expected_len: usize) {
-    parse(input, |ast| match &ast.kind {
+    parse(input, |ctx, ast| match &ast.kind {
         ExprKind::List(elements) => {
             if elements.len() != expected_len {
                 panic!(
@@ -270,7 +272,11 @@ pub fn assert_list(input: &str, expected_len: usize) {
                 );
             }
         }
-        _ => panic!("Expected list for '{}', got:\n{}", input, pretty_print(ast)),
+        _ => panic!(
+            "Expected list for '{}', got:\n{}",
+            input,
+            pretty_print(ast, ctx)
+        ),
     });
 }
 
@@ -283,7 +289,7 @@ pub fn assert_list(input: &str, expected_len: usize) {
 /// ```
 #[track_caller]
 pub fn assert_map(input: &str, expected_len: usize) {
-    parse(input, |ast| match &ast.kind {
+    parse(input, |ctx, ast| match &ast.kind {
         ExprKind::Map(entries) => {
             if entries.len() != expected_len {
                 panic!(
@@ -294,7 +300,11 @@ pub fn assert_map(input: &str, expected_len: usize) {
                 );
             }
         }
-        _ => panic!("Expected map for '{}', got:\n{}", input, pretty_print(ast)),
+        _ => panic!(
+            "Expected map for '{}', got:\n{}",
+            input,
+            pretty_print(ast, ctx)
+        ),
     });
 }
 
@@ -308,7 +318,7 @@ pub fn assert_map(input: &str, expected_len: usize) {
 /// ```
 pub fn parse_and_pretty(input: &str) -> String {
     Builder::default()
-        .parse_scoped(input, |ctx| Ok(pretty_print(ctx.ast()?)))
+        .parse_scoped(input, |ctx| Ok(pretty_print(ctx.ast()?, ctx)))
         .unwrap_or_else(|e| format!("Parse error: {}", e))
 }
 

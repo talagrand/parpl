@@ -1,5 +1,5 @@
 use crate::{
-    common::{Interner, Span, Syntax},
+    common::{InternId, Interner, Span, SymbolInterner, Syntax},
     scheme::{
         ParseError,
         datumtraits::{DatumInspector, DatumKind, DatumWriter},
@@ -7,23 +7,6 @@ use crate::{
     },
 };
 use bumpalo::Bump;
-use string_interner::{DefaultSymbol, StringInterner, backend::DefaultBackend};
-
-/// A simple interner for our sample implementation.
-#[derive(Default)]
-pub struct SampleInterner(StringInterner<DefaultBackend>);
-
-impl Interner for SampleInterner {
-    type Id = DefaultSymbol;
-
-    fn intern(&mut self, text: &str) -> Self::Id {
-        self.0.get_or_intern(text)
-    }
-
-    fn resolve<'a>(&'a self, id: &'a Self::Id) -> &'a str {
-        self.0.resolve(*id).expect("Invalid string ID")
-    }
-}
 
 /// Datum syntax as defined in the "External representations" section
 /// of `spec/syn.md`.
@@ -47,14 +30,14 @@ pub enum Datum<'a> {
 }
 
 pub struct SampleWriter<'a> {
-    interner: SampleInterner,
+    interner: SymbolInterner,
     arena: &'a Bump,
 }
 
 impl<'a> SampleWriter<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         Self {
-            interner: SampleInterner::default(),
+            interner: SymbolInterner::default(),
             arena,
         }
     }
@@ -63,8 +46,8 @@ impl<'a> SampleWriter<'a> {
 impl<'a> DatumWriter for SampleWriter<'a> {
     type Output = Syntax<Datum<'a>>;
     type Error = (); // Infallible for this sample
-    type Interner = SampleInterner;
-    type StringId = DefaultSymbol;
+    type Interner = SymbolInterner;
+    type StringId = InternId;
     type N = PrimitiveOps;
 
     fn interner(&mut self) -> &mut Self::Interner {
@@ -84,12 +67,20 @@ impl<'a> DatumWriter for SampleWriter<'a> {
     }
 
     fn string(&mut self, v: Self::StringId, s: Span) -> Result<Self::Output, Self::Error> {
-        let str_val = self.interner.resolve(&v).to_string();
+        let str_val = self
+            .interner
+            .resolve(&v)
+            .unwrap_or("<unresolved>")
+            .to_string();
         Ok(Syntax::new(s, Datum::String(str_val)))
     }
 
     fn symbol(&mut self, v: Self::StringId, s: Span) -> Result<Self::Output, Self::Error> {
-        let str_val = self.interner.resolve(&v).to_string();
+        let str_val = self
+            .interner
+            .resolve(&v)
+            .unwrap_or("<unresolved>")
+            .to_string();
         Ok(Syntax::new(s, Datum::Symbol(str_val)))
     }
 
