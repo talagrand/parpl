@@ -1,5 +1,5 @@
 use crate::{
-    common::{InternId, Interner, Span, SymbolInterner, Syntax},
+    common::{Interner, Span, StringPool, StringPoolId, Syntax},
     scheme::{
         ParseError,
         datumtraits::{DatumInspector, DatumKind, DatumWriter},
@@ -30,14 +30,14 @@ pub enum Datum<'a> {
 }
 
 pub struct SampleWriter<'a> {
-    interner: SymbolInterner,
+    interner: StringPool,
     arena: &'a Bump,
 }
 
 impl<'a> SampleWriter<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         Self {
-            interner: SymbolInterner::default(),
+            interner: StringPool::default(),
             arena,
         }
     }
@@ -46,8 +46,8 @@ impl<'a> SampleWriter<'a> {
 impl<'a> DatumWriter for SampleWriter<'a> {
     type Output = Syntax<Datum<'a>>;
     type Error = (); // Infallible for this sample
-    type Interner = SymbolInterner;
-    type StringId = InternId;
+    type Interner = StringPool;
+    type StringId = StringPoolId;
     type N = PrimitiveOps;
 
     fn interner(&mut self) -> &mut Self::Interner {

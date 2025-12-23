@@ -16,7 +16,7 @@ use crate::{
         ast::{Literal, RawLiteral},
         error::{Error, ErrorKind, Phase, Result},
     },
-    common::{InternId, Interner, SymbolInterner},
+    common::{Interner, StringPool, StringPoolId},
 };
 use bumpalo::Bump;
 
@@ -248,7 +248,7 @@ pub fn parse_float(s: &str) -> Result<f64> {
 /// This is **fully conformant** with the CEL spec.
 /// CEL Spec (line 347): Invalid Unicode code points are rejected
 /// CEL Spec (line 348): UTF-16 surrogate code points are rejected (even in valid pairs)
-pub fn process_string_escapes(s: &str, interner: &mut SymbolInterner) -> Result<InternId> {
+pub fn process_string_escapes(s: &str, interner: &mut StringPool) -> Result<StringPoolId> {
     // Fast path: no escapes
     if !s.contains('\\') {
         return Ok(interner.intern(s));
@@ -407,11 +407,11 @@ pub fn process_bytes_escapes<'arena>(s: &str, arena: &'arena Bump) -> Result<&'a
 /// Returns a `Literal` with all values parsed and validated.
 pub fn process_literal<'arena>(
     raw: &RawLiteral,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
     arena: &'arena Bump,
 ) -> Result<Literal<'arena>> {
     #[inline]
-    fn resolve_required<'a>(interner: &'a SymbolInterner, id: &'a InternId) -> Result<&'a str> {
+    fn resolve_required<'a>(interner: &'a StringPool, id: &'a StringPoolId) -> Result<&'a str> {
         interner.resolve(id).ok_or_else(|| {
             Error::new(
                 Phase::AstConstruction,
@@ -477,14 +477,14 @@ mod tests {
     /// Access the fields directly: `ctx.arena` and `ctx.interner`.
     struct TestContext {
         arena: Bump,
-        interner: SymbolInterner,
+        interner: StringPool,
     }
 
     impl Default for TestContext {
         fn default() -> Self {
             Self {
                 arena: Bump::new(),
-                interner: SymbolInterner::default(),
+                interner: StringPool::default(),
             }
         }
     }

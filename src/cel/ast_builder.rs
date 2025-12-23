@@ -15,7 +15,7 @@ use crate::cel::{
     literal,
     parser::{ParseConfig, Rule, parse_with_config},
 };
-use crate::common::{InternId, Interner, SymbolInterner};
+use crate::common::{Interner, StringPool, StringPoolId};
 use bumpalo::Bump;
 use pest::iterators::Pair;
 
@@ -45,7 +45,7 @@ pub fn build_ast_with_arena<'arena>(
     input: &str,
     config: ParseConfig,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<&'arena Expr<'arena>> {
     // First parse with pest
     let pairs = parse_with_config(input, config)?;
@@ -116,7 +116,7 @@ fn build_expr<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<&'arena Expr<'arena>> {
     // Check depth and decrement for recursive calls
     let depth_left = check_depth(depth_left)?;
@@ -153,7 +153,7 @@ fn build_expr_ternary<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -193,7 +193,7 @@ fn build_conditional_or<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -222,7 +222,7 @@ fn build_conditional_and<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -251,7 +251,7 @@ fn build_relation<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -297,7 +297,7 @@ fn build_addition<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -348,7 +348,7 @@ fn build_multiplication<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -400,7 +400,7 @@ fn build_unary<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -458,7 +458,7 @@ fn build_member<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -553,7 +553,7 @@ fn build_primary<'arena>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<&'arena Expr<'arena>> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
@@ -660,7 +660,7 @@ fn build_literal<'arena>(
     pair: Pair<Rule>,
     span: Span,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<Literal<'arena>> {
     let inner = pair
         .into_inner()
@@ -708,7 +708,7 @@ fn build_literal<'arena>(
 ///
 /// **CEL-RESTRICTED**: Escape sequences are NOT processed here.
 /// They will be processed during value construction.
-fn parse_string_literal(s: &str, interner: &mut SymbolInterner) -> (InternId, bool, QuoteStyle) {
+fn parse_string_literal(s: &str, interner: &mut StringPool) -> (StringPoolId, bool, QuoteStyle) {
     // Check for raw string prefix using pattern matching
     let (s, is_raw) = if let Some(rest) = s.strip_prefix('r').or_else(|| s.strip_prefix('R')) {
         (rest, true)
@@ -752,7 +752,7 @@ fn build_expr_list<'arena>(
     depth_left: usize,
     pair: Pair<Rule>,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<&'arena [Expr<'arena>]> {
     let exprs: Result<Vec<&Expr<'arena>>> = pair
         .into_inner()
@@ -772,7 +772,7 @@ fn build_map_inits<'arena>(
     depth_left: usize,
     pair: Pair<Rule>,
     arena: &'arena Bump,
-    interner: &mut SymbolInterner,
+    interner: &mut StringPool,
 ) -> Result<&'arena [(Expr<'arena>, Expr<'arena>)]> {
     let mut inner = pair.into_inner();
     let mut entries: Vec<(&Expr<'arena>, &Expr<'arena>)> = Vec::new();
@@ -840,13 +840,13 @@ mod tests {
 
     struct BuiltAst {
         ast: Expr<'static>,
-        interner: SymbolInterner,
+        interner: StringPool,
     }
 
     // Test helper that leaks arena (acceptable in tests)
     fn build_ast(input: &str) -> Result<BuiltAst> {
         let arena = Box::leak(Box::new(Bump::new()));
-        let mut interner = SymbolInterner::default();
+        let mut interner = StringPool::default();
         let ast =
             build_ast_with_arena(input, ParseConfig::default(), arena, &mut interner)?.clone();
         Ok(BuiltAst { ast, interner })

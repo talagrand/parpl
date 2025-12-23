@@ -12,7 +12,7 @@ use crate::cel::{
     error::{Error, ErrorKind, Phase, Result},
     parser::ParseConfig,
 };
-use crate::common::{InternId, Interner, SymbolInterner};
+use crate::common::{Interner, StringPool, StringPoolId};
 use bumpalo::Bump;
 
 // ============================================================================
@@ -185,7 +185,7 @@ impl Builder {
     /// ```
     pub fn build(self) -> Context {
         let arena = Bump::new();
-        let interner = SymbolInterner::default();
+        let interner = StringPool::default();
 
         Context {
             arena,
@@ -277,7 +277,7 @@ impl Builder {
 /// ```
 pub struct Context {
     arena: Bump,
-    interner: SymbolInterner,
+    interner: StringPool,
     config: Builder,
     input: Option<String>,
     ast: Option<&'static Expr<'static>>, // Transmuted lifetime - actually tied to arena
@@ -302,7 +302,7 @@ impl Context {
         self.arena.reset();
 
         // Reset interner
-        self.interner = SymbolInterner::default();
+        self.interner = StringPool::default();
 
         self.input = Some(input.to_string());
         self.ast = None;
@@ -361,7 +361,7 @@ impl Context {
     }
 
     /// Resolve an interned string ID back to its string value.
-    pub fn resolve<'a>(&'a self, id: &'a InternId) -> Option<&'a str> {
+    pub fn resolve<'a>(&'a self, id: &'a StringPoolId) -> Option<&'a str> {
         self.interner.resolve(id)
     }
 
@@ -384,14 +384,14 @@ impl Context {
     pub fn reset(&mut self) {
         self.arena.reset();
         // Reset interner
-        self.interner = SymbolInterner::default();
+        self.interner = StringPool::default();
         self.input = None;
         self.ast = None;
     }
 }
 
 impl Interner for Context {
-    type Id = InternId;
+    type Id = StringPoolId;
 
     #[inline]
     fn intern(&mut self, text: &str) -> Self::Id {

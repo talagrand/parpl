@@ -82,16 +82,16 @@ impl Interner for NoOpInterner {
 ///
 /// This is suitable for both Scheme and CEL usage when you want stable IDs.
 #[derive(Default, Debug, Clone)]
-pub struct SymbolInterner(StringInterner<DefaultBackend>);
+pub struct StringPool(StringInterner<DefaultBackend>);
 
-impl SymbolInterner {
+impl StringPool {
     #[inline]
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-impl Interner for SymbolInterner {
+impl Interner for StringPool {
     type Id = DefaultSymbol;
 
     #[inline]
@@ -105,5 +105,5 @@ impl Interner for SymbolInterner {
     }
 }
 
-/// The default string ID used by `SymbolInterner`.
-pub type InternId = DefaultSymbol;
+/// The default string ID used by `StringPool`.
+pub type StringPoolId = DefaultSymbol;

@@ -5,7 +5,7 @@
 // of parsed expressions.
 
 use crate::cel::ast::{Expr, ExprKind, Literal};
-use crate::common::{InternId, Interner};
+use crate::common::{Interner, StringPoolId};
 
 /// Configuration for pretty-printing
 #[derive(Debug, Clone)]
@@ -40,7 +40,7 @@ impl PrettyConfig {
 /// Pretty-print an expression using an interner to resolve IDs back to strings.
 pub fn pretty_print<I>(expr: &Expr, interner: &I) -> String
 where
-    I: Interner<Id = InternId> + ?Sized,
+    I: Interner<Id = StringPoolId> + ?Sized,
 {
     let config = PrettyConfig::default();
     pretty_print_with_config(expr, &config, interner)
@@ -49,7 +49,7 @@ where
 /// Pretty-print an expression with custom configuration.
 pub fn pretty_print_with_config<I>(expr: &Expr, config: &PrettyConfig, interner: &I) -> String
 where
-    I: Interner<Id = InternId> + ?Sized,
+    I: Interner<Id = StringPoolId> + ?Sized,
 {
     let mut buf = String::new();
     print_expr(&mut buf, expr, 0, config, interner);
@@ -57,16 +57,16 @@ where
 }
 
 #[inline]
-fn fmt_id<I>(id: &InternId, interner: &I) -> String
+fn fmt_id<I>(id: &StringPoolId, interner: &I) -> String
 where
-    I: Interner<Id = InternId> + ?Sized,
+    I: Interner<Id = StringPoolId> + ?Sized,
 {
     interner.resolve(id).unwrap_or("<unresolved>").to_string()
 }
 
 fn print_expr<I>(buf: &mut String, expr: &Expr, indent: usize, config: &PrettyConfig, interner: &I)
 where
-    I: Interner<Id = InternId> + ?Sized,
+    I: Interner<Id = StringPoolId> + ?Sized,
 {
     let indent_str = " ".repeat(indent * config.indent_size);
 
@@ -205,7 +205,7 @@ where
 
 fn print_literal<I>(buf: &mut String, lit: &Literal, interner: &I)
 where
-    I: Interner<Id = InternId> + ?Sized,
+    I: Interner<Id = StringPoolId> + ?Sized,
 {
     match lit {
         Literal::Int(val) => buf.push_str(&format!("Literal(Int({}))\n", val)),
