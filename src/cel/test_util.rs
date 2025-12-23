@@ -4,13 +4,16 @@
 // Since our API is arena-based and requires scoped access, these utilities handle
 // the boilerplate of creating contexts.
 
-use crate::cel::{
-    Context,
-    ast::{BinaryOp, Expr, ExprKind, Literal},
-    context::Builder,
-    error::ErrorKind,
-    parser::ParseConfig,
-    pretty::pretty_print,
+use crate::{
+    cel::{
+        Context,
+        ast::{BinaryOp, Expr, ExprKind, Literal},
+        context::Builder,
+        error::ErrorKind,
+        parser::ParseConfig,
+        pretty::pretty_print,
+    },
+    common::StringPoolId,
 };
 
 /// Parse an expression and run assertions on the AST within a scoped callback
@@ -161,7 +164,7 @@ where
 #[track_caller]
 pub fn assert_literal<F>(input: &str, predicate: F)
 where
-    F: FnOnce(&Literal) -> bool,
+    F: FnOnce(&Literal<StringPoolId, &[u8]>) -> bool,
 {
     parse(input, |ctx, ast| match &ast.kind {
         ExprKind::Literal(lit) => {

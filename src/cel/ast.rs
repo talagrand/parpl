@@ -83,7 +83,7 @@ pub enum ExprKind<'arena> {
     ),
 
     /// Literal value (processed and validated)
-    Literal(Literal<'arena>),
+    Literal(Literal<StringPoolId, &'arena [u8]>),
 }
 
 /// Raw literal from the parser (unparsed strings)
@@ -91,18 +91,18 @@ pub enum ExprKind<'arena> {
 /// This represents the literal as it appears in the source code, before any
 /// processing or validation. The ast_builder converts these to `Literal` nodes.
 #[derive(Debug, Clone, PartialEq)]
-pub enum RawLiteral {
+pub enum RawLiteral<S> {
     /// Integer literal: "123", "0xFF", "-456"
     /// CEL Spec (line 145): INT_LIT ::= -? DIGIT+ | -? 0x HEXDIGIT+
-    Int(StringPoolId),
+    Int(S),
 
     /// Unsigned integer literal: "123", "0xFF" (without 'u' suffix)
     /// CEL Spec (line 146): UINT_LIT ::= INT_LIT [uU]
-    UInt(StringPoolId),
+    UInt(S),
 
     /// Floating-point literal: "3.14", "1e10", ".5"
     /// CEL Spec (line 147): FLOAT_LIT
-    Float(StringPoolId),
+    Float(S),
 
     /// String literal: raw content between quotes
     /// CEL Spec (lines 149-153): STRING_LIT
@@ -110,12 +110,12 @@ pub enum RawLiteral {
     /// - content: the text between quotes (without the quotes themselves)
     /// - is_raw: true if prefixed with r/R (no escape processing needed)
     /// - quote_style: which quote delimiters were used
-    String(StringPoolId, bool, QuoteStyle),
+    String(S, bool, QuoteStyle),
 
     /// Bytes literal: raw content between quotes
     /// CEL Spec (line 154): BYTES_LIT = [bB] STRING_LIT
     /// Stores: (content, is_raw, quote_style)
-    Bytes(StringPoolId, bool, QuoteStyle),
+    Bytes(S, bool, QuoteStyle),
 
     /// Boolean literal: true, false
     /// CEL Spec (line 160): BOOL_LIT
@@ -214,7 +214,7 @@ impl fmt::Display for UnaryOp {
 /// All numeric values are parsed, all escape sequences are processed.
 /// **Arena-allocated**: String data stored as `&'arena str` instead of `String`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Literal<'arena> {
+pub enum Literal<S, B> {
     /// Integer literal: parsed i64 value
     /// CEL Spec (line 143): INT_LIT = -? DIGIT+ | -? 0x HEXDIGIT+
     /// Range: i64::MIN to i64::MAX
@@ -233,13 +233,13 @@ pub enum Literal<'arena> {
     /// String literal: processed with escape sequences resolved
     /// CEL Spec (lines 149-153): STRING_LIT
     /// All escape sequences (\n, \t, \xHH, \uHHHH, \UHHHHHHHH, octal) are processed
-    String(StringPoolId),
+    String(S),
 
     /// Bytes literal: processed with escape sequences resolved
     /// CEL Spec (line 154): BYTES_LIT = [bB] STRING_LIT
     /// Octal and \xHH escapes represent byte values, Unicode escapes produce UTF-8
     /// **IMPORTANT**: Bytes are arbitrary octet sequences, may not be valid UTF-8!
-    Bytes(&'arena [u8]),
+    Bytes(B),
 
     /// Boolean literal: true, false
     /// CEL Spec (line 160): BOOL_LIT

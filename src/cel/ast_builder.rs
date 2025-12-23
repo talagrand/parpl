@@ -9,15 +9,26 @@
 // - Numeric parsing: validated and parsed immediately
 // - Identifier resolution: handled during evaluation
 
-use crate::cel::{
-    ast::{BinaryOp, Expr, ExprKind, Literal, QuoteStyle, RawLiteral, Span, UnaryOp},
-    error::{Error, Result},
-    literal,
-    parser::{ParseConfig, Rule, parse_with_config},
+use crate::{
+    cel::{
+        ast::{BinaryOp, Literal, QuoteStyle, RawLiteral, Span, UnaryOp},
+        error::{Error, Result},
+        literal::process_literal,
+        parser::Rule,
+        traits::CelWriter,
+    },
+    common::Interner,
 };
-use crate::common::{Interner, StringPool, StringPoolId};
-use bumpalo::Bump;
 use pest::iterators::Pair;
+
+fn map_writer_error<E: std::fmt::Debug>(e: E, span: Span) -> Error {
+    Error::new(
+        crate::cel::error::Phase::AstConstruction,
+        crate::cel::error::ErrorKind::Custom(format!("{:?}", e)),
+        "Error constructing AST node".to_string(),
+    )
+    .with_span(span)
+}
 
 /// Check recursion depth remaining and return error if exhausted
 ///
@@ -30,43 +41,6 @@ fn check_depth(depth_left: usize) -> Result<usize> {
     } else {
         Ok(depth_left - 1)
     }
-}
-
-/// Build an AST using a provided arena and interner
-///
-/// This is the core AST building function used by `Context`.
-/// All AST nodes and strings are allocated in the provided arena.
-///
-/// # Safety
-///
-/// The returned `Expr` has lifetime `'arena` tied to the arena parameter.
-/// The caller must ensure the arena outlives all references to the AST.
-pub fn build_ast_with_arena<'arena>(
-    input: &str,
-    config: ParseConfig,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena Expr<'arena>> {
-    // First parse with pest
-    let pairs = parse_with_config(input, config)?;
-
-    // Convert to AST with depth tracking
-    // The parse tree has structure: SOI ~ expr ~ EOI
-    // We want just the expr
-    let pair = pairs
-        .into_iter()
-        .next()
-        .expect("Parser validated: successful parse returns at least one pair");
-
-    // The cel rule contains: SOI ~ expr ~ EOI
-    // Extract the expr
-    let mut inner = pair.into_inner();
-    let expr_pair = inner
-        .next()
-        .expect("Parser validated: cel = { SOI ~ expr ~ EOI }");
-
-    // Start with max depth remaining
-    build_expr(config.max_ast_depth, expr_pair, arena, interner)
 }
 
 // ============================================================================
@@ -112,36 +86,33 @@ pub fn build_ast_with_arena<'arena>(
 ///   2. build_primary() - for parenthesized expressions
 ///
 /// All other cases call precedence-level functions directly.
-fn build_expr<'arena>(
+pub fn build_expr<W: CelWriter>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena Expr<'arena>> {
+    writer: &mut W,
+) -> Result<W::Expr> {
     // Check depth and decrement for recursive calls
     let depth_left = check_depth(depth_left)?;
 
     match pair.as_rule() {
-        Rule::expr => build_expr_ternary(depth_left, pair, arena, interner),
-        Rule::conditional_or => build_conditional_or(depth_left, pair, arena, interner),
-        Rule::conditional_and => build_conditional_and(depth_left, pair, arena, interner),
-        Rule::relation => build_relation(depth_left, pair, arena, interner),
-        Rule::addition => build_addition(depth_left, pair, arena, interner),
-        Rule::multiplication => build_multiplication(depth_left, pair, arena, interner),
-        Rule::unary => build_unary(depth_left, pair, arena, interner),
-        Rule::member => build_member(depth_left, pair, arena, interner),
-        Rule::primary => build_primary(depth_left, pair, arena, interner),
+        Rule::expr => build_expr_ternary(depth_left, pair, writer),
+        Rule::conditional_or => build_conditional_or(depth_left, pair, writer),
+        Rule::conditional_and => build_conditional_and(depth_left, pair, writer),
+        Rule::relation => build_relation(depth_left, pair, writer),
+        Rule::addition => build_addition(depth_left, pair, writer),
+        Rule::multiplication => build_multiplication(depth_left, pair, writer),
+        Rule::unary => build_unary(depth_left, pair, writer),
+        Rule::member => build_member(depth_left, pair, writer),
+        Rule::primary => build_primary(depth_left, pair, writer),
         Rule::literal => {
             let span = span_from_pair(&pair);
-            Ok(arena.alloc(Expr::new(
-                ExprKind::Literal(build_literal(pair, span, arena, interner)?),
-                span,
-            )))
+            let lit = process_literal_pair(pair, writer)?;
+            writer.literal(lit, span).map_err(|e| map_writer_error(e, span))
         }
         Rule::ident => {
             let span = span_from_pair(&pair);
-            let name = interner.intern(pair.as_str());
-            Ok(arena.alloc(Expr::new(ExprKind::Ident(name), span)))
+            let name = writer.interner().intern(pair.as_str());
+            writer.ident(name, span).map_err(|e| map_writer_error(e, span))
         }
         _ => unreachable!("Unexpected rule in build_expr: {:?}", pair.as_rule()),
     }
@@ -149,12 +120,11 @@ fn build_expr<'arena>(
 
 /// Build ternary conditional expression (top of precedence chain)
 /// CEL Spec: expr = { conditional_or ~ ("?" ~ conditional_or ~ ":" ~ expr)? }
-fn build_expr_ternary<'arena>(
+fn build_expr_ternary<W: CelWriter>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena Expr<'arena>> {
+    writer: &mut W,
+) -> Result<W::Expr> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
@@ -165,8 +135,7 @@ fn build_expr_ternary<'arena>(
         inner
             .next()
             .expect("Parser validated: expr = { conditional_or ~ ... }"),
-        arena,
-        interner,
+        writer,
     )?;
 
     // Check for ternary operator
@@ -174,14 +143,13 @@ fn build_expr_ternary<'arena>(
         let if_false_pair = inner
             .next()
             .expect("Parser validated: expr = { ... ~ (\"?\" ~ conditional_or ~ \":\" ~ expr)? }");
-        Ok(arena.alloc(Expr::new(
-            ExprKind::Ternary(
-                condition,
-                build_conditional_or(depth_left, if_true_pair, arena, interner)?,
-                build_expr_ternary(depth_left, if_false_pair, arena, interner)?, // Right-associative
-            ),
-            span,
-        )))
+
+        let true_expr = build_conditional_or(depth_left, if_true_pair, writer)?;
+        let false_expr = build_expr_ternary(depth_left, if_false_pair, writer)?;
+
+        writer
+            .ternary(condition, true_expr, false_expr, span)
+            .map_err(|e| map_writer_error(e, span))
     } else {
         Ok(condition)
     }
@@ -189,12 +157,11 @@ fn build_expr_ternary<'arena>(
 
 /// Build logical OR expression
 /// CEL Spec: conditional_or = { conditional_and ~ ("||" ~ conditional_and)* }
-fn build_conditional_or<'arena>(
+fn build_conditional_or<W: CelWriter>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena Expr<'arena>> {
+    writer: &mut W,
+) -> Result<W::Expr> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
@@ -204,13 +171,14 @@ fn build_conditional_or<'arena>(
         inner
             .next()
             .expect("Parser validated: conditional_or = { conditional_and ~ ... }"),
-        arena,
-        interner,
+        writer,
     )?;
 
     for right_pair in inner {
-        let right = build_conditional_and(depth_left, right_pair, arena, interner)?;
-        left = alloc_binary(arena, BinaryOp::LogicalOr, left, right, span);
+        let right = build_conditional_and(depth_left, right_pair, writer)?;
+        left = writer
+            .binary(BinaryOp::LogicalOr, left, right, span)
+            .map_err(|e| map_writer_error(e, span))?;
     }
 
     Ok(left)
@@ -218,12 +186,11 @@ fn build_conditional_or<'arena>(
 
 /// Build logical AND expression
 /// CEL Spec: conditional_and = { relation ~ ("&&" ~ relation)* }
-fn build_conditional_and<'arena>(
+fn build_conditional_and<W: CelWriter>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena Expr<'arena>> {
+    writer: &mut W,
+) -> Result<W::Expr> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
@@ -233,13 +200,14 @@ fn build_conditional_and<'arena>(
         inner
             .next()
             .expect("Parser validated: conditional_and = { relation ~ ... }"),
-        arena,
-        interner,
+        writer,
     )?;
 
     for right_pair in inner {
-        let right = build_relation(depth_left, right_pair, arena, interner)?;
-        left = alloc_binary(arena, BinaryOp::LogicalAnd, left, right, span);
+        let right = build_relation(depth_left, right_pair, writer)?;
+        left = writer
+            .binary(BinaryOp::LogicalAnd, left, right, span)
+            .map_err(|e| map_writer_error(e, span))?;
     }
 
     Ok(left)
@@ -247,12 +215,11 @@ fn build_conditional_and<'arena>(
 
 /// Build relational expression
 /// CEL Spec: relation = { addition ~ (relop ~ addition)* }
-fn build_relation<'arena>(
+fn build_relation<W: CelWriter>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena Expr<'arena>> {
+    writer: &mut W,
+) -> Result<W::Expr> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
@@ -262,8 +229,7 @@ fn build_relation<'arena>(
         inner
             .next()
             .expect("Parser validated: relation = { addition ~ ... }"),
-        arena,
-        interner,
+        writer,
     )?;
 
     while let Some(op_pair) = inner.next() {
@@ -282,10 +248,11 @@ fn build_relation<'arena>(
             inner
                 .next()
                 .expect("Parser validated: relation = { ... ~ (relop ~ addition)* }"),
-            arena,
-            interner,
+            writer,
         )?;
-        left = alloc_binary(arena, op, left, right, span);
+        left = writer
+            .binary(op, left, right, span)
+            .map_err(|e| map_writer_error(e, span))?;
     }
 
     Ok(left)
@@ -293,12 +260,11 @@ fn build_relation<'arena>(
 
 /// Build addition/subtraction expression
 /// CEL Spec: addition = { multiplication ~ (("+" | "-") ~ multiplication)* }
-fn build_addition<'arena>(
+fn build_addition<W: CelWriter>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena Expr<'arena>> {
+    writer: &mut W,
+) -> Result<W::Expr> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
@@ -308,8 +274,7 @@ fn build_addition<'arena>(
         inner
             .next()
             .expect("Parser validated: addition = { multiplication ~ ... }"),
-        arena,
-        interner,
+        writer,
     )?;
 
     while let Some(next) = inner.next() {
@@ -318,13 +283,10 @@ fn build_addition<'arena>(
             "-" => BinaryOp::Subtract,
             _ => {
                 // It's the right operand
-                left = alloc_binary(
-                    arena,
-                    BinaryOp::Add,
-                    left,
-                    build_multiplication(depth_left, next, arena, interner)?,
-                    span,
-                );
+                let right = build_multiplication(depth_left, next, writer)?;
+                left = writer
+                    .binary(BinaryOp::Add, left, right, span)
+                    .map_err(|e| map_writer_error(e, span))?;
                 continue;
             }
         };
@@ -333,10 +295,11 @@ fn build_addition<'arena>(
             inner.next().expect(
                 "Parser validated: addition = { ... ~ ((\" +\" | \"-\") ~ multiplication)* }",
             ),
-            arena,
-            interner,
+            writer,
         )?;
-        left = alloc_binary(arena, op, left, right, span);
+        left = writer
+            .binary(op, left, right, span)
+            .map_err(|e| map_writer_error(e, span))?;
     }
 
     Ok(left)
@@ -344,12 +307,11 @@ fn build_addition<'arena>(
 
 /// Build multiplication/division/modulo expression
 /// CEL Spec: multiplication = { unary ~ (("*" | "/" | "%") ~ unary)* }
-fn build_multiplication<'arena>(
+fn build_multiplication<W: CelWriter>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena Expr<'arena>> {
+    writer: &mut W,
+) -> Result<W::Expr> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
@@ -359,8 +321,7 @@ fn build_multiplication<'arena>(
         inner
             .next()
             .expect("Parser validated: multiplication = { unary ~ ... }"),
-        arena,
-        interner,
+        writer,
     )?;
 
     while let Some(next) = inner.next() {
@@ -370,13 +331,10 @@ fn build_multiplication<'arena>(
             "%" => BinaryOp::Modulo,
             _ => {
                 // It's the right operand
-                left = alloc_binary(
-                    arena,
-                    BinaryOp::Multiply,
-                    left,
-                    build_unary(depth_left, next, arena, interner)?,
-                    span,
-                );
+                let right = build_unary(depth_left, next, writer)?;
+                left = writer
+                    .binary(BinaryOp::Multiply, left, right, span)
+                    .map_err(|e| map_writer_error(e, span))?;
                 continue;
             }
         };
@@ -385,10 +343,11 @@ fn build_multiplication<'arena>(
             inner.next().expect(
                 "Parser validated: multiplication = { ... ~ ((\"*\" | \"/\" | \"%\") ~ unary)* }",
             ),
-            arena,
-            interner,
+            writer,
         )?;
-        left = alloc_binary(arena, op, left, right, span);
+        left = writer
+            .binary(op, left, right, span)
+            .map_err(|e| map_writer_error(e, span))?;
     }
 
     Ok(left)
@@ -396,12 +355,11 @@ fn build_multiplication<'arena>(
 
 /// Build unary expression
 /// CEL Spec: unary = { member | "!"+ ~ member | "-"+ ~ member }
-fn build_unary<'arena>(
+fn build_unary<W: CelWriter>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena Expr<'arena>> {
+    writer: &mut W,
+) -> Result<W::Expr> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
@@ -417,17 +375,10 @@ fn build_unary<'arena>(
                 inner
                     .next()
                     .expect("Parser validated: unary = { ... | \"!\"+ ~ member | ... }"),
-                arena,
-                interner,
+                writer,
             )?;
             // Apply NOT count times (!! cancels out)
-            Ok(apply_unary_repeated(
-                arena,
-                UnaryOp::Not,
-                count,
-                operand,
-                span,
-            ))
+            apply_unary_repeated(writer, UnaryOp::Not, count, operand, span)
         }
         s if s.chars().all(|c| c == '-') => {
             let count = s.len();
@@ -436,30 +387,22 @@ fn build_unary<'arena>(
                 inner
                     .next()
                     .expect("Parser validated: unary = { ... | \"-\"+ ~ member }"),
-                arena,
-                interner,
+                writer,
             )?;
             // Apply Negate count times (-- cancels out)
-            Ok(apply_unary_repeated(
-                arena,
-                UnaryOp::Negate,
-                count,
-                operand,
-                span,
-            ))
+            apply_unary_repeated(writer, UnaryOp::Negate, count, operand, span)
         }
-        _ => build_member(depth_left, first, arena, interner), // It's a member expression
+        _ => build_member(depth_left, first, writer), // It's a member expression
     }
 }
 
 /// Build member access/indexing expression
 /// CEL Spec: member = { primary ~ ("." ~ selector ~ ("(" ~ expr_list? ~ ")")? | "[" ~ expr ~ "]")* }
-fn build_member<'arena>(
+fn build_member<W: CelWriter>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena Expr<'arena>> {
+    writer: &mut W,
+) -> Result<W::Expr> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
@@ -469,8 +412,7 @@ fn build_member<'arena>(
         inner
             .next()
             .expect("Parser validated: member = { primary ~ ... }"),
-        arena,
-        interner,
+        writer,
     )?;
 
     while let Some(next) = inner.next() {
@@ -480,7 +422,7 @@ fn build_member<'arena>(
                 let selector = inner
                     .next()
                     .expect("Parser validated: member = { ... ~ (\".\" ~ selector ~ ...)* }");
-                let field_name = interner.intern(selector.as_str());
+                let field_name = writer.interner().intern(selector.as_str());
 
                 // Check if there's a function call
                 if let Some(peek) = inner.peek() {
@@ -493,34 +435,28 @@ fn build_member<'arena>(
                                     inner.next().expect(
                                         "Parser validated: member = { ... ~ (\"(\" ~ expr_list? ~ \")\")? }",
                                     ),
-                                    arena,
-                                    interner,
+                                    writer,
                                 )?
                             } else {
-                                &[]
+                                Vec::new()
                             }
                         } else {
-                            &[]
+                            Vec::new()
                         };
                         // Consume ")" - it's implicit in the grammar
-                        let new_span = expr.span.combine(&span);
-                        expr = arena.alloc(Expr::new(
-                            ExprKind::Member(expr, field_name, Some(args)),
-                            new_span,
-                        ));
+
+                        expr = writer
+                            .member(expr, field_name, Some(&args), span)
+                            .map_err(|e| map_writer_error(e, span))?;
                     } else {
-                        let new_span = expr.span.combine(&span);
-                        expr = arena.alloc(Expr::new(
-                            ExprKind::Member(expr, field_name, None),
-                            new_span,
-                        ));
+                        expr = writer
+                            .member(expr, field_name, None, span)
+                            .map_err(|e| map_writer_error(e, span))?;
                     }
                 } else {
-                    let new_span = expr.span.combine(&span);
-                    expr = arena.alloc(Expr::new(
-                        ExprKind::Member(expr, field_name, None),
-                        new_span,
-                    ));
+                    expr = writer
+                        .member(expr, field_name, None, span)
+                        .map_err(|e| map_writer_error(e, span))?;
                 }
             }
             "[" => {
@@ -530,12 +466,12 @@ fn build_member<'arena>(
                     inner
                         .next()
                         .expect("Parser validated: member = { ... ~ (\"[\" ~ expr ~ \"]\")* }"),
-                    arena,
-                    interner,
+                    writer,
                 )?;
                 // "]" is implicit
-                let new_span = expr.span.combine(&span);
-                expr = arena.alloc(Expr::new(ExprKind::Index(expr, index), new_span));
+                expr = writer
+                    .index(expr, index, span)
+                    .map_err(|e| map_writer_error(e, span))?;
             }
             _ => {
                 // This is part of the next operation
@@ -549,12 +485,11 @@ fn build_member<'arena>(
 
 /// Build primary expression (bottom of precedence chain)
 /// CEL Spec: primary = { literal | "."? ~ ident ~ ("(" ~ expr_list? ~ ")")? | ... }
-fn build_primary<'arena>(
+fn build_primary<W: CelWriter>(
     depth_left: usize,
     pair: pest::iterators::Pair<'_, Rule>,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena Expr<'arena>> {
+    writer: &mut W,
+) -> Result<W::Expr> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
     let mut inner = pair.into_inner();
@@ -563,12 +498,12 @@ fn build_primary<'arena>(
         .expect("Parser validated: primary = { literal | ... | \"(\" ~ expr ~ \")\" | \"[\" ~ expr_list? ~ \",\"? ~ \"]\" | \"{\" ~ map_inits? ~ \",\"? ~ \"}\" | ... }");
 
     match first.as_rule() {
-        Rule::literal => Ok(arena.alloc(Expr::new(
-            ExprKind::Literal(build_literal(first, span, arena, interner)?),
-            span,
-        ))),
+        Rule::literal => {
+            let lit = process_literal_pair(first, writer)?;
+            writer.literal(lit, span).map_err(|e| map_writer_error(e, span))
+        }
         Rule::ident => {
-            let name = interner.intern(first.as_str());
+            let name = writer.interner().intern(first.as_str());
             // Check for function call
             if inner.peek().map(|p| p.as_str()) == Some("(") {
                 inner.next(); // consume "("
@@ -579,32 +514,33 @@ fn build_primary<'arena>(
                             inner.next().expect(
                                 "Parser validated: primary = { ... ~ \"(\" ~ expr_list? ~ \")\" }",
                             ),
-                            arena,
-                            interner,
+                            writer,
                         )?
                     } else {
-                        &[]
+                        Vec::new()
                     }
                 } else {
-                    &[]
+                    Vec::new()
                 };
-                Ok(arena.alloc(Expr::new(ExprKind::Call(None, name, args), span)))
+                writer
+                    .call(None, name, &args, span)
+                    .map_err(|e| map_writer_error(e, span))
             } else {
-                Ok(arena.alloc(Expr::new(ExprKind::Ident(name), span)))
+                writer.ident(name, span).map_err(|e| map_writer_error(e, span))
             }
         }
         // Parenthesized expression - ONLY place that calls build_expr()
         // This starts at the top of the precedence chain again
-        Rule::expr => build_expr(depth_left, first, arena, interner),
+        Rule::expr => build_expr(depth_left, first, writer),
         Rule::expr_list => {
             // List literal: [expr, ...]
-            let items = build_expr_list(depth_left, first, arena, interner)?;
-            Ok(arena.alloc(Expr::new(ExprKind::List(items), span)))
+            let items = build_expr_list(depth_left, first, writer)?;
+            writer.list(&items, span).map_err(|e| map_writer_error(e, span))
         }
         Rule::map_inits => {
             // Map literal: {key: value, ...}
-            let entries = build_map_inits(depth_left, first, arena, interner)?;
-            Ok(arena.alloc(Expr::new(ExprKind::Map(entries), span)))
+            let entries = build_map_inits(depth_left, first, writer)?;
+            writer.map(&entries, span).map_err(|e| map_writer_error(e, span))
         }
         _ => {
             // Handle other primary forms
@@ -618,15 +554,14 @@ fn build_primary<'arena>(
                                 inner.next().expect(
                                     "Parser validated: primary = { ... ~ \"[\" ~ expr_list? ~ \",\"? ~ \"]\" }",
                                 ),
-                                arena,
-                                interner,
+                                writer,
                             )?;
-                            Ok(arena.alloc(Expr::new(ExprKind::List(items), span)))
+                            writer.list(&items, span).map_err(|e| map_writer_error(e, span))
                         } else {
-                            Ok(arena.alloc(Expr::new(ExprKind::List(&[]), span)))
+                            writer.list(&[], span).map_err(|e| map_writer_error(e, span))
                         }
                     } else {
-                        Ok(arena.alloc(Expr::new(ExprKind::List(&[]), span)))
+                        writer.list(&[], span).map_err(|e| map_writer_error(e, span))
                     }
                 }
                 "{" => {
@@ -638,16 +573,23 @@ fn build_primary<'arena>(
                                 inner.next().expect(
                                     "Parser validated: primary = { ... ~ \"{\" ~ map_inits? ~ \",\"? ~ \"}\" }",
                                 ),
-                                arena,
-                                interner,
+                                writer,
                             )?;
-                            Ok(arena.alloc(Expr::new(ExprKind::Map(entries), span)))
+                            writer.map(&entries, span).map_err(|e| map_writer_error(e, span))
                         } else {
-                            Ok(arena.alloc(Expr::new(ExprKind::Map(&[]), span)))
+                            writer.map(&[], span).map_err(|e| map_writer_error(e, span))
                         }
                     } else {
-                        Ok(arena.alloc(Expr::new(ExprKind::Map(&[]), span)))
+                        writer.map(&[], span).map_err(|e| map_writer_error(e, span))
                     }
+                }
+                "." => {
+                    // Leading dot identifier: .ident
+                    let ident_pair = inner
+                        .next()
+                        .expect("Parser validated: primary = { \".\" ~ ident }");
+                    let name = writer.interner().intern(ident_pair.as_str());
+                    writer.ident(name, span).map_err(|e| map_writer_error(e, span))
                 }
                 _ => unreachable!("unexpected primary: {}", first.as_str()),
             }
@@ -655,44 +597,47 @@ fn build_primary<'arena>(
     }
 }
 
-/// Build a literal expression
-fn build_literal<'arena>(
-    pair: Pair<Rule>,
-    span: Span,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<Literal<'arena>> {
-    let inner = pair
-        .into_inner()
-        .next()
-        .expect("Parser validated: literal = { float_lit | uint_lit | int_lit | bytes_lit | string_lit | bool_lit | null_lit }");
+fn process_literal_pair<W: CelWriter>(
+    pair: pest::iterators::Pair<'_, Rule>,
+    writer: &mut W,
+) -> Result<Literal<W::StringId, W::Bytes>> {
+    let span = span_from_pair(&pair);
+    // Check if pair is already one of the inner rules (if called with inner pair)
+    // But build_primary calls it with `literal` rule pair.
+    // build_expr calls it with `literal` rule pair.
 
-    // First, create a RawLiteral from the parser output
+    // If pair is `literal`, get inner.
+    let inner = if pair.as_rule() == Rule::literal {
+        pair.into_inner()
+            .next()
+            .expect("Parser validated: literal has one child")
+    } else {
+        pair
+    };
+
     let raw_literal = match inner.as_rule() {
-        Rule::int_lit => RawLiteral::Int(interner.intern(inner.as_str())),
+        Rule::int_lit => RawLiteral::Int(writer.interner().intern(inner.as_str())),
         Rule::uint_lit => {
-            // Remove the 'u' suffix using strip_suffix
             let s = inner.as_str();
             let s_without_suffix = s
                 .strip_suffix('u')
                 .or_else(|| s.strip_suffix('U'))
                 .expect("Parser validated: uint_lit ends with 'u' or 'U'");
-            RawLiteral::UInt(interner.intern(s_without_suffix))
+            RawLiteral::UInt(writer.interner().intern(s_without_suffix))
         }
-        Rule::float_lit => RawLiteral::Float(interner.intern(inner.as_str())),
+        Rule::float_lit => RawLiteral::Float(writer.interner().intern(inner.as_str())),
         Rule::string_lit => {
             let s = inner.as_str();
-            let (content, is_raw, quote_style) = parse_string_literal(s, interner);
+            let (content, is_raw, quote_style) = parse_string_literal(s, writer);
             RawLiteral::String(content, is_raw, quote_style)
         }
         Rule::bytes_lit => {
-            // Skip the 'b' or 'B' prefix using strip_prefix
-            let s = inner
-                .as_str()
+            let s = inner.as_str();
+            let s_without_prefix = s
                 .strip_prefix('b')
-                .or_else(|| inner.as_str().strip_prefix('B'))
+                .or_else(|| s.strip_prefix('B'))
                 .expect("Parser validated: bytes_lit starts with 'b' or 'B'");
-            let (content, is_raw, quote_style) = parse_string_literal(s, interner);
+            let (content, is_raw, quote_style) = parse_string_literal(s_without_prefix, writer);
             RawLiteral::Bytes(content, is_raw, quote_style)
         }
         Rule::bool_lit => RawLiteral::Bool(inner.as_str() == "true"),
@@ -700,15 +645,14 @@ fn build_literal<'arena>(
         _ => unreachable!("unexpected literal rule: {:?}", inner.as_rule()),
     };
 
-    // Process the RawLiteral into a Literal, adding span information to any errors
-    literal::process_literal(&raw_literal, interner, arena).map_err(|e| e.with_span(span))
+    process_literal(&raw_literal, writer).map_err(|e| e.with_span(span))
 }
 
 /// Parse a string literal, extracting content, raw flag, and quote style
 ///
 /// **CEL-RESTRICTED**: Escape sequences are NOT processed here.
 /// They will be processed during value construction.
-fn parse_string_literal(s: &str, interner: &mut StringPool) -> (StringPoolId, bool, QuoteStyle) {
+fn parse_string_literal<W: CelWriter>(s: &str, writer: &mut W) -> (W::StringId, bool, QuoteStyle) {
     // Check for raw string prefix using pattern matching
     let (s, is_raw) = if let Some(rest) = s.strip_prefix('r').or_else(|| s.strip_prefix('R')) {
         (rest, true)
@@ -741,54 +685,40 @@ fn parse_string_literal(s: &str, interner: &mut StringPool) -> (StringPoolId, bo
         unreachable!("invalid string literal: {}", s)
     };
 
-    (interner.intern(content), is_raw, quote_style)
+    (writer.interner().intern(content), is_raw, quote_style)
 }
 
-/// Build an expression list - collect into std Vec, then clone into arena slice
-///
-/// We must clone because build_expr returns &Expr (reference) but we need to store
-/// Expr values in the slice. Since Expr is not Copy, we clone.
-fn build_expr_list<'arena>(
+/// Build an expression list
+fn build_expr_list<W: CelWriter>(
     depth_left: usize,
-    pair: Pair<Rule>,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena [Expr<'arena>]> {
-    let exprs: Result<Vec<&Expr<'arena>>> = pair
-        .into_inner()
-        .map(|p| build_expr(depth_left, p, arena, interner))
-        .collect();
-    let exprs = exprs?;
-
-    // Use iterator instead of indexing
-    Ok(arena.alloc_slice_fill_iter(exprs.iter().map(|e| (*e).clone())))
+    pair: pest::iterators::Pair<'_, Rule>,
+    writer: &mut W,
+) -> Result<Vec<W::Expr>> {
+    pair.into_inner()
+        .map(|p| build_expr(depth_left, p, writer))
+        .collect()
 }
 
-/// Build map initializers - collect into std Vec, then clone into arena slice
-///
-/// We must clone because build_expr returns &Expr (reference) but we need to store
-/// Expr values in the slice. Since Expr is not Copy, we clone.
-fn build_map_inits<'arena>(
+/// Build map initializers
+fn build_map_inits<W: CelWriter>(
     depth_left: usize,
-    pair: Pair<Rule>,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena [(Expr<'arena>, Expr<'arena>)]> {
+    pair: pest::iterators::Pair<'_, Rule>,
+    writer: &mut W,
+) -> Result<Vec<(W::Expr, W::Expr)>> {
     let mut inner = pair.into_inner();
-    let mut entries: Vec<(&Expr<'arena>, &Expr<'arena>)> = Vec::new();
+    let mut entries = Vec::new();
 
     while let Some(key) = inner.next() {
         let value = inner
             .next()
             .expect("Parser validated: map_inits = { expr ~ \":\" ~ expr ~ ... }");
         entries.push((
-            build_expr(depth_left, key, arena, interner)?,
-            build_expr(depth_left, value, arena, interner)?,
+            build_expr(depth_left, key, writer)?,
+            build_expr(depth_left, value, writer)?,
         ));
     }
 
-    // Use iterator instead of indexing
-    Ok(arena.alloc_slice_fill_iter(entries.iter().map(|(k, v)| ((*k).clone(), (*v).clone()))))
+    Ok(entries)
 }
 
 /// Extract span from a pest Pair
@@ -797,46 +727,30 @@ fn span_from_pair(pair: &Pair<Rule>) -> Span {
     Span::new(span.start(), span.end())
 }
 
-// Helper functions for arena-allocated AST construction
-
-/// Allocate a binary expression in the arena
-fn alloc_binary<'arena>(
-    arena: &'arena Bump,
-    op: BinaryOp,
-    left: &'arena Expr<'arena>,
-    right: &'arena Expr<'arena>,
-    span: Span,
-) -> &'arena Expr<'arena> {
-    arena.alloc(Expr::new(ExprKind::Binary(op, left, right), span))
-}
-
-/// Allocate a unary expression in the arena
-fn alloc_unary<'arena>(
-    arena: &'arena Bump,
-    op: UnaryOp,
-    operand: &'arena Expr<'arena>,
-    span: Span,
-) -> &'arena Expr<'arena> {
-    arena.alloc(Expr::new(ExprKind::Unary(op, operand), span))
-}
-
 /// Apply a unary operator multiple times
-fn apply_unary_repeated<'arena>(
-    arena: &'arena Bump,
+fn apply_unary_repeated<W: CelWriter>(
+    writer: &mut W,
     op: UnaryOp,
     count: usize,
-    mut expr: &'arena Expr<'arena>,
+    mut expr: W::Expr,
     base_span: Span,
-) -> &'arena Expr<'arena> {
+) -> Result<W::Expr> {
     for _ in 0..count {
-        expr = alloc_unary(arena, op, expr, base_span);
+        expr = writer
+            .unary(op, expr, base_span)
+            .map_err(|e| map_writer_error(e, base_span))?;
     }
-    expr
+    Ok(expr)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cel::ast::{Expr, ExprKind};
+    use crate::cel::parser::ParseConfig;
+    use crate::cel::samples::reader::build_ast_with_arena;
+    use crate::common::{Interner, StringPool};
+    use bumpalo::Bump;
 
     struct BuiltAst {
         ast: Expr<'static>,

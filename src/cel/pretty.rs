@@ -4,8 +4,10 @@
 // The output is designed to be clear and easy to read, showing the structure
 // of parsed expressions.
 
-use crate::cel::ast::{Expr, ExprKind, Literal};
-use crate::common::{Interner, StringPoolId};
+use crate::{
+    cel::ast::{Expr, ExprKind, Literal},
+    common::{Interner, StringPoolId},
+};
 
 /// Configuration for pretty-printing
 #[derive(Debug, Clone)]
@@ -203,7 +205,7 @@ where
     }
 }
 
-fn print_literal<I>(buf: &mut String, lit: &Literal, interner: &I)
+fn print_literal<'a, I>(buf: &mut String, lit: &Literal<StringPoolId, &'a [u8]>, interner: &I)
 where
     I: Interner<Id = StringPoolId> + ?Sized,
 {

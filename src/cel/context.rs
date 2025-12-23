@@ -6,13 +6,16 @@
 // The builder allows fluent configuration, and the context owns the parsed AST
 // in a bumpalo::Bump arena for efficient memory management.
 
-use crate::cel::{
-    ast::Expr,
-    ast_builder, constants,
-    error::{Error, ErrorKind, Phase, Result},
-    parser::ParseConfig,
+use crate::{
+    cel::{
+        ast::Expr,
+        constants,
+        error::{Error, ErrorKind, Phase, Result},
+        parser::ParseConfig,
+        samples::reader,
+    },
+    common::{Interner, StringPool, StringPoolId},
 };
-use crate::common::{Interner, StringPool, StringPoolId};
 use bumpalo::Bump;
 
 // ============================================================================
@@ -323,7 +326,7 @@ impl Context {
         let arena_ref: &'static Bump = unsafe { std::mem::transmute(&self.arena) };
         let interner = &mut self.interner;
 
-        let ast = ast_builder::build_ast_with_arena(input, config, arena_ref, interner)?;
+        let ast = reader::build_ast_with_arena(input, config, arena_ref, interner)?;
 
         // Store with 'static lifetime (transmuted)
         self.ast = Some(ast);

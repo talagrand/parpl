@@ -8,6 +8,8 @@ mod error;
 mod literal;
 mod parser;
 mod pretty;
+pub mod samples;
+pub mod traits;
 
 // Test utilities - only available in test builds
 #[cfg(test)]

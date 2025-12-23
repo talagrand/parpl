@@ -89,6 +89,11 @@ impl StringPool {
     pub fn new() -> Self {
         Self::default()
     }
+
+    #[inline]
+    pub fn resolve_id(&self, id: StringPoolId) -> Option<&str> {
+        self.0.resolve(id)
+    }
 }
 
 impl Interner for StringPool {
