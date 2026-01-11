@@ -2,6 +2,10 @@
 name = "parpl"
 version = "0.1.0"
 edition = "2024"
+description = "Programming language parsers (CEL and Scheme R7RS)"
+license = "MIT"
+keywords = ["parser", "scheme", "R7RS", "cel", "language", "grammar"]
+categories = ["parsing", "compilers"]
 
 [features]
 default = ["cel", "scheme"]
