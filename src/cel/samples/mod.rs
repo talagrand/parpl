@@ -1,2 +1,4 @@
-pub mod minireader;
-pub mod reader;
+#[cfg(any(test, feature = "samples"))]
+pub mod cel;
+#[cfg(any(test, feature = "samples"))]
+pub mod minicel;

@@ -205,7 +205,7 @@ where
     }
 }
 
-fn print_literal<'a, I>(buf: &mut String, lit: &Literal<StringPoolId, &'a [u8]>, interner: &I)
+fn print_literal<I>(buf: &mut String, lit: &Literal<StringPoolId, &[u8]>, interner: &I)
 where
     I: Interner<Id = StringPoolId> + ?Sized,
 {
@@ -320,25 +320,19 @@ mod tests {
 
     test_cases! {
         test_pretty_print_with_spans: {
-            Builder::default()
-                .parse_scoped("42", |ctx| {
-                    let config = PrettyConfig::default().with_spans();
-                    let output = pretty_print_with_config(ctx.ast()?, &config, ctx);
-                    assert!(output.contains("[0..2]"));
-                    Ok(())
-                })
-                .unwrap();
+            let mut ctx = crate::cel::test_util::TestContext::new(crate::cel::parser::ParseConfig::default());
+            ctx.parse("42").unwrap();
+            let config = PrettyConfig::default().with_spans();
+            let output = pretty_print_with_config(ctx.ast().unwrap(), &config, &ctx);
+            assert!(output.contains("[0..2]"));
         },
 
         test_pretty_print_custom_indent: {
-            Builder::default()
-                .parse_scoped("1 + 2", |ctx| {
-                    let config = PrettyConfig::default().with_indent(4);
-                    let output = pretty_print_with_config(ctx.ast()?, &config, ctx);
-                    assert!(output.contains("Binary (+)"));
-                    Ok(())
-                })
-                .unwrap();
-        },
+            let mut ctx = crate::cel::test_util::TestContext::new(crate::cel::parser::ParseConfig::default());
+            ctx.parse("1 + 2").unwrap();
+            let config = PrettyConfig::default().with_indent(4);
+            let output = pretty_print_with_config(ctx.ast().unwrap(), &config, &ctx);
+            assert!(output.contains("Binary (+)"));
+        }
     }
 }

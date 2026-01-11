@@ -75,7 +75,11 @@ impl CelWriter for MiniCelWriter {
         }
     }
 
-    fn ident(&mut self, name: Self::StringId, span: Span) -> std::result::Result<Self::Expr, Self::Error> {
+    fn ident(
+        &mut self,
+        name: Self::StringId,
+        span: Span,
+    ) -> std::result::Result<Self::Expr, Self::Error> {
         Ok(Box::new(MiniExpr {
             kind: MiniExprKind::Ident(name),
             span,
@@ -160,7 +164,11 @@ impl CelWriter for MiniCelWriter {
         }))
     }
 
-    fn list(&mut self, items: &[Self::Expr], span: Span) -> std::result::Result<Self::Expr, Self::Error> {
+    fn list(
+        &mut self,
+        items: &[Self::Expr],
+        span: Span,
+    ) -> std::result::Result<Self::Expr, Self::Error> {
         let items = items.iter().map(|e| *e.clone()).collect();
         Ok(Box::new(MiniExpr {
             kind: MiniExprKind::List(items),

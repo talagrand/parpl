@@ -1,7 +1,7 @@
 use crate::{
     cel::{
         ast::{BinaryOp, Expr, ExprKind, Literal, Span, UnaryOp},
-        ast_builder::build_expr,
+        ast_builder::build_ast_from_pairs,
         error::Result,
         parser::{ParseConfig, parse_with_config},
         traits::CelWriter,
@@ -10,9 +10,15 @@ use crate::{
 };
 use bumpalo::Bump;
 
-struct ArenaCelWriter<'a, 'arena> {
+pub struct ArenaCelWriter<'a, 'arena> {
     arena: &'arena Bump,
     interner: &'a mut StringPool,
+}
+
+impl<'a, 'arena> ArenaCelWriter<'a, 'arena> {
+    pub fn new(arena: &'arena Bump, interner: &'a mut StringPool) -> Self {
+        Self { arena, interner }
+    }
 }
 
 impl<'a, 'arena> CelWriter for ArenaCelWriter<'a, 'arena> {
@@ -42,7 +48,11 @@ impl<'a, 'arena> CelWriter for ArenaCelWriter<'a, 'arena> {
         Ok(self.arena.alloc(Expr::new(ExprKind::Literal(lit), span)))
     }
 
-    fn ident(&mut self, name: Self::StringId, span: Span) -> std::result::Result<Self::Expr, Self::Error> {
+    fn ident(
+        &mut self,
+        name: Self::StringId,
+        span: Span,
+    ) -> std::result::Result<Self::Expr, Self::Error> {
         Ok(self.arena.alloc(Expr::new(ExprKind::Ident(name), span)))
     }
 
@@ -91,7 +101,8 @@ impl<'a, 'arena> CelWriter for ArenaCelWriter<'a, 'arena> {
     ) -> std::result::Result<Self::Expr, Self::Error> {
         let args = args.map(|a| {
             self.arena
-                .alloc_slice_fill_iter(a.iter().map(|&e| e.clone())) as &'arena [Expr<'arena>]
+                .alloc_slice_fill_iter(a.iter().map(|&e| e.clone()))
+                as &'arena [Expr<'arena>]
         });
         Ok(self
             .arena
@@ -124,7 +135,11 @@ impl<'a, 'arena> CelWriter for ArenaCelWriter<'a, 'arena> {
             .alloc(Expr::new(ExprKind::Call(target, function, args), span)))
     }
 
-    fn list(&mut self, items: &[Self::Expr], span: Span) -> std::result::Result<Self::Expr, Self::Error> {
+    fn list(
+        &mut self,
+        items: &[Self::Expr],
+        span: Span,
+    ) -> std::result::Result<Self::Expr, Self::Error> {
         let items = self
             .arena
             .alloc_slice_fill_iter(items.iter().map(|&e| e.clone()));
@@ -177,22 +192,7 @@ pub fn build_ast_with_arena<'arena>(
     // First parse with pest
     let pairs = parse_with_config(input, config)?;
 
-    // Convert to AST with depth tracking
-    // The parse tree has structure: SOI ~ expr ~ EOI
-    // We want just the expr
-    let pair = pairs
-        .into_iter()
-        .next()
-        .expect("Parser validated: successful parse returns at least one pair");
-
-    // The cel rule contains: SOI ~ expr ~ EOI
-    // Extract the expr
-    let mut inner = pair.into_inner();
-    let expr_pair = inner
-        .next()
-        .expect("Parser validated: cel = { SOI ~ expr ~ EOI }");
-
     // Start with max depth remaining
     let mut writer = ArenaCelWriter { arena, interner };
-    build_expr(config.max_ast_depth, expr_pair, &mut writer)
+    build_ast_from_pairs(pairs, config.max_ast_depth, &mut writer)
 }

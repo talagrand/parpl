@@ -78,6 +78,31 @@ fn check_depth(depth_left: usize) -> Result<usize> {
 //
 // ============================================================================
 
+/// Build an AST from parsed pairs
+///
+/// This extracts the expression from the top-level rule and builds the AST.
+pub fn build_ast_from_pairs<W: CelWriter>(
+    pairs: pest::iterators::Pairs<'_, Rule>,
+    max_ast_depth: usize,
+    writer: &mut W,
+) -> Result<W::Expr> {
+    // The parse tree has structure: SOI ~ expr ~ EOI
+    // We want just the expr
+    let pair = pairs
+        .into_iter()
+        .next()
+        .expect("Parser validated: successful parse returns at least one pair");
+
+    // The cel rule contains: SOI ~ expr ~ EOI
+    // Extract the expr
+    let mut inner = pair.into_inner();
+    let expr_pair = inner
+        .next()
+        .expect("Parser validated: cel = { SOI ~ expr ~ EOI }");
+
+    build_expr(max_ast_depth, expr_pair, writer)
+}
+
 /// Build an expression from a pest Pair (dispatch entry point)
 ///
 /// This function dispatches to the appropriate precedence level based on
@@ -107,12 +132,16 @@ pub fn build_expr<W: CelWriter>(
         Rule::literal => {
             let span = span_from_pair(&pair);
             let lit = process_literal_pair(pair, writer)?;
-            writer.literal(lit, span).map_err(|e| map_writer_error(e, span))
+            writer
+                .literal(lit, span)
+                .map_err(|e| map_writer_error(e, span))
         }
         Rule::ident => {
             let span = span_from_pair(&pair);
             let name = writer.interner().intern(pair.as_str());
-            writer.ident(name, span).map_err(|e| map_writer_error(e, span))
+            writer
+                .ident(name, span)
+                .map_err(|e| map_writer_error(e, span))
         }
         _ => unreachable!("Unexpected rule in build_expr: {:?}", pair.as_rule()),
     }
@@ -500,7 +529,9 @@ fn build_primary<W: CelWriter>(
     match first.as_rule() {
         Rule::literal => {
             let lit = process_literal_pair(first, writer)?;
-            writer.literal(lit, span).map_err(|e| map_writer_error(e, span))
+            writer
+                .literal(lit, span)
+                .map_err(|e| map_writer_error(e, span))
         }
         Rule::ident => {
             let name = writer.interner().intern(first.as_str());
@@ -526,7 +557,9 @@ fn build_primary<W: CelWriter>(
                     .call(None, name, &args, span)
                     .map_err(|e| map_writer_error(e, span))
             } else {
-                writer.ident(name, span).map_err(|e| map_writer_error(e, span))
+                writer
+                    .ident(name, span)
+                    .map_err(|e| map_writer_error(e, span))
             }
         }
         // Parenthesized expression - ONLY place that calls build_expr()
@@ -535,12 +568,16 @@ fn build_primary<W: CelWriter>(
         Rule::expr_list => {
             // List literal: [expr, ...]
             let items = build_expr_list(depth_left, first, writer)?;
-            writer.list(&items, span).map_err(|e| map_writer_error(e, span))
+            writer
+                .list(&items, span)
+                .map_err(|e| map_writer_error(e, span))
         }
         Rule::map_inits => {
             // Map literal: {key: value, ...}
             let entries = build_map_inits(depth_left, first, writer)?;
-            writer.map(&entries, span).map_err(|e| map_writer_error(e, span))
+            writer
+                .map(&entries, span)
+                .map_err(|e| map_writer_error(e, span))
         }
         _ => {
             // Handle other primary forms
@@ -556,12 +593,18 @@ fn build_primary<W: CelWriter>(
                                 ),
                                 writer,
                             )?;
-                            writer.list(&items, span).map_err(|e| map_writer_error(e, span))
+                            writer
+                                .list(&items, span)
+                                .map_err(|e| map_writer_error(e, span))
                         } else {
-                            writer.list(&[], span).map_err(|e| map_writer_error(e, span))
+                            writer
+                                .list(&[], span)
+                                .map_err(|e| map_writer_error(e, span))
                         }
                     } else {
-                        writer.list(&[], span).map_err(|e| map_writer_error(e, span))
+                        writer
+                            .list(&[], span)
+                            .map_err(|e| map_writer_error(e, span))
                     }
                 }
                 "{" => {
@@ -575,7 +618,9 @@ fn build_primary<W: CelWriter>(
                                 ),
                                 writer,
                             )?;
-                            writer.map(&entries, span).map_err(|e| map_writer_error(e, span))
+                            writer
+                                .map(&entries, span)
+                                .map_err(|e| map_writer_error(e, span))
                         } else {
                             writer.map(&[], span).map_err(|e| map_writer_error(e, span))
                         }
@@ -589,7 +634,9 @@ fn build_primary<W: CelWriter>(
                         .next()
                         .expect("Parser validated: primary = { \".\" ~ ident }");
                     let name = writer.interner().intern(ident_pair.as_str());
-                    writer.ident(name, span).map_err(|e| map_writer_error(e, span))
+                    writer
+                        .ident(name, span)
+                        .map_err(|e| map_writer_error(e, span))
                 }
                 _ => unreachable!("unexpected primary: {}", first.as_str()),
             }
@@ -748,30 +795,22 @@ mod tests {
     use super::*;
     use crate::cel::ast::{Expr, ExprKind};
     use crate::cel::parser::ParseConfig;
-    use crate::cel::samples::reader::build_ast_with_arena;
-    use crate::common::{Interner, StringPool};
-    use bumpalo::Bump;
+    use crate::cel::test_util::TestContext;
+    use crate::common::Interner;
 
-    struct BuiltAst {
-        ast: Expr<'static>,
-        interner: StringPool,
-    }
-
-    // Test helper that leaks arena (acceptable in tests)
-    fn build_ast(input: &str) -> Result<BuiltAst> {
-        let arena = Box::leak(Box::new(Bump::new()));
-        let mut interner = StringPool::default();
-        let ast =
-            build_ast_with_arena(input, ParseConfig::default(), arena, &mut interner)?.clone();
-        Ok(BuiltAst { ast, interner })
+    // Test helper that uses TestContext
+    fn build_ast(input: &str) -> Result<TestContext> {
+        let mut ctx = TestContext::new(ParseConfig::default());
+        ctx.parse(input)?;
+        Ok(ctx)
     }
 
     macro_rules! test_cases {
-        ($($name:ident: $input:expr => |$ast:ident| $check:block),* $(,)?) => {
+        ($($name:ident: $input:expr => |$ctx:ident| $check:block),* $(,)?) => {
             $(
                 #[test]
                 fn $name() {
-                    let $ast = build_ast($input).unwrap();
+                    let $ctx = build_ast($input).unwrap();
                     $check
                 }
             )*
@@ -783,24 +822,27 @@ mod tests {
     // ============================================================
 
     test_cases! {
-        test_build_ast_literal_int: "42" => |ast| {
-            match ast.ast.kind {
+        test_build_ast_literal_int: "42" => |ctx| {
+            let ast = ctx.ast().unwrap();
+            match ast.kind {
                 ExprKind::Literal(Literal::Int(val)) => assert_eq!(val, 42),
                 _ => panic!("expected int literal"),
             }
         },
 
-        test_build_ast_literal_string: r#""hello""# => |ast| {
-            match ast.ast.kind {
+        test_build_ast_literal_string: r#""hello""# => |ctx| {
+            let ast = ctx.ast().unwrap();
+            match ast.kind {
                 ExprKind::Literal(Literal::String(content)) => {
-                    assert_eq!(ast.interner.resolve(&content).unwrap(), "hello");
+                    assert_eq!(ctx.resolve(&content).unwrap(), "hello");
                 }
                 _ => panic!("expected string literal"),
             }
         },
 
-        test_build_ast_binary_add: "1 + 2" => |ast| {
-            match ast.ast.kind {
+        test_build_ast_binary_add: "1 + 2" => |ctx| {
+            let ast = ctx.ast().unwrap();
+            match ast.kind {
                 ExprKind::Binary(op, left, right) => {
                     assert_eq!(op, BinaryOp::Add);
                     match left.kind {
@@ -816,8 +858,9 @@ mod tests {
             }
         },
 
-        test_build_ast_ternary: "true ? 1 : 2" => |ast| {
-            match ast.ast.kind {
+        test_build_ast_ternary: "true ? 1 : 2" => |ctx| {
+            let ast = ctx.ast().unwrap();
+            match ast.kind {
                 ExprKind::Ternary(cond, if_true, if_false) => {
                     match cond.kind {
                         ExprKind::Literal(Literal::Bool(true)) => {}
@@ -836,15 +879,17 @@ mod tests {
             }
         },
 
-        test_build_ast_identifier: "foo" => |ast| {
-            match ast.ast.kind {
-                ExprKind::Ident(name) => assert_eq!(ast.interner.resolve(&name).unwrap(), "foo"),
+        test_build_ast_identifier: "foo" => |ctx| {
+            let ast = ctx.ast().unwrap();
+            match ast.kind {
+                ExprKind::Ident(name) => assert_eq!(ctx.resolve(&name).unwrap(), "foo"),
                 _ => panic!("expected identifier"),
             }
         },
 
-        test_build_ast_list: "[1, 2, 3]" => |ast| {
-            match ast.ast.kind {
+        test_build_ast_list: "[1, 2, 3]" => |ctx| {
+            let ast = ctx.ast().unwrap();
+            match ast.kind {
                 ExprKind::List(items) => {
                     assert_eq!(items.len(), 3);
                 }

@@ -517,7 +517,11 @@ mod tests {
         ) -> std::result::Result<Self::Expr, Self::Error> {
             Ok(())
         }
-        fn ident(&mut self, _name: Self::StringId, _span: Span) -> std::result::Result<Self::Expr, Self::Error> {
+        fn ident(
+            &mut self,
+            _name: Self::StringId,
+            _span: Span,
+        ) -> std::result::Result<Self::Expr, Self::Error> {
             Ok(())
         }
         fn unary(
@@ -572,7 +576,11 @@ mod tests {
         ) -> std::result::Result<Self::Expr, Self::Error> {
             Ok(())
         }
-        fn list(&mut self, _items: &[Self::Expr], _span: Span) -> std::result::Result<Self::Expr, Self::Error> {
+        fn list(
+            &mut self,
+            _items: &[Self::Expr],
+            _span: Span,
+        ) -> std::result::Result<Self::Expr, Self::Error> {
             Ok(())
         }
         fn map(

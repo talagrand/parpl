@@ -2,19 +2,98 @@
 //
 // This module provides helper functions to make testing cleaner and more concise.
 // Since our API is arena-based and requires scoped access, these utilities handle
-// the boilerplate of creating contexts.
+// the boilerplate of creating arenas, interners, and writers.
 
 use crate::{
     cel::{
-        Context,
+        CelParser,
         ast::{BinaryOp, Expr, ExprKind, Literal},
         context::Builder,
-        error::ErrorKind,
+        error::{ErrorKind, Result},
         parser::ParseConfig,
         pretty::pretty_print,
+        samples::cel::ArenaCelWriter,
     },
-    common::StringPoolId,
+    common::{Interner, StringPool, StringPoolId},
 };
+use bumpalo::Bump;
+
+// ============================================================================
+// Test Context
+// ============================================================================
+//
+// TestContext bundles an arena, string interner, and parser configuration
+// for convenient test setup. It uses unsafe lifetime extension to store
+// the AST reference alongside the arena - this is acceptable in tests where
+// the context owns all resources and outlives all references.
+
+pub struct TestContext {
+    pub arena: Bump,
+    pub interner: StringPool,
+    pub parser: CelParser,
+    pub ast: Option<&'static Expr<'static>>,
+}
+
+impl TestContext {
+    pub fn new(config: ParseConfig) -> Self {
+        let parser = Builder::default()
+            .max_parse_depth(config.max_parse_depth)
+            .max_ast_depth(config.max_ast_depth)
+            .max_call_limit(config.max_call_limit)
+            .build();
+
+        Self {
+            arena: Bump::new(),
+            interner: StringPool::default(),
+            parser,
+            ast: None,
+        }
+    }
+
+    pub fn parse(&mut self, input: &str) -> Result<()> {
+        self.arena.reset();
+        self.ast = None;
+
+        // BUGBUG: Unsafe lifetime extension - code smell, consider redesigning.
+        // We extend the arena lifetime to 'static so we can store the AST
+        // reference in the same struct. This is "safe enough" for tests because:
+        // 1. TestContext owns the arena and the AST reference
+        // 2. The arena outlives any access to self.ast
+        // 3. We reset the arena (invalidating old AST) before each parse
+        let arena_ref: &'static Bump = unsafe { std::mem::transmute(&self.arena) };
+        let mut writer = ArenaCelWriter::new(arena_ref, &mut self.interner);
+
+        let ast = self.parser.parse(input, &mut writer)?;
+        self.ast = Some(ast);
+        Ok(())
+    }
+
+    pub fn ast(&self) -> Result<&'static Expr<'static>> {
+        self.ast.ok_or_else(|| {
+            crate::cel::error::Error::new(
+                crate::cel::error::Phase::Evaluation,
+                crate::cel::error::ErrorKind::Custom("No AST".into()),
+                "No AST parsed".into(),
+            )
+        })
+    }
+
+    pub fn resolve<'a>(&'a self, id: &'a StringPoolId) -> Option<&'a str> {
+        self.interner.resolve(id)
+    }
+}
+
+impl Interner for TestContext {
+    type Id = StringPoolId;
+
+    fn intern(&mut self, s: &str) -> Self::Id {
+        self.interner.intern(s)
+    }
+
+    fn resolve<'a>(&'a self, id: &'a Self::Id) -> Option<&'a str> {
+        self.interner.resolve(id)
+    }
+}
 
 /// Parse an expression and run assertions on the AST within a scoped callback
 ///
@@ -31,14 +110,12 @@ use crate::{
 #[track_caller]
 pub fn parse<F>(input: &str, f: F)
 where
-    F: for<'a> FnOnce(&Context, &Expr<'a>),
+    F: for<'a> FnOnce(&TestContext, &Expr<'a>),
 {
-    Builder::default()
-        .parse_scoped(input, |ctx| {
-            f(ctx, ctx.ast()?);
-            Ok(())
-        })
+    let mut ctx = TestContext::new(ParseConfig::default());
+    ctx.parse(input)
         .unwrap_or_else(|e| panic!("Parse failed for '{}': {}", input, e));
+    f(&ctx, ctx.ast().unwrap());
 }
 
 /// Parse with custom configuration
@@ -59,17 +136,12 @@ where
 #[track_caller]
 pub fn parse_with_config<F>(input: &str, config: ParseConfig, f: F)
 where
-    F: for<'a> FnOnce(&Context, &Expr<'a>),
+    F: for<'a> FnOnce(&TestContext, &Expr<'a>),
 {
-    Builder::default()
-        .max_parse_depth(config.max_parse_depth)
-        .max_ast_depth(config.max_ast_depth)
-        .max_call_limit(config.max_call_limit)
-        .parse_scoped(input, |ctx| {
-            f(ctx, ctx.ast()?);
-            Ok(())
-        })
+    let mut ctx = TestContext::new(config);
+    ctx.parse(input)
         .unwrap_or_else(|e| panic!("Parse failed for '{}': {}", input, e));
+    f(&ctx, ctx.ast().unwrap());
 }
 
 /// Assert that parsing succeeds
@@ -95,8 +167,8 @@ pub fn assert_parses(input: &str) {
 /// ```
 #[track_caller]
 pub fn assert_parse_fails(input: &str) {
-    let result = Builder::default().parse_scoped(input, |ctx| ctx.ast().map(|_| ()));
-    if result.is_ok() {
+    let mut ctx = TestContext::new(ParseConfig::default());
+    if ctx.parse(input).is_ok() {
         panic!("Expected '{}' to fail parsing, but it succeeded", input);
     }
 }
@@ -111,8 +183,8 @@ pub fn assert_parse_fails(input: &str) {
 /// ```
 #[track_caller]
 pub fn assert_parse_fails_with(input: &str, expected_kind: ErrorKind) {
-    let result = Builder::default().parse_scoped(input, |ctx| ctx.ast().map(|_| ()));
-    match result {
+    let mut ctx = TestContext::new(ParseConfig::default());
+    match ctx.parse(input) {
         Ok(()) => panic!(
             "Expected '{}' to fail with {:?}, but it succeeded",
             input, expected_kind
@@ -320,9 +392,11 @@ pub fn assert_map(input: &str, expected_len: usize) {
 /// println!("{}", output);
 /// ```
 pub fn parse_and_pretty(input: &str) -> String {
-    Builder::default()
-        .parse_scoped(input, |ctx| Ok(pretty_print(ctx.ast()?, ctx)))
-        .unwrap_or_else(|e| format!("Parse error: {}", e))
+    let mut ctx = TestContext::new(ParseConfig::default());
+    match ctx.parse(input) {
+        Ok(_) => pretty_print(ctx.ast().unwrap(), &ctx),
+        Err(e) => format!("Parse error: {}", e),
+    }
 }
 
 /// Macro for table-driven tests

@@ -21,3 +21,12 @@ string-interner = "0.17"
 [[example]]
 name = "scheme_lex_benchmark"
 required-features = ["scheme"]
+
+[[example]]
+name = "demo"
+required-features = ["samples"]
+
+[[example]]
+name = "bench_parse"
+required-features = ["samples"]
+

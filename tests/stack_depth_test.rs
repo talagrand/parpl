@@ -4,7 +4,9 @@
 // NOTE: Stack overflow occurs at very low nesting depths
 // This suggests recursion in the parser or AST builder
 
-use parpl::cel::Builder;
+use bumpalo::Bump;
+use parpl::cel::{Builder, samples::cel::ArenaCelWriter};
+use parpl::common::StringPool;
 
 #[test]
 fn find_max_safe_depth() {
@@ -16,11 +18,14 @@ fn find_max_safe_depth() {
 
     for depth in test_depths.iter() {
         let input = "(".repeat(*depth) + "1" + &")".repeat(*depth);
+        let arena = Bump::new();
+        let mut interner = StringPool::default();
+        let mut writer = ArenaCelWriter::new(&arena, &mut interner);
+        let parser = Builder::default()
+            .max_nesting_depth(2_000) // Large enough to avoid AST-depth budget effects
+            .build();
 
-        match Builder::default()
-            .max_nesting_depth(100) // Allow higher than default
-            .parse_scoped(&input, |ctx| ctx.ast().map(|_| ()))
-        {
+        match parser.parse(&input, &mut writer) {
             Ok(_) => {
                 println!("Depth {}: ✓ SUCCESS", depth);
             }
@@ -55,11 +60,12 @@ fn test_with_larger_stack() {
             // Maximum safe depth is 158, we test up to 150 for safety
             for depth in [10, 50, 100, 150].iter() {
                 let input = "(".repeat(*depth) + "1" + &")".repeat(*depth);
+                let arena = Bump::new();
+                let mut interner = StringPool::default();
+                let mut writer = ArenaCelWriter::new(&arena, &mut interner);
+                let parser = Builder::default().max_nesting_depth(10_000).build();
 
-                match Builder::default()
-                    .max_nesting_depth(500)
-                    .parse_scoped(&input, |ctx| ctx.ast().map(|_| ()))
-                {
+                match parser.parse(&input, &mut writer) {
                     Ok(_) => println!("Depth {}: ✓ SUCCESS", depth),
                     Err(e) => println!("Depth {}: ✗ FAILED - {}", depth, e),
                 }
@@ -75,12 +81,15 @@ fn test_with_larger_stack() {
 fn test_builder_context_depth() {
     println!("\n=== Testing Context with various depths ===\n");
 
-    let mut ctx = Builder::default().max_nesting_depth(100).build();
+    let parser = Builder::default().max_nesting_depth(100).build();
 
     for depth in [5, 10, 15, 20, 25, 30].iter() {
         let input = "(".repeat(*depth) + "1" + &")".repeat(*depth);
+        let arena = Bump::new();
+        let mut interner = StringPool::default();
+        let mut writer = ArenaCelWriter::new(&arena, &mut interner);
 
-        match ctx.parse(&input) {
+        match parser.parse(&input, &mut writer) {
             Ok(_) => println!("Context depth {}: ✓ SUCCESS", depth),
             Err(e) => println!("Context depth {}: ✗ FAILED - {}", depth, e),
         }

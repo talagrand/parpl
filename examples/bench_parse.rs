@@ -6,7 +6,11 @@
 // Run with:
 //   cargo run --release --example bench_parse
 
-use parpl::cel::{Builder, Result};
+use bumpalo::Bump;
+use parpl::{
+    cel::{Builder, Result, samples::cel::ArenaCelWriter},
+    common::StringPool,
+};
 use std::time::Instant;
 
 fn main() -> Result<()> {
@@ -19,14 +23,26 @@ fn main() -> Result<()> {
     println!("Expression: {}", expr.replace('\n', " "));
     println!("Target iterations: {}", ITERATIONS);
 
-    // Reuse a single context to avoid measuring builder construction each time.
-    let mut ctx = Builder::default().build();
+    // Setup memory management
+    let mut bump = Bump::new();
+    let mut pool = StringPool::new();
+
+    // Reuse a single parser driver
+    let cel = Builder::default().build();
 
     let start = Instant::now();
     let mut iterations: u64 = 0;
 
     while iterations < ITERATIONS {
-        ctx.parse(expr)?;
+        // Reset the arena to avoid unbounded memory growth
+        bump.reset();
+
+        // Create a writer for this iteration
+        let mut writer = ArenaCelWriter::new(&bump, &mut pool);
+
+        // Parse
+        cel.parse(expr, &mut writer)?;
+
         iterations += 1;
     }
 
