@@ -27,12 +27,12 @@ for e.g. math operations. We implement a conservative but conforming identifier 
 | Nd | Decimal digits | 0-9, ٠-٩ | ✅ Yes (subsequent only, via `is_numeric()` / `is_alphanumeric()`) |
 | Nl | Letter numbers | Ⅰ, ⅰ | ✅ Yes (initial & subsequent, via `is_alphabetic()` / `is_numeric()`) |
 | No | Other numbers | ², ³, ¼ | ✅ Yes (subsequent only, via `is_numeric()` / `is_alphanumeric()`) |
-| Pd | Dash punctuation | ‐, – | ❌ No (beyond ASCII `-` which is handled by the ASCII rules) |
-| Pc | Connector punctuation | _, ‿ | ✅ Partially (ASCII `_` only, via ASCII special-initial and delimiter rules) |
-| Po | Other punctuation | •, ‣ | ✅ Partially (a small ASCII subset such as `! ? , . ; : @` via ASCII rules; non-ASCII Po rejected) |
-| Sc | Currency symbols | $, €, £ | ✅ Partially (`$` only, via ASCII special-initial; other Sc rejected) |
-| Sm | Math symbols | +, −, × | ✅ Partially (ASCII `+ < = > | ~` allowed by ASCII rules; other Sm rejected) |
-| Sk | Modifier symbols | ^, ` | ✅ Partially (ASCII `^` and `` ` `` via ASCII rules; other Sk rejected) |
+| Pd | Dash punctuation | ‐, – | 🟡 Partial (ASCII `-` only, via ASCII rules; non-ASCII Pd rejected) |
+| Pc | Connector punctuation | _, ‿ | 🟡 Partial (ASCII `_` only, via ASCII special-initial and delimiter rules) |
+| Po | Other punctuation | •, ‣ | 🟡 Partial (a small ASCII subset such as `! ? , . ; : @` via ASCII rules; non-ASCII Po rejected) |
+| Sc | Currency symbols | $, €, £ | 🟡 Partial (`$` only, via ASCII special-initial; other Sc rejected) |
+| Sm | Math symbols | +, −, × | 🟡 Partial (ASCII `+ < = > \| ~` allowed by ASCII rules; other Sm rejected) |
+| Sk | Modifier symbols | ^, ` | 🟡 Partial (ASCII `^` and `` ` `` via ASCII rules; other Sk rejected) |
 | So | Other symbols | ©, ®, ☺ | ❌ No (symbols beyond the ASCII special initials are rejected) |
 | Co | Private use | U+E000–U+F8FF | ❌ No (rejected; not seen by `is_alphabetic`/`is_numeric`) |
 

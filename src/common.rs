@@ -21,11 +21,6 @@ impl Span {
             end: std::cmp::max(self.end, other.end),
         }
     }
-
-    // Alias for compatibility with CEL code if needed, or we can refactor CEL to use merge
-    pub fn combine(&self, other: &Span) -> Span {
-        self.merge(*other)
-    }
 }
 
 /// A syntax object: a value paired with its source span.
@@ -43,11 +38,10 @@ impl<T> Syntax<T> {
 }
 
 /// A handle to a string (symbol or string literal).
-/// Must be cheap to copy, compare, and hash.
 ///
 /// Common implementations:
 /// - `u64` or `u32` (for interned strings)
-/// - `&'a str` (for non-interned strings)
+/// - `String` (for non-interned strings)
 pub trait StringId: Clone + Eq + Hash + Debug {}
 impl<T: Clone + Eq + Hash + Debug> StringId for T {}
 
@@ -78,9 +72,9 @@ impl Interner for NoOpInterner {
     }
 }
 
+/// The default string ID used by `StringPool`.
+pub type StringPoolId = DefaultSymbol;
 /// A general-purpose interner backed by `string_interner`.
-///
-/// This is suitable for both Scheme and CEL usage when you want stable IDs.
 #[derive(Default, Debug, Clone)]
 pub struct StringPool(StringInterner<DefaultBackend>);
 
@@ -109,6 +103,3 @@ impl Interner for StringPool {
         self.0.resolve(*id)
     }
 }
-
-/// The default string ID used by `StringPool`.
-pub type StringPoolId = DefaultSymbol;

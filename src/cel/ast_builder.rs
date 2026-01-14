@@ -793,10 +793,9 @@ fn apply_unary_repeated<W: CelWriter>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cel::ast::{Expr, ExprKind};
+    use crate::cel::ast::ExprKind;
     use crate::cel::parser::ParseConfig;
     use crate::cel::test_util::TestContext;
-    use crate::common::Interner;
 
     // Test helper that uses TestContext
     fn build_ast(input: &str) -> Result<TestContext> {

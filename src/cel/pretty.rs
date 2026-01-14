@@ -256,7 +256,7 @@ fn escape_for_display(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cel::{Builder, test_util::*};
+    use crate::cel::test_util::*;
 
     macro_rules! test_cases {
         ($($name:ident: $test:expr),* $(,)?) => {

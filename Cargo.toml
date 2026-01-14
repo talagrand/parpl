@@ -14,12 +14,12 @@ scheme = ["dep:winnow", "dep:unicase", "dep:thiserror"]
 samples = []
 
 [dependencies]
-winnow = { version = "0.7.13", optional = true }
+winnow = { version = "0.7.14", optional = true }
 unicase = { version = "2", optional = true }
 thiserror = { version = "1", optional = true }
 pest = { version = "2.8", optional = true }
 pest_derive = { version = "2.8", optional = true }
-bumpalo = "3.14"
+bumpalo = "3.19"
 string-interner = "0.17"
 
 [[example]]
