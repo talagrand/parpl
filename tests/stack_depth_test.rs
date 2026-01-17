@@ -4,6 +4,8 @@
 // NOTE: Stack overflow occurs at very low nesting depths
 // This suggests recursion in the parser or AST builder
 
+#![cfg(feature = "samples")]
+
 use bumpalo::Bump;
 use parpl::cel::{Builder, samples::cel::ArenaCelWriter};
 use parpl::common::StringPool;

@@ -25,6 +25,10 @@ pest_derive = { version = "2.8", optional = true }
 bumpalo = "3.19"
 string-interner = "0.17"
 
+[[test]]
+name = "stack_depth_test"
+required-features = ["samples"]
+
 [[example]]
 name = "scheme_lex_benchmark"
 required-features = ["scheme"]
