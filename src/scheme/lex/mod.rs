@@ -421,7 +421,7 @@ impl<'i> Lexer<'i> {
         Err(ParseError::lexical(
             span,
             "<token>",
-            format!("unexpected character: {:?}", ch),
+            format!("unexpected character: {ch:?}"),
         ))
     }
 }

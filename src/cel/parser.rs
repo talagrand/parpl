@@ -49,7 +49,7 @@ impl Default for ParseConfig {
 /// Parse a CEL expression from a string with default configuration
 ///
 /// Uses default limits:
-/// - `max_nesting_depth`: [`crate::cel::constants::DEFAULT_MAX_RECURSION_DEPTH`] (128)
+/// - `max_nesting_depth`: 128 (see `constants::DEFAULT_MAX_PARSE_DEPTH`)
 /// - `max_call_limit`: 10,000,000
 ///
 /// For custom limits, use [`parse_with_config`].
@@ -121,7 +121,7 @@ pub fn parse_with_config(input: &str, config: ParseConfig) -> Result<Pairs<'_, R
 /// - Counts delimiters in strings (false positives possible, but rare)
 /// - This is acceptable: we prefer rejecting extreme inputs over risking crashes
 ///
-/// Default limit: [`crate::cel::constants::DEFAULT_MAX_RECURSION_DEPTH`] = 128
+/// Default limit: 128 (see `constants::DEFAULT_MAX_PARSE_DEPTH`)
 fn validate_nesting_depth(input: &str, max_depth: usize) -> Result<()> {
     let mut depth = 0;
     let mut max_reached = 0;
@@ -155,26 +155,24 @@ mod tests {
 
         pub fn assert_parses(input: &str) {
             let result = parse(input);
-            assert!(result.is_ok(), "Failed to parse '{}': {:?}", input, result);
+            assert!(result.is_ok(), "Failed to parse '{input}': {result:?}");
         }
 
         pub fn assert_parse_fails(input: &str) {
             let result = parse(input);
-            assert!(result.is_err(), "Expected '{}' to fail parsing", input);
+            assert!(result.is_err(), "Expected '{input}' to fail parsing");
         }
 
         pub fn assert_error_contains(input: &str, expected: &str) {
             match parse(input) {
                 Err(e) => {
-                    let msg = format!("{}", e);
+                    let msg = format!("{e}");
                     assert!(
                         msg.contains(expected),
-                        "Error message '{}' should contain '{}'",
-                        msg,
-                        expected
+                        "Error message '{msg}' should contain '{expected}'"
                     );
                 }
-                Ok(_) => panic!("Expected '{}' to fail, but it parsed successfully", input),
+                Ok(_) => panic!("Expected '{input}' to fail, but it parsed successfully"),
             }
         }
     }

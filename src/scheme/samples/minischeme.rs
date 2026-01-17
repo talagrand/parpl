@@ -267,32 +267,28 @@ mod tests {
         fn check(&self, value: &Value, test_name: &str) {
             match (self, value) {
                 (ValueMatcher::Number(e), Value::Number(a)) => {
-                    assert_eq!(e, a, "{}: number mismatch", test_name)
+                    assert_eq!(e, a, "{test_name}: number mismatch")
                 }
                 (ValueMatcher::Symbol(e), Value::Symbol(a)) => {
-                    assert_eq!(e, a, "{}: symbol mismatch", test_name)
+                    assert_eq!(e, a, "{test_name}: symbol mismatch")
                 }
                 (ValueMatcher::Str(e), Value::String(a)) => {
-                    assert_eq!(e, a, "{}: string mismatch", test_name)
+                    assert_eq!(e, a, "{test_name}: string mismatch")
                 }
                 (ValueMatcher::Bool(e), Value::Bool(a)) => {
-                    assert_eq!(e, a, "{}: bool mismatch", test_name)
+                    assert_eq!(e, a, "{test_name}: bool mismatch")
                 }
                 (ValueMatcher::List(elems), Value::List(actual)) => {
                     assert_eq!(
                         elems.len(),
                         actual.len(),
-                        "{}: list length mismatch",
-                        test_name
+                        "{test_name}: list length mismatch"
                     );
                     for (e, a) in elems.iter().zip(actual.iter()) {
                         e.check(a, test_name);
                     }
                 }
-                _ => panic!(
-                    "{}: value type mismatch. Expected {:?}, got {:?}",
-                    test_name, self, value
-                ),
+                _ => panic!("{test_name}: value type mismatch. Expected {self:?}, got {value:?}"),
             }
         }
     }
@@ -304,8 +300,7 @@ mod tests {
                 (ErrorMatcher::Syntax(expected_msg), ParseError::Syntax { message, .. }) => {
                     assert_eq!(
                         expected_msg, message,
-                        "{}: syntax message mismatch",
-                        test_name
+                        "{test_name}: syntax message mismatch"
                     )
                 }
                 (
@@ -314,8 +309,7 @@ mod tests {
                 ) => {
                     assert_eq!(
                         expected_feature, feature,
-                        "{}: unsupported feature mismatch",
-                        test_name
+                        "{test_name}: unsupported feature mismatch"
                     )
                 }
                 (ErrorMatcher::Unsupported(expected_feature), ParseError::WriterError(msg)) => {

@@ -84,64 +84,64 @@ where
     match &expr.kind {
         ExprKind::Ternary(cond, if_true, if_false) => {
             buf.push_str("Ternary\n");
-            buf.push_str(&format!("{}  condition:\n", indent_str));
+            buf.push_str(&format!("{indent_str}  condition:\n"));
             print_expr(buf, cond, indent + 2, config, interner);
-            buf.push_str(&format!("{}  if_true:\n", indent_str));
+            buf.push_str(&format!("{indent_str}  if_true:\n"));
             print_expr(buf, if_true, indent + 2, config, interner);
-            buf.push_str(&format!("{}  if_false:\n", indent_str));
+            buf.push_str(&format!("{indent_str}  if_false:\n"));
             print_expr(buf, if_false, indent + 2, config, interner);
         }
 
         ExprKind::Binary(op, left, right) => {
-            buf.push_str(&format!("Binary ({})\n", op));
-            buf.push_str(&format!("{}  left:\n", indent_str));
+            buf.push_str(&format!("Binary ({op})\n"));
+            buf.push_str(&format!("{indent_str}  left:\n"));
             print_expr(buf, left, indent + 2, config, interner);
-            buf.push_str(&format!("{}  right:\n", indent_str));
+            buf.push_str(&format!("{indent_str}  right:\n"));
             print_expr(buf, right, indent + 2, config, interner);
         }
 
         ExprKind::Unary(op, expr) => {
-            buf.push_str(&format!("Unary ({})\n", op));
-            buf.push_str(&format!("{}  operand:\n", indent_str));
+            buf.push_str(&format!("Unary ({op})\n"));
+            buf.push_str(&format!("{indent_str}  operand:\n"));
             print_expr(buf, expr, indent + 2, config, interner);
         }
 
         ExprKind::Member(target, field, args) => {
             let field_str = fmt_id(field, interner);
             if let Some(args) = args {
-                buf.push_str(&format!("MemberCall (.{})\n", field_str));
-                buf.push_str(&format!("{}  target:\n", indent_str));
+                buf.push_str(&format!("MemberCall (.{field_str})\n"));
+                buf.push_str(&format!("{indent_str}  target:\n"));
                 print_expr(buf, target, indent + 2, config, interner);
-                buf.push_str(&format!("{}  args:\n", indent_str));
+                buf.push_str(&format!("{indent_str}  args:\n"));
                 for arg in *args {
                     print_expr(buf, arg, indent + 2, config, interner);
                 }
             } else {
-                buf.push_str(&format!("Member (.{})\n", field_str));
-                buf.push_str(&format!("{}  target:\n", indent_str));
+                buf.push_str(&format!("Member (.{field_str})\n"));
+                buf.push_str(&format!("{indent_str}  target:\n"));
                 print_expr(buf, target, indent + 2, config, interner);
             }
         }
 
         ExprKind::Index(target, index) => {
             buf.push_str("Index\n");
-            buf.push_str(&format!("{}  target:\n", indent_str));
+            buf.push_str(&format!("{indent_str}  target:\n"));
             print_expr(buf, target, indent + 2, config, interner);
-            buf.push_str(&format!("{}  index:\n", indent_str));
+            buf.push_str(&format!("{indent_str}  index:\n"));
             print_expr(buf, index, indent + 2, config, interner);
         }
 
         ExprKind::Call(receiver, name, args) => {
             let name_str = fmt_id(name, interner);
             if let Some(recv) = receiver {
-                buf.push_str(&format!("Call (.{})\n", name_str));
-                buf.push_str(&format!("{}  receiver:\n", indent_str));
+                buf.push_str(&format!("Call (.{name_str})\n"));
+                buf.push_str(&format!("{indent_str}  receiver:\n"));
                 print_expr(buf, recv, indent + 2, config, interner);
             } else {
-                buf.push_str(&format!("Call ({})\n", name_str));
+                buf.push_str(&format!("Call ({name_str})\n"));
             }
             if !args.is_empty() {
-                buf.push_str(&format!("{}  args:\n", indent_str));
+                buf.push_str(&format!("{indent_str}  args:\n"));
                 for arg in *args {
                     print_expr(buf, arg, indent + 2, config, interner);
                 }
@@ -150,13 +150,13 @@ where
 
         ExprKind::Ident(name) => {
             let name_str = fmt_id(name, interner);
-            buf.push_str(&format!("Ident({})\n", name_str));
+            buf.push_str(&format!("Ident({name_str})\n"));
         }
 
         ExprKind::List(elements) => {
             buf.push_str("List\n");
             if !elements.is_empty() {
-                buf.push_str(&format!("{}  elements:\n", indent_str));
+                buf.push_str(&format!("{indent_str}  elements:\n"));
                 for elem in *elements {
                     print_expr(buf, elem, indent + 2, config, interner);
                 }
@@ -166,11 +166,11 @@ where
         ExprKind::Map(entries) => {
             buf.push_str("Map\n");
             if !entries.is_empty() {
-                buf.push_str(&format!("{}  entries:\n", indent_str));
+                buf.push_str(&format!("{indent_str}  entries:\n"));
                 for (key, value) in *entries {
-                    buf.push_str(&format!("{}    key:\n", indent_str));
+                    buf.push_str(&format!("{indent_str}    key:\n"));
                     print_expr(buf, key, indent + 3, config, interner);
-                    buf.push_str(&format!("{}    value:\n", indent_str));
+                    buf.push_str(&format!("{indent_str}    value:\n"));
                     print_expr(buf, value, indent + 3, config, interner);
                 }
             }
@@ -183,17 +183,17 @@ where
                 .collect::<Vec<_>>()
                 .join(".");
             if let Some(recv) = receiver {
-                buf.push_str(&format!("Struct (.{})\n", path_str));
-                buf.push_str(&format!("{}  receiver:\n", indent_str));
+                buf.push_str(&format!("Struct (.{path_str})\n"));
+                buf.push_str(&format!("{indent_str}  receiver:\n"));
                 print_expr(buf, recv, indent + 2, config, interner);
             } else {
-                buf.push_str(&format!("Struct ({})\n", path_str));
+                buf.push_str(&format!("Struct ({path_str})\n"));
             }
             if !fields.is_empty() {
-                buf.push_str(&format!("{}  fields:\n", indent_str));
+                buf.push_str(&format!("{indent_str}  fields:\n"));
                 for (name, value) in *fields {
                     let field_name = fmt_id(name, interner);
-                    buf.push_str(&format!("{}    {}:\n", indent_str, field_name));
+                    buf.push_str(&format!("{indent_str}    {field_name}:\n"));
                     print_expr(buf, value, indent + 3, config, interner);
                 }
             }
@@ -210,13 +210,13 @@ where
     I: Interner<Id = StringPoolId> + ?Sized,
 {
     match lit {
-        Literal::Int(val) => buf.push_str(&format!("Literal(Int({}))\n", val)),
-        Literal::UInt(val) => buf.push_str(&format!("Literal(UInt({}))\n", val)),
-        Literal::Float(val) => buf.push_str(&format!("Literal(Float({}))\n", val)),
+        Literal::Int(val) => buf.push_str(&format!("Literal(Int({val}))\n")),
+        Literal::UInt(val) => buf.push_str(&format!("Literal(UInt({val}))\n")),
+        Literal::Float(val) => buf.push_str(&format!("Literal(Float({val}))\n")),
         Literal::String(id) => {
             let s = interner.resolve(id).unwrap_or("<unresolved>");
             let escaped = escape_for_display(s);
-            buf.push_str(&format!("Literal(String(\"{}\"))\n", escaped));
+            buf.push_str(&format!("Literal(String(\"{escaped}\"))\n"));
         }
         Literal::Bytes(bytes) => {
             // Convert bytes to displayable string, escaping non-printable bytes
@@ -227,13 +227,13 @@ where
                         vec![b as char]
                     } else {
                         // Show as \xHH for non-printable bytes
-                        format!("\\x{:02x}", b).chars().collect::<Vec<_>>()
+                        format!("\\x{b:02x}").chars().collect::<Vec<_>>()
                     }
                 })
                 .collect::<String>();
-            buf.push_str(&format!("Literal(Bytes(b\"{}\"))\n", escaped));
+            buf.push_str(&format!("Literal(Bytes(b\"{escaped}\"))\n"));
         }
-        Literal::Bool(b) => buf.push_str(&format!("Literal(Bool({}))\n", b)),
+        Literal::Bool(b) => buf.push_str(&format!("Literal(Bool({b}))\n")),
         Literal::Null => buf.push_str("Literal(Null)\n"),
     }
 }

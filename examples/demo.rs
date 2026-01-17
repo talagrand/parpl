@@ -135,13 +135,13 @@ fn main() -> Result<()> {
     // Syntax error
     match parse_scoped(&parser, "1 + + 2", |_, _| Ok(())) {
         Ok(_) => println!("   ✗ Should have failed"),
-        Err(e) => println!("   ✓ Syntax error caught: {}", e),
+        Err(e) => println!("   ✓ Syntax error caught: {e}"),
     }
 
     // Reserved word error
     match parse_scoped(&parser, "for", |_, _| Ok(())) {
         Ok(_) => println!("   ✗ Should have failed"),
-        Err(e) => println!("   ✓ Reserved word rejected: {}", e),
+        Err(e) => println!("   ✓ Reserved word rejected: {e}"),
     }
 
     // ========================================================================
@@ -158,8 +158,8 @@ fn main() -> Result<()> {
 
     for expr in examples {
         match parse_scoped(&parser, expr, |_, _| Ok(())) {
-            Ok(_) => println!("   ✓ Parsed: {}", expr),
-            Err(e) => println!("   ✗ Failed: {} - {}", expr, e),
+            Ok(_) => println!("   ✓ Parsed: {expr}"),
+            Err(e) => println!("   ✗ Failed: {expr} - {e}"),
         }
     }
 

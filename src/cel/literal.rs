@@ -58,12 +58,11 @@ fn simple_escape(ch: char) -> Option<char> {
 fn validate_unicode_codepoint(code_point: u32) -> Result<char> {
     if (0xD800..=0xDFFF).contains(&code_point) {
         return Err(Error::invalid_escape(format!(
-            "UTF-16 surrogate code point not allowed: U+{:04X}",
-            code_point
+            "UTF-16 surrogate code point not allowed: U+{code_point:04X}"
         )));
     }
     char::from_u32(code_point).ok_or_else(|| {
-        Error::invalid_escape(format!("invalid Unicode code point: U+{:08X}", code_point))
+        Error::invalid_escape(format!("invalid Unicode code point: U+{code_point:08X}"))
     })
 }
 
@@ -73,7 +72,7 @@ fn validate_unicode_codepoint(code_point: u32) -> Result<char> {
 fn process_hex_escape(chars: &mut std::str::Chars) -> Result<u32> {
     let hex = collect_hex_digits(chars, 2)?;
     u32::from_str_radix(&hex, 16)
-        .map_err(|_| Error::invalid_escape(format!("invalid hex escape: \\x{}", hex)))
+        .map_err(|_| Error::invalid_escape(format!("invalid hex escape: \\x{hex}")))
 }
 
 /// Process a short Unicode escape sequence (\uHHHH).
@@ -82,7 +81,7 @@ fn process_hex_escape(chars: &mut std::str::Chars) -> Result<u32> {
 fn process_unicode_short_escape(chars: &mut std::str::Chars) -> Result<char> {
     let hex = collect_hex_digits(chars, 4)?;
     let code_point = u32::from_str_radix(&hex, 16)
-        .map_err(|_| Error::invalid_escape(format!("invalid unicode escape: \\u{}", hex)))?;
+        .map_err(|_| Error::invalid_escape(format!("invalid unicode escape: \\u{hex}")))?;
     validate_unicode_codepoint(code_point)
 }
 
@@ -92,7 +91,7 @@ fn process_unicode_short_escape(chars: &mut std::str::Chars) -> Result<char> {
 fn process_unicode_long_escape(chars: &mut std::str::Chars) -> Result<char> {
     let hex = collect_hex_digits(chars, 8)?;
     let code_point = u32::from_str_radix(&hex, 16)
-        .map_err(|_| Error::invalid_escape(format!("invalid unicode escape: \\U{}", hex)))?;
+        .map_err(|_| Error::invalid_escape(format!("invalid unicode escape: \\U{hex}")))?;
     validate_unicode_codepoint(code_point)
 }
 
@@ -116,12 +115,11 @@ fn process_octal_escape(chars: &mut std::str::Chars, first_digit: char) -> Resul
     );
 
     let value = u32::from_str_radix(&octal, 8)
-        .map_err(|_| Error::invalid_escape(format!("invalid octal escape: \\{}", octal)))?;
+        .map_err(|_| Error::invalid_escape(format!("invalid octal escape: \\{octal}")))?;
 
     if value > 255 {
         return Err(Error::invalid_escape(format!(
-            "octal escape out of range: \\{}",
-            octal
+            "octal escape out of range: \\{octal}"
         )));
     }
 
@@ -134,12 +132,11 @@ fn collect_hex_digits(chars: &mut std::str::Chars, count: usize) -> Result<Strin
     for _ in 0..count {
         let ch = chars.next().ok_or_else(|| {
             Error::invalid_escape(format!(
-                "incomplete hex escape sequence, expected {} digits",
-                count
+                "incomplete hex escape sequence, expected {count} digits"
             ))
         })?;
         if !ch.is_ascii_hexdigit() {
-            return Err(Error::invalid_escape(format!("invalid hex digit: {}", ch)));
+            return Err(Error::invalid_escape(format!("invalid hex digit: {ch}")));
         }
         result.push(ch);
     }
@@ -182,7 +179,7 @@ pub fn parse_int(s: &str) -> Result<i64> {
     if negative {
         abs_value
             .checked_neg()
-            .ok_or_else(|| Error::invalid_number(format!("-{}", s)))
+            .ok_or_else(|| Error::invalid_number(format!("-{s}")))
     } else {
         Ok(abs_value)
     }
@@ -296,8 +293,7 @@ pub fn process_string_escapes<W: CelWriter>(s: &str, writer: &mut W) -> Result<W
             }
             _ => {
                 return Err(Error::invalid_escape(format!(
-                    "invalid escape sequence: \\{}",
-                    next
+                    "invalid escape sequence: \\{next}"
                 )));
             }
         }
@@ -375,8 +371,7 @@ pub fn process_bytes_escapes<W: CelWriter>(s: &str, writer: &mut W) -> Result<W:
             }
             _ => {
                 return Err(Error::invalid_escape(format!(
-                    "invalid escape sequence: \\{}",
-                    next
+                    "invalid escape sequence: \\{next}"
                 )));
             }
         }
@@ -419,7 +414,7 @@ pub fn process_literal<W: CelWriter>(
                 Error::new(
                     Phase::AstConstruction,
                     ErrorKind::Custom("unresolved interned string id".to_string()),
-                    format!("unresolved interned string id: {:?}", id),
+                    format!("unresolved interned string id: {id:?}"),
                 )
             })
     }

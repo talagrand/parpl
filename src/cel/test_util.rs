@@ -114,7 +114,7 @@ where
 {
     let mut ctx = TestContext::new(ParseConfig::default());
     ctx.parse(input)
-        .unwrap_or_else(|e| panic!("Parse failed for '{}': {}", input, e));
+        .unwrap_or_else(|e| panic!("Parse failed for '{input}': {e}"));
     f(&ctx, ctx.ast().unwrap());
 }
 
@@ -140,7 +140,7 @@ where
 {
     let mut ctx = TestContext::new(config);
     ctx.parse(input)
-        .unwrap_or_else(|e| panic!("Parse failed for '{}': {}", input, e));
+        .unwrap_or_else(|e| panic!("Parse failed for '{input}': {e}"));
     f(&ctx, ctx.ast().unwrap());
 }
 
@@ -395,7 +395,7 @@ pub fn parse_and_pretty(input: &str) -> String {
     let mut ctx = TestContext::new(ParseConfig::default());
     match ctx.parse(input) {
         Ok(_) => pretty_print(ctx.ast().unwrap(), &ctx),
-        Err(e) => format!("Parse error: {}", e),
+        Err(e) => format!("Parse error: {e}"),
     }
 }
 

@@ -109,24 +109,21 @@ fn assert_finite(
     let (expected_sign, expected_spelling) = split_expected_sign(expected);
     assert_eq!(
         repr.sign, expected_sign,
-        "{}: token {} {} sign mismatch",
-        test_name, index, part
+        "{test_name}: token {index} {part} sign mismatch"
     );
 
     match &repr.magnitude {
         RealMagnitude::Finite(FiniteRealMagnitude { kind, spelling }) => {
             assert_eq!(
                 *kind, expected_kind,
-                "{}: token {} {} kind mismatch",
-                test_name, index, part
+                "{test_name}: token {index} {part} kind mismatch"
             );
             assert_eq!(
                 *spelling, expected_spelling,
-                "{}: token {} {} spelling mismatch",
-                test_name, index, part
+                "{test_name}: token {index} {part} spelling mismatch"
             );
         }
-        _ => panic!("{}: token {} expected finite {}", test_name, index, part),
+        _ => panic!("{test_name}: token {index} expected finite {part}"),
     }
 }
 
@@ -140,27 +137,20 @@ fn assert_infnan(
     let (expected_sign, expected_kind) = expected.expected();
     assert_eq!(
         repr.sign, expected_sign,
-        "{}: token {} {} sign mismatch",
-        test_name, index, part
+        "{test_name}: token {index} {part} sign mismatch"
     );
     match &repr.magnitude {
         RealMagnitude::Infinity => assert_eq!(
             expected_kind,
             SpecialMagnitude::Infinity,
-            "{}: token {} {} magnitude mismatch",
-            test_name,
-            index,
-            part
+            "{test_name}: token {index} {part} magnitude mismatch"
         ),
         RealMagnitude::NaN => assert_eq!(
             expected_kind,
             SpecialMagnitude::NaN,
-            "{}: token {} {} magnitude mismatch",
-            test_name,
-            index,
-            part
+            "{test_name}: token {index} {part} magnitude mismatch"
         ),
-        _ => panic!("{}: token {} expected infnan {}", test_name, index, part),
+        _ => panic!("{test_name}: token {index} expected infnan {part}"),
     }
 }
 
@@ -217,7 +207,7 @@ impl ErrorMatcher {
                     span, nonterminal, ..
                 },
             ) => {
-                assert_eq!(nt, nonterminal, "{}: error nonterminal mismatch", test_name);
+                assert_eq!(nt, nonterminal, "{test_name}: error nonterminal mismatch");
                 assert_eq!(
                     *start, span.start,
                     "{}: error span.start mismatch (expected {}, got {})",
@@ -235,14 +225,10 @@ impl ErrorMatcher {
             ) => {
                 assert_eq!(
                     expected_feature, feature,
-                    "{}: unsupported feature mismatch",
-                    test_name
+                    "{test_name}: unsupported feature mismatch"
                 );
             }
-            _ => panic!(
-                "{}: error mismatch. Expected {:?}, got {:?}",
-                test_name, self, err
-            ),
+            _ => panic!("{test_name}: error mismatch. Expected {self:?}, got {err:?}"),
         }
     }
 }
@@ -267,22 +253,22 @@ impl TokenMatcher {
     fn check(&self, token: &Token, test_name: &str, index: usize) {
         match (self, token) {
             (TokenMatcher::Bool(e), Token::Boolean(a)) => {
-                assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
+                assert_eq!(e, a, "{test_name}: token {index} mismatch")
             }
             (TokenMatcher::Char(e), Token::Character(a)) => {
-                assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
+                assert_eq!(e, a, "{test_name}: token {index} mismatch")
             }
             (TokenMatcher::Str(e), Token::String(a)) => {
-                assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
+                assert_eq!(e, a, "{test_name}: token {index} mismatch")
             }
             (TokenMatcher::Ident(e), Token::Identifier(a)) => {
-                assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
+                assert_eq!(e, a, "{test_name}: token {index} mismatch")
             }
             (TokenMatcher::LabelDef(e), Token::LabelDef(a)) => {
-                assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
+                assert_eq!(e, a, "{test_name}: token {index} mismatch")
             }
             (TokenMatcher::LabelRef(e), Token::LabelRef(a)) => {
-                assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
+                assert_eq!(e, a, "{test_name}: token {index} mismatch")
             }
             (TokenMatcher::LParen, Token::LParen) => {}
             (TokenMatcher::RParen, Token::RParen) => {}
@@ -295,17 +281,12 @@ impl TokenMatcher {
             (TokenMatcher::ByteVectorStart, Token::ByteVectorStart) => {}
             (TokenMatcher::DatumComment, Token::DatumComment) => {}
             (TokenMatcher::Num(text, check), Token::Number(n)) => {
-                assert_eq!(
-                    text, &n.text,
-                    "{}: token {} text mismatch",
-                    test_name, index
-                );
+                assert_eq!(text, &n.text, "{test_name}: token {index} text mismatch");
                 check.verify(&n.kind, test_name, index);
             }
-            _ => panic!(
-                "{}: token {} type mismatch. Expected {:?}, got {:?}",
-                test_name, index, self, token
-            ),
+            _ => {
+                panic!("{test_name}: token {index} type mismatch. Expected {self:?}, got {token:?}")
+            }
         }
     }
 }
@@ -342,30 +323,21 @@ impl NumCheck {
                 if let NumberValue::Real(real) = &kind.value {
                     assert_finite(real, FiniteRealKind::Integer, s, test_name, index, "real");
                 } else {
-                    panic!(
-                        "{}: token {} expected Real, got {:?}",
-                        test_name, index, kind
-                    );
+                    panic!("{test_name}: token {index} expected Real, got {kind:?}");
                 }
             }
             NumCheck::Dec(s) => {
                 if let NumberValue::Real(real) = &kind.value {
                     assert_finite(real, FiniteRealKind::Decimal, s, test_name, index, "real");
                 } else {
-                    panic!(
-                        "{}: token {} expected Real, got {:?}",
-                        test_name, index, kind
-                    );
+                    panic!("{test_name}: token {index} expected Real, got {kind:?}");
                 }
             }
             NumCheck::Rat(s) => {
                 if let NumberValue::Real(real) = &kind.value {
                     assert_finite(real, FiniteRealKind::Rational, s, test_name, index, "real");
                 } else {
-                    panic!(
-                        "{}: token {} expected Real, got {:?}",
-                        test_name, index, kind
-                    );
+                    panic!("{test_name}: token {index} expected Real, got {kind:?}");
                 }
             }
             NumCheck::RectInt(r, i) => {
@@ -387,7 +359,7 @@ impl NumCheck {
                         "imag part",
                     );
                 } else {
-                    panic!("{}: token {} expected Rectangular", test_name, index);
+                    panic!("{test_name}: token {index} expected Rectangular");
                 }
             }
             NumCheck::RectRat(r, i) => {
@@ -409,7 +381,7 @@ impl NumCheck {
                         "imag part",
                     );
                 } else {
-                    panic!("{}: token {} expected Rectangular", test_name, index);
+                    panic!("{test_name}: token {index} expected Rectangular");
                 }
             }
             NumCheck::PolarInt(m, a) => {
@@ -424,7 +396,7 @@ impl NumCheck {
                     );
                     assert_finite(angle, FiniteRealKind::Integer, a, test_name, index, "angle");
                 } else {
-                    panic!("{}: token {} expected Polar", test_name, index);
+                    panic!("{test_name}: token {index} expected Polar");
                 }
             }
             NumCheck::PolarRatDec(m, a) => {
@@ -439,14 +411,14 @@ impl NumCheck {
                     );
                     assert_finite(angle, FiniteRealKind::Decimal, a, test_name, index, "angle");
                 } else {
-                    panic!("{}: token {} expected Polar", test_name, index);
+                    panic!("{test_name}: token {index} expected Polar");
                 }
             }
             NumCheck::Inf(k) => {
                 if let NumberValue::Real(real) = &kind.value {
                     assert_infnan(real, *k, test_name, index, "real");
                 } else {
-                    panic!("{}: token {} expected Real", test_name, index);
+                    panic!("{test_name}: token {index} expected Real");
                 }
             }
             NumCheck::RectInfImag(r, k) => {
@@ -461,16 +433,14 @@ impl NumCheck {
                     );
                     assert_infnan(imag, *k, test_name, index, "imag part");
                 } else {
-                    panic!("{}: token {} expected Rectangular", test_name, index);
+                    panic!("{test_name}: token {index} expected Rectangular");
                 }
             }
             NumCheck::Exact(inner) => {
                 assert_eq!(
                     kind.exactness,
                     NumberExactness::Exact,
-                    "{}: token {} expected Exact",
-                    test_name,
-                    index
+                    "{test_name}: token {index} expected Exact"
                 );
                 inner.verify(kind, test_name, index);
             }
@@ -478,18 +448,12 @@ impl NumCheck {
                 assert_eq!(
                     kind.exactness,
                     NumberExactness::Inexact,
-                    "{}: token {} expected Inexact",
-                    test_name,
-                    index
+                    "{test_name}: token {index} expected Inexact"
                 );
                 inner.verify(kind, test_name, index);
             }
             NumCheck::Radix(r, inner) => {
-                assert_eq!(
-                    kind.radix, *r,
-                    "{}: token {} radix mismatch",
-                    test_name, index
-                );
+                assert_eq!(kind.radix, *r, "{test_name}: token {index} radix mismatch");
                 inner.verify(kind, test_name, index);
             }
         }

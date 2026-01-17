@@ -263,12 +263,12 @@ mod tests {
     #[test]
     fn test_mini_reject_float() {
         let err = build_ast_mini("1.0").unwrap_err();
-        assert!(format!("{:?}", err).contains("UnsupportedFloat"));
+        assert!(format!("{err:?}").contains("UnsupportedFloat"));
     }
 
     #[test]
     fn test_mini_reject_null() {
         let err = build_ast_mini("null").unwrap_err();
-        assert!(format!("{:?}", err).contains("UnsupportedNull"));
+        assert!(format!("{err:?}").contains("UnsupportedNull"));
     }
 }

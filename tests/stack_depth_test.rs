@@ -27,10 +27,10 @@ fn find_max_safe_depth() {
 
         match parser.parse(&input, &mut writer) {
             Ok(_) => {
-                println!("Depth {}: ✓ SUCCESS", depth);
+                println!("Depth {depth}: ✓ SUCCESS");
             }
             Err(e) => {
-                println!("Depth {}: ✗ FAILED - {}", depth, e);
+                println!("Depth {depth}: ✗ FAILED - {e}");
             }
         }
     }
@@ -66,8 +66,8 @@ fn test_with_larger_stack() {
                 let parser = Builder::default().max_nesting_depth(10_000).build();
 
                 match parser.parse(&input, &mut writer) {
-                    Ok(_) => println!("Depth {}: ✓ SUCCESS", depth),
-                    Err(e) => println!("Depth {}: ✗ FAILED - {}", depth, e),
+                    Ok(_) => println!("Depth {depth}: ✓ SUCCESS"),
+                    Err(e) => println!("Depth {depth}: ✗ FAILED - {e}"),
                 }
             }
         })
@@ -90,8 +90,8 @@ fn test_builder_context_depth() {
         let mut writer = ArenaCelWriter::new(&arena, &mut interner);
 
         match parser.parse(&input, &mut writer) {
-            Ok(_) => println!("Context depth {}: ✓ SUCCESS", depth),
-            Err(e) => println!("Context depth {}: ✗ FAILED - {}", depth, e),
+            Ok(_) => println!("Context depth {depth}: ✓ SUCCESS"),
+            Err(e) => println!("Context depth {depth}: ✗ FAILED - {e}"),
         }
     }
 }

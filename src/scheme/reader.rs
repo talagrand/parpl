@@ -290,31 +290,31 @@ impl<'i> TokenStream<'i> {
             Token::Boolean(b) => writer
                 .bool(b, span)
                 .map(|d| (d, span))
-                .map_err(|e| ParseError::WriterError(format!("{:?}", e))),
+                .map_err(|e| ParseError::WriterError(format!("{e:?}"))),
             Token::Number(n) => {
                 let num = W::N::from_literal(&n, span)?;
                 writer
                     .number(num, span)
                     .map(|d| (d, span))
-                    .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
+                    .map_err(|e| ParseError::WriterError(format!("{e:?}")))
             }
             Token::Character(c) => writer
                 .char(c, span)
                 .map(|d| (d, span))
-                .map_err(|e| ParseError::WriterError(format!("{:?}", e))),
+                .map_err(|e| ParseError::WriterError(format!("{e:?}"))),
             Token::String(s) => {
                 let id = writer.interner().intern(&s);
                 writer
                     .string(id, span)
                     .map(|d| (d, span))
-                    .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
+                    .map_err(|e| ParseError::WriterError(format!("{e:?}")))
             }
             Token::Identifier(s) => {
                 let id = writer.interner().intern(&s);
                 writer
                     .symbol(id, span)
                     .map(|d| (d, span))
-                    .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
+                    .map_err(|e| ParseError::WriterError(format!("{e:?}")))
             }
             Token::LParen => self.parse_list_with_max_depth(writer, span, depth),
             Token::VectorStart => self.parse_vector_with_max_depth(writer, span, depth),
@@ -334,12 +334,12 @@ impl<'i> TokenStream<'i> {
                 writer
                     .labeled(n, datum, full_span)
                     .map(|d| (d, full_span))
-                    .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
+                    .map_err(|e| ParseError::WriterError(format!("{e:?}")))
             }
             Token::LabelRef(n) => writer
                 .label_ref(n, span)
                 .map(|d| (d, span))
-                .map_err(|e| ParseError::WriterError(format!("{:?}", e))),
+                .map_err(|e| ParseError::WriterError(format!("{e:?}"))),
 
             // Invalid start of datum
             Token::RParen | Token::Dot => Err(ParseError::syntax(
@@ -428,12 +428,12 @@ impl<'i> TokenStream<'i> {
             writer
                 .improper_list(elements, tail, span)
                 .map(|d| (d, span))
-                .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
+                .map_err(|e| ParseError::WriterError(format!("{e:?}")))
         } else {
             writer
                 .list(elements, span)
                 .map(|d| (d, span))
-                .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
+                .map_err(|e| ParseError::WriterError(format!("{e:?}")))
         }
     }
 
@@ -477,7 +477,7 @@ impl<'i> TokenStream<'i> {
         writer
             .vector(elements, span)
             .map(|d| (d, span))
-            .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
+            .map_err(|e| ParseError::WriterError(format!("{e:?}")))
     }
 
     /// Parse an `<abbreviation>` (quote, quasiquote, unquote variants).
@@ -507,13 +507,13 @@ impl<'i> TokenStream<'i> {
         let sym_id = writer.interner().intern(name);
         let sym = writer
             .symbol(sym_id, start_span)
-            .map_err(|e| ParseError::WriterError(format!("{:?}", e)))?;
+            .map_err(|e| ParseError::WriterError(format!("{e:?}")))?;
 
         // Build (name datum)
         writer
             .list([sym, datum], span)
             .map(|d| (d, span))
-            .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
+            .map_err(|e| ParseError::WriterError(format!("{e:?}")))
     }
 
     /// Parse a `<bytevector>` datum once the `#u8(` prefix has been consumed.
@@ -577,7 +577,7 @@ impl<'i> TokenStream<'i> {
         writer
             .bytevector(&elements, span)
             .map(|d| (d, span))
-            .map_err(|e| ParseError::WriterError(format!("{:?}", e)))
+            .map_err(|e| ParseError::WriterError(format!("{e:?}")))
     }
 }
 
@@ -784,26 +784,22 @@ mod tests {
         fn check(&self, datum: &Datum, test_name: &str) {
             match (self, datum) {
                 (DatumMatcher::Bool(e), Datum::Boolean(a)) => {
-                    assert_eq!(e, a, "{}: boolean mismatch", test_name)
+                    assert_eq!(e, a, "{test_name}: boolean mismatch")
                 }
                 (DatumMatcher::Int(e), Datum::Number(SimpleNumber::Integer(a))) => {
-                    assert_eq!(e, a, "{}: integer mismatch", test_name)
+                    assert_eq!(e, a, "{test_name}: integer mismatch")
                 }
                 (DatumMatcher::Float(e), Datum::Number(SimpleNumber::Float(a))) => {
-                    assert!(
-                        (e - a).abs() < f64::EPSILON,
-                        "{}: float mismatch",
-                        test_name
-                    )
+                    assert!((e - a).abs() < f64::EPSILON, "{test_name}: float mismatch")
                 }
                 (DatumMatcher::Char(e), Datum::Character(a)) => {
-                    assert_eq!(e, a, "{}: character mismatch", test_name)
+                    assert_eq!(e, a, "{test_name}: character mismatch")
                 }
                 (DatumMatcher::Str(e), Datum::String(a)) => {
-                    assert_eq!(e, a, "{}: string mismatch", test_name)
+                    assert_eq!(e, a, "{test_name}: string mismatch")
                 }
                 (DatumMatcher::Sym(e), Datum::Symbol(a)) => {
-                    assert_eq!(e, a, "{}: symbol mismatch", test_name)
+                    assert_eq!(e, a, "{test_name}: symbol mismatch")
                 }
                 (DatumMatcher::EmptyList, Datum::EmptyList) => {}
                 (DatumMatcher::Pair(e_car, e_cdr), Datum::Pair(a_car, a_cdr)) => {
@@ -814,27 +810,23 @@ mod tests {
                     assert_eq!(
                         e_vec.len(),
                         a_vec.len(),
-                        "{}: vector length mismatch",
-                        test_name
+                        "{test_name}: vector length mismatch"
                     );
                     for (e, a) in e_vec.iter().zip(a_vec.iter()) {
                         e.check(&a.value, test_name);
                     }
                 }
                 (DatumMatcher::ByteVector(e), Datum::ByteVector(a)) => {
-                    assert_eq!(e, a, "{}: bytevector mismatch", test_name)
+                    assert_eq!(e, a, "{test_name}: bytevector mismatch")
                 }
                 (DatumMatcher::Labeled(e_n, e_d), Datum::Labeled(a_n, a_d)) => {
-                    assert_eq!(e_n, a_n, "{}: label id mismatch", test_name);
+                    assert_eq!(e_n, a_n, "{test_name}: label id mismatch");
                     e_d.check(&a_d.value, test_name);
                 }
                 (DatumMatcher::LabelRef(e), Datum::LabelRef(a)) => {
-                    assert_eq!(e, a, "{}: label ref mismatch", test_name)
+                    assert_eq!(e, a, "{test_name}: label ref mismatch")
                 }
-                _ => panic!(
-                    "{}: datum type mismatch. Expected {:?}, got {:?}",
-                    test_name, self, datum
-                ),
+                _ => panic!("{test_name}: datum type mismatch. Expected {self:?}, got {datum:?}"),
             }
         }
     }
@@ -843,11 +835,10 @@ mod tests {
         fn check(&self, token: &Token, test_name: &str, index: usize) {
             match (self, token) {
                 (TokenMatcher::Ident(e), Token::Identifier(a)) => {
-                    assert_eq!(e, a, "{}: token {} mismatch", test_name, index)
+                    assert_eq!(e, a, "{test_name}: token {index} mismatch")
                 }
                 _ => panic!(
-                    "{}: token {} type mismatch. Expected {:?}, got {:?}",
-                    test_name, index, self, token
+                    "{test_name}: token {index} type mismatch. Expected {self:?}, got {token:?}"
                 ),
             }
         }
@@ -860,22 +851,17 @@ mod tests {
                 (ErrorMatcher::Syntax(expected_nt), ParseError::Syntax { nonterminal, .. }) => {
                     assert_eq!(
                         expected_nt, nonterminal,
-                        "{}: nonterminal mismatch",
-                        test_name
+                        "{test_name}: nonterminal mismatch"
                     );
                 }
                 (ErrorMatcher::UnsupportedDepth, ParseError::Unsupported { feature, .. }) => {
                     assert_eq!(
                         feature,
                         &Unsupported::DepthLimit,
-                        "{}: expected depth-limit unsupported error",
-                        test_name,
+                        "{test_name}: expected depth-limit unsupported error",
                     );
                 }
-                _ => panic!(
-                    "{}: error mismatch. Expected {:?}, got {:?}",
-                    test_name, self, err
-                ),
+                _ => panic!("{test_name}: error mismatch. Expected {self:?}, got {err:?}"),
             }
         }
     }

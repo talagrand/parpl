@@ -21,7 +21,7 @@ fn main() -> Result<()> {
 
     println!("CEL parser benchmark");
     println!("Expression: {}", expr.replace('\n', " "));
-    println!("Target iterations: {}", ITERATIONS);
+    println!("Target iterations: {ITERATIONS}");
 
     // Setup memory management
     let mut bump = Bump::new();
@@ -54,8 +54,8 @@ fn main() -> Result<()> {
         0.0
     };
 
-    println!("\nCompleted {} parses in {:?}", iterations, elapsed);
-    println!("Throughput: {:.0} parses/second", throughput);
+    println!("\nCompleted {iterations} parses in {elapsed:?}");
+    println!("Throughput: {throughput:.0} parses/second");
 
     Ok(())
 }

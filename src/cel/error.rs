@@ -118,8 +118,7 @@ impl Error {
             kind: ErrorKind::NestingDepthExceeded { depth, max },
             span: None,
             message: format!(
-                "Nesting depth {} exceeds maximum of {} (CEL spec requires 12, we support {})",
-                depth, max, max
+                "Nesting depth {depth} exceeds maximum of {max} (CEL spec requires 12, we support {max})"
             ),
         }
     }
@@ -130,7 +129,7 @@ impl Error {
             phase: Phase::Evaluation,
             kind: ErrorKind::UndefinedVariable { name: name.clone() },
             span: Some(span),
-            message: format!("Undefined variable: {}", name),
+            message: format!("Undefined variable: {name}"),
         }
     }
 
@@ -143,7 +142,7 @@ impl Error {
                 got: got.clone(),
             },
             span: Some(span),
-            message: format!("Type mismatch: expected {}, got {}", expected, got),
+            message: format!("Type mismatch: expected {expected}, got {got}"),
         }
     }
 
@@ -155,7 +154,7 @@ impl Error {
                 literal: literal.clone(),
             },
             span: None,
-            message: format!("Invalid number: {}", literal),
+            message: format!("Invalid number: {literal}"),
         }
     }
 
@@ -167,7 +166,7 @@ impl Error {
                 message: message.clone(),
             },
             span: None,
-            message: format!("Invalid escape sequence: {}", message),
+            message: format!("Invalid escape sequence: {message}"),
         }
     }
 }
@@ -193,7 +192,7 @@ impl From<pest::error::Error<Rule>> for Error {
     fn from(err: pest::error::Error<Rule>) -> Self {
         use pest::error::ErrorVariant;
 
-        let message = format!("{}", err);
+        let message = format!("{err}");
         let position = match err.location {
             pest::error::InputLocation::Pos(pos) => pos,
             pest::error::InputLocation::Span((start, _)) => start,
@@ -206,8 +205,8 @@ impl From<pest::error::Error<Rule>> for Error {
             } => {
                 let expected: Vec<String> = positives
                     .iter()
-                    .map(|r| format!("{:?}", r))
-                    .chain(negatives.iter().map(|r| format!("not {:?}", r)))
+                    .map(|r| format!("{r:?}"))
+                    .chain(negatives.iter().map(|r| format!("not {r:?}")))
                     .collect();
 
                 Self {
@@ -295,7 +294,7 @@ mod tests {
     test_cases! {
         test_error_display: {
             let err = Error::syntax("unexpected token".to_string(), 5);
-            let display = format!("{}", err);
+            let display = format!("{err}");
             assert!(display.contains("Parsing"));
             assert!(display.contains("unexpected token"));
             assert!(display.contains("5..5"));
@@ -331,7 +330,7 @@ mod tests {
             .with_span(Span::new(10, 15));
 
             assert_eq!(err.span, Some(Span::new(10, 15)));
-            let display = format!("{}", err);
+            let display = format!("{err}");
             assert!(display.contains("10..15"));
         },
     }

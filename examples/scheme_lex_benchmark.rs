@@ -48,7 +48,7 @@ fn main() {
             match token {
                 Ok(_) => total_tokens += 1,
                 Err(e) => {
-                    eprintln!("Lexing error: {:?}", e);
+                    eprintln!("Lexing error: {e:?}");
                     return;
                 }
             }
@@ -60,8 +60,8 @@ fn main() {
     let duration_secs = duration.as_secs_f64();
     let mb_per_sec = (total_bytes as f64 / 1024.0 / 1024.0) / duration_secs;
 
-    println!("Total time: {:?}", duration);
+    println!("Total time: {duration:?}");
     println!("Average time per run: {:?}", duration / 100);
-    println!("Total tokens processed: {}", total_tokens);
-    println!("Throughput: {:.2} MB/s", mb_per_sec);
+    println!("Total tokens processed: {total_tokens}");
+    println!("Throughput: {mb_per_sec:.2} MB/s");
 }

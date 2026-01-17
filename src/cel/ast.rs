@@ -184,7 +184,7 @@ impl fmt::Display for BinaryOp {
             BinaryOp::Divide => "/",
             BinaryOp::Modulo => "%",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -205,7 +205,7 @@ impl fmt::Display for UnaryOp {
             UnaryOp::Not => "!",
             UnaryOp::Negate => "-",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -221,7 +221,7 @@ pub enum Literal<S, B> {
     Int(i64),
 
     /// Unsigned integer literal: parsed u64 value
-    /// CEL Spec (line 144): UINT_LIT = INT_LIT [uU]
+    /// CEL Spec (line 144): UINT_LIT = INT_LIT \[uU\]
     /// Range: 0 to u64::MAX
     UInt(u64),
 
@@ -236,7 +236,7 @@ pub enum Literal<S, B> {
     String(S),
 
     /// Bytes literal: processed with escape sequences resolved
-    /// CEL Spec (line 154): BYTES_LIT = [bB] STRING_LIT
+    /// CEL Spec (line 154): BYTES_LIT = \[bB\] STRING_LIT
     /// Octal and \xHH escapes represent byte values, Unicode escapes produce UTF-8
     /// **IMPORTANT**: Bytes are arbitrary octet sequences, may not be valid UTF-8!
     Bytes(B),
