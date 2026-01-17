@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    # Only run in non-fork repositories (e.g., the canonical repo),
+    # so tags in forks don't create upstream-style releases.
+    if: github.event.repository.fork == false
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Get tag name
+      id: tag_name
+      run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+    - name: Verify version matches tag
+      run: |
+        TAG_VERSION=${GITHUB_REF#refs/tags/v}
+        CARGO_VERSION=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+        if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+          echo "Error: Tag version (v$TAG_VERSION) doesn't match Cargo.toml version ($CARGO_VERSION)"
+          exit 1
+        fi
+        echo "Version check passed: $CARGO_VERSION"
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.tag_name.outputs.TAG_NAME }}
+        release_name: Release ${{ steps.tag_name.outputs.TAG_NAME }}
+        draft: false
+        prerelease: false
+
+  publish-crate:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    # crates.io publishing is only meaningful for non-fork roots
+    if: github.event.repository.fork == false
+    needs: create-release
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Publish to crates.io
+      run: cargo publish --all-features --token ${{ secrets.CRATES_IO_TOKEN }}

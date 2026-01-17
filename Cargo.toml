@@ -57,6 +57,9 @@ clone_on_ref_ptr = "warn"
 indexing_slicing = "warn"
 string_slice = "warn"
 
+[package.metadata.docs.rs]
+all-features = true
+
 [profile.release]
 # Optimize for size
 opt-level = "z"     # Optimize for size instead of speed
