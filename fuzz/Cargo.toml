@@ -1,0 +1,29 @@
+[package]
+name = "parpl-fuzz"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bumpalo = "3"
+
+[dependencies.parpl]
+path = ".."
+features = ["cel", "scheme", "samples"]
+
+[[bin]]
+name = "parse_cel"
+path = "fuzz_targets/parse_cel.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_scheme"
+path = "fuzz_targets/parse_scheme.rs"
+test = false
+doc = false
+bench = false
