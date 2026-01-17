@@ -357,7 +357,13 @@ impl<'i> Lexer<'i> {
         // specific radix prefixes.
         if let Some(mut literal) = self.run_lex(start, lex_prefixed_number)? {
             let end = self.input.current_token_start();
-            literal.text = &self.source[start..end];
+            #[expect(
+                clippy::string_slice,
+                reason = "LocatingSlice offsets are valid UTF-8 boundaries"
+            )]
+            {
+                literal.text = &self.source[start..end];
+            }
             let span = Span { start, end };
             return Ok(Some(Syntax::new(span, Token::Number(literal))));
         }
@@ -381,7 +387,13 @@ impl<'i> Lexer<'i> {
                 // (e.g., `+` or `-` alone, or peculiar identifiers).
                 if let Some(mut literal) = self.run_lex(start, lex_complex_decimal)? {
                     let end = self.input.current_token_start();
-                    literal.text = &self.source[start..end];
+                    #[expect(
+                        clippy::string_slice,
+                        reason = "LocatingSlice offsets are valid UTF-8 boundaries"
+                    )]
+                    {
+                        literal.text = &self.source[start..end];
+                    }
                     let span = Span { start, end };
                     return Ok(Some(Syntax::new(span, Token::Number(literal))));
                 }

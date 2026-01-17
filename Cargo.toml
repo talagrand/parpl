@@ -34,3 +34,14 @@ required-features = ["samples"]
 name = "bench_parse"
 required-features = ["samples"]
 
+[lints.clippy]
+unwrap_used = "warn"
+uninlined_format_args = "warn"
+unnecessary_to_owned = "warn"
+manual_assert = "warn"
+allow_attributes = "warn"
+redundant_clone = "warn" # in nursery
+index_refutable_slice = "warn"
+clone_on_ref_ptr = "warn"
+indexing_slicing = "warn"
+string_slice = "warn"
