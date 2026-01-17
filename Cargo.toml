@@ -19,7 +19,7 @@ samples = ["cel", "scheme"]
 [dependencies]
 winnow = { version = "0.7.14", optional = true }
 unicase = { version = "2", optional = true }
-thiserror = { version = "1", optional = true }
+thiserror = { version = "2", optional = true }
 pest = { version = "2.8", optional = true }
 pest_derive = { version = "2.8", optional = true }
 bumpalo = "3.19"
