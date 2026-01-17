@@ -142,7 +142,6 @@ pub fn winnow_backtrack<O>() -> PResult<O> {
 }
 
 /// Helper to produce an incomplete input error (REPL should prompt for more).
-#[allow(dead_code)]
 pub fn winnow_incomplete<O>() -> PResult<O> {
     Err(ErrMode::Incomplete(Needed::Unknown))
 }

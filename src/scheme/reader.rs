@@ -131,7 +131,6 @@ impl<'i> TokenStream<'i> {
     ///
     /// If the stream is empty or starts with an unexpected token (like `)`),
     /// this is a no-op (the parser will report the error).
-    #[allow(dead_code)]
     fn skip_one_datum_with_max_depth(&mut self, depth: u32) -> Result<(), ParseError> {
         // First, skip any leading datum comments within this datum.
         self.consume_intertoken_space_with_max_depth(depth)?;
@@ -206,13 +205,12 @@ impl<'i> TokenStream<'i> {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn skip_one_datum(&mut self) -> Result<(), ParseError> {
         self.skip_one_datum_with_max_depth(DEFAULT_MAX_DEPTH)
     }
 
     /// Skip contents of a list/vector until the closing `)`.
-    #[allow(dead_code)]
     fn skip_list_contents_with_max_depth(&mut self, depth: u32) -> Result<(), ParseError> {
         loop {
             self.consume_intertoken_space_with_max_depth(depth)?;
@@ -248,7 +246,7 @@ impl<'i> TokenStream<'i> {
         }
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn skip_list_contents(&mut self) -> Result<(), ParseError> {
         self.skip_list_contents_with_max_depth(DEFAULT_MAX_DEPTH)
     }

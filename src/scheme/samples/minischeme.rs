@@ -315,18 +315,13 @@ mod tests {
                 (ErrorMatcher::Unsupported(expected_feature), ParseError::WriterError(msg)) => {
                     // The generic reader wraps writer errors in WriterError(String).
                     // We check if the debug string of the feature is present in the message.
-                    let feature_str = format!("{:?}", expected_feature);
-                    if !msg.contains(&feature_str) {
-                        panic!(
-                            "{}: expected WriterError containing {:?}, got {:?}",
-                            test_name, feature_str, msg
-                        );
-                    }
+                    let feature_str = format!("{expected_feature:?}");
+                    assert!(
+                        msg.contains(&feature_str),
+                        "{test_name}: expected WriterError containing {feature_str:?}, got {msg:?}"
+                    )
                 }
-                _ => panic!(
-                    "{}: error mismatch. Expected {:?}, got {:?}",
-                    test_name, self, err
-                ),
+                _ => panic!("{test_name}: error mismatch. Expected {self:?}, got {err:?}"),
             }
         }
     }

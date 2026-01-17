@@ -216,12 +216,17 @@ pub fn build_ast_mini(input: &str) -> Result<Box<MiniExpr>> {
     };
     let config = ParseConfig::default();
     let mut pairs = parse_with_config(input, config)?;
-    let root_pair = pairs.next().unwrap(); // Parser guarantees at least one pair (EOI included)
+    let root_pair = pairs
+        .next()
+        .expect("Parser guarantees at least one pair (EOI included)");
 
     // The root rule is usually `cel` which contains `expr` and `EOI`.
     // We need to find the `expr` pair.
     let expr_pair = if root_pair.as_rule() == crate::cel::parser::Rule::cel {
-        root_pair.into_inner().next().unwrap()
+        root_pair
+            .into_inner()
+            .next()
+            .expect("cel rule always contains expr")
     } else {
         root_pair
     };

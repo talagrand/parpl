@@ -748,7 +748,7 @@ mod tests {
 
         let raw = RawLiteral::Float(ctx.interner.intern("3.14"));
         if let Literal::Float(val) = process_literal(&raw, &mut ctx.writer()).unwrap() {
-            #[allow(clippy::approx_constant)] // Test value, not using constant
+            #[expect(clippy::approx_constant)] // Test value, not using constant
             {
                 assert!((val - 3.14).abs() < 0.0001);
             }
