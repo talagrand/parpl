@@ -2,16 +2,19 @@
 name = "parpl"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.90"
 description = "Programming language parsers (CEL and Scheme R7RS)"
+authors = ["Eugene Talagrand"]
 license = "MIT"
-keywords = ["parser", "scheme", "R7RS", "cel", "language", "grammar"]
+keywords = ["parser", "scheme", "cel", "lexer", "grammar"]
+repository = "https://github.com/talagrand/parpl"
 categories = ["parsing", "compilers"]
 
 [features]
 default = ["cel", "scheme"]
 cel = ["dep:pest", "dep:pest_derive"]
 scheme = ["dep:winnow", "dep:unicase", "dep:thiserror"]
-samples = []
+samples = ["cel", "scheme"]
 
 [dependencies]
 winnow = { version = "0.7.14", optional = true }
@@ -32,6 +35,14 @@ required-features = ["samples"]
 
 [[example]]
 name = "bench_parse"
+required-features = ["samples"]
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name = "bench_main"
+harness = false
 required-features = ["samples"]
 
 [lints.clippy]
