@@ -11,147 +11,128 @@ use winnow::{
     stream::{Location, Stream},
 };
 
-/// Canonical punctuation parser.
+/// Parser for `#`-prefixed punctuation tokens.
 ///
-/// Grammar reference (`syn.tex` / `<token>`):
+/// This handles:
+/// - `#(` - vector start
+/// - `#u8(` - bytevector start
+/// - `#;` - datum comment
+/// - `#n=` - label definition
+/// - `#n#` - label reference
 ///
-/// ```text
-/// ( | ) | #( | #u8( | ' | ` | , | ,@ | .
-/// ```
-pub fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
+/// Simple punctuation (`(`, `)`, `'`, `` ` ``, `,`, `,@`) is handled
+/// directly by the first-character dispatcher for efficiency.
+pub fn lex_hash_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
 
-    let ch = input.peek_or_backtrack()?;
+    // Use a probe so we only commit to `input` once we've identified
+    // a concrete punctuation token. This allows other `#`-prefixed
+    // constructs (such as `#!` directives) to backtrack cleanly.
+    let mut probe = *input;
 
-    let token = match ch {
-        '(' => {
-            let _ = input.next_token();
-            Token::LParen
+    if !probe.eat('#') {
+        return winnow_backtrack();
+    }
+
+    let token = match probe.peek_token() {
+        Some('(') => {
+            // Vector start: "#("
+            let _ = probe.next_token();
+            Token::VectorStart
         }
-        ')' => {
-            let _ = input.next_token();
-            Token::RParen
-        }
-        '\'' => {
-            let _ = input.next_token();
-            Token::Quote
-        }
-        '`' => {
-            let _ = input.next_token();
-            Token::Backquote
-        }
-        ',' => {
-            let _ = input.next_token();
-            if input.eat('@') {
-                Token::CommaAt
+        Some('u' | 'U') => {
+            // Possible bytevector start: "#u8("
+            let _ = probe.next_token(); // 'u' or 'U'
+            if probe.eat('8') && probe.eat('(') {
+                Token::ByteVectorStart
             } else {
-                Token::Comma
+                return winnow_backtrack();
             }
         }
-        '#' => {
-            // Use a probe so we only commit to `input` once we've
-            // identified a concrete punctuation token. This allows
-            // other `#`-prefixed constructs (such as `#!` directives)
-            // to backtrack cleanly to other lexers.
-            let mut probe = *input;
-            let _ = probe.next_token(); // consume '#'
-            match probe.peek_token() {
-                Some('(') => {
-                    // Vector start: commit "#(".
-                    let _ = input.next_token();
-                    let _ = input.next_token();
-                    Token::VectorStart
-                }
-                Some('u' | 'U') => {
-                    // Possible bytevector start: "#u8(".
-                    let _ = input.next_token(); // '#'
-                    let _ = input.next_token(); // 'u' or 'U'
-                    if input.eat('8') && input.eat('(') {
-                        Token::ByteVectorStart
-                    } else {
-                        return winnow_backtrack();
+        Some(';') => {
+            // Datum comment prefix - emit token for parser to handle.
+            let _ = probe.next_token();
+            Token::DatumComment
+        }
+        Some(c) if c.is_ascii_digit() => {
+            // Label definition `#n=` or reference `#n#`.
+            if let Ok(digits) = digit1::<_, ContextError>.parse_next(&mut probe) {
+                match probe.peek_token() {
+                    Some('=') => {
+                        let _ = probe.next_token();
+                        let n = match digits.parse::<u64>() {
+                            Ok(n) => n,
+                            Err(_) => return lex_error("label definition or reference"),
+                        };
+                        Token::LabelDef(n)
                     }
-                }
-                Some(';') => {
-                    // Datum comment prefix - emit token for parser to handle.
-                    let _ = input.next_token(); // '#'
-                    let _ = input.next_token(); // ';'
-                    Token::DatumComment
-                }
-                Some(c) if c.is_ascii_digit() => {
-                    // Label definition `#n=` or reference `#n#`.
-                    let mut label_probe = probe;
-                    if let Ok(digits) = digit1::<_, ContextError>.parse_next(&mut label_probe) {
-                        match label_probe.peek_token() {
-                            Some('=') => {
-                                let _ = label_probe.next_token();
-                                *input = label_probe;
-                                let n = match digits.parse::<u64>() {
-                                    Ok(n) => n,
-                                    Err(_) => return lex_error("label definition or reference"),
-                                };
-                                Token::LabelDef(n)
-                            }
-                            Some('#') => {
-                                let _ = label_probe.next_token();
-                                *input = label_probe;
-                                let n = match digits.parse::<u64>() {
-                                    Ok(n) => n,
-                                    Err(_) => return lex_error("label definition or reference"),
-                                };
-                                Token::LabelRef(n)
-                            }
-                            None => return winnow_incomplete_token(),
-                            _ => return lex_error("label definition or reference"),
-                        }
-                    } else {
-                        return winnow_backtrack();
+                    Some('#') => {
+                        let _ = probe.next_token();
+                        let n = match digits.parse::<u64>() {
+                            Ok(n) => n,
+                            Err(_) => return lex_error("label definition or reference"),
+                        };
+                        Token::LabelRef(n)
                     }
+                    None => return winnow_incomplete_token(),
+                    _ => return lex_error("label definition or reference"),
                 }
-                Some('!') => {
-                    // `#!` starts a directive; let the directive lexer handle it.
-                    return winnow_backtrack();
-                }
-                None => return winnow_incomplete_token(),
-                _ => {
-                    // No other valid tokens start with `#`.
-                    return lex_error("punctuation");
-                }
+            } else {
+                return winnow_backtrack();
             }
         }
-        '.' => {
-            // If `.` is followed by a digit, treat this as the
-            // start of a decimal number and let the numeric
-            // lexers claim it instead of producing a `.` token.
-            // If `.` is followed by another `.`, it could be `...` (identifier).
-            let mut probe = *input;
-            let _ = probe.next_token(); // consume '.'
-            match probe.peek_token() {
-                Some(c) if c.is_ascii_digit() => {
-                    // Decimal number like `.5`
-                    return winnow_backtrack();
-                }
-                Some('.') => {
-                    // Could be `...` - let identifier parser handle it
-                    return winnow_backtrack();
-                }
-                Some(c) if is_dot_subsequent(c) => {
-                    // Could be `.foo` - let identifier parser handle it
-                    return winnow_backtrack();
-                }
-                _ => {
-                    // Just a single `.` - this is Token::Dot
-                }
-            }
-
-            let _ = input.next_token();
-            Token::Dot
+        Some('!') => {
+            // `#!` starts a directive; let the directive lexer handle it.
+            return winnow_backtrack();
         }
-        _ => return winnow_backtrack(),
+        None => return winnow_incomplete_token(),
+        _ => {
+            // No other valid punctuation tokens start with `#`.
+            // Don't error here - let other parsers try (e.g., booleans, numbers).
+            return winnow_backtrack();
+        }
     };
 
+    // Commit the probe's progress to the real input.
+    *input = probe;
     let end = input.current_token_start();
     Ok(Syntax::new(Span { start, end }, token))
+}
+
+/// Parser for lone `.` (dot) token.
+///
+/// This is called as a fallback after the identifier parser fails,
+/// since `.` can start identifiers like `...` or `.foo`.
+///
+/// Returns `Token::Dot` only if `.` is followed by a delimiter or EOF.
+pub fn lex_dot<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
+    let start = input.current_token_start();
+
+    if !input.eat('.') {
+        return winnow_backtrack();
+    }
+
+    // Check what follows - if it could continue an identifier or number, backtrack
+    match input.peek_token() {
+        Some(c) if c.is_ascii_digit() => {
+            // Decimal number like `.5` - should have been caught by number parser
+            return winnow_backtrack();
+        }
+        Some('.') => {
+            // Could be `...` - should have been caught by identifier parser
+            return winnow_backtrack();
+        }
+        Some(c) if is_dot_subsequent(c) => {
+            // Could be `.foo` - should have been caught by identifier parser
+            return winnow_backtrack();
+        }
+        _ => {
+            // Lone `.` followed by delimiter or EOF
+        }
+    }
+
+    let end = input.current_token_start();
+    Ok(Syntax::new(Span { start, end }, Token::Dot))
 }
 
 /// Fast-path helper for simple single-character punctuation tokens.

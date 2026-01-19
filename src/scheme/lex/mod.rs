@@ -6,7 +6,7 @@ use crate::scheme::{
         identifiers::lex_identifier,
         intertoken::lex_intertoken,
         numbers::{lex_complex_decimal, lex_prefixed_number, try_fast_decimal_integer},
-        punctuation::{lex_punctuation, simple_punct},
+        punctuation::{lex_dot, lex_hash_punctuation, simple_punct},
         strings::{lex_character, lex_string},
         utils::{InputExt, winnow_err_to_parse_error},
     },
@@ -396,8 +396,8 @@ impl<'i> Lexer<'i> {
                     return Ok(Some(Syntax::new(span, Token::Number(literal))));
                 }
 
-                // Punctuation: #(, #u8(, #;, #n=, #n#
-                if let Some(spanned) = self.run_lex(start, lex_punctuation)? {
+                // Hash punctuation: #(, #u8(, #;, #n=, #n#
+                if let Some(spanned) = self.run_lex(start, lex_hash_punctuation)? {
                     if self.config.reject_comments && spanned.value == Token::DatumComment {
                         return Err(ParseError::unsupported(spanned.span, Unsupported::Comments));
                     }
@@ -473,7 +473,7 @@ impl<'i> Lexer<'i> {
 
                 // Special case: lone `.` is Token::Dot
                 if ch == '.'
-                    && let Some(spanned) = self.run_lex(start, lex_punctuation)?
+                    && let Some(spanned) = self.run_lex(start, lex_dot)?
                 {
                     return Ok(Some(spanned));
                 }
