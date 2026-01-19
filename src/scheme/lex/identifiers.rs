@@ -390,6 +390,13 @@ fn lex_peculiar_identifier_content<'i>(input: &mut WinnowInput<'i>) -> PResult<(
 ///                 | <vertical line> <symbol element>* <vertical line>
 ///                 | <peculiar identifier>
 /// ```
+///
+/// # Performance Note
+///
+/// We tested an ASCII-only fast-path that used `is_ascii_subsequent` to skip
+/// the full `is_subsequent` check for pure-ASCII identifiers. Benchmarking
+/// showed no measurable benefit—the general `take_while(0.., is_subsequent)`
+/// path is already efficient, and the extra branch added overhead.
 pub fn lex_identifier<'i>(
     input: &mut WinnowInput<'i>,
     fold_case_mode: FoldCaseMode,

@@ -153,3 +153,18 @@ pub fn lex_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<
     let end = input.current_token_start();
     Ok(Syntax::new(Span { start, end }, token))
 }
+
+/// Fast-path helper for simple single-character punctuation tokens.
+///
+/// This is used by the first-character dispatch in the lexer to avoid
+/// the overhead of the full `lex_punctuation` parser for common tokens.
+#[inline]
+pub(crate) fn simple_punct<'i>(
+    input: &mut WinnowInput<'i>,
+    start: usize,
+    token: Token<'i>,
+) -> SpannedToken<'i> {
+    let _ = input.next_token();
+    let end = input.current_token_start();
+    Syntax::new(Span { start, end }, token)
+}
