@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1768686148172,
+  "lastUpdate": 1768861866419,
   "repoUrl": "https://github.com/talagrand/parpl",
   "entries": {
     "Parpl Benchmark": [
@@ -191,6 +191,126 @@ window.BENCHMARK_DATA = {
             "name": "Scheme Parsing/Complex",
             "value": 12994,
             "range": "± 107",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "git@talagrand.org",
+            "name": "Eugene Talagrand",
+            "username": "talagrand"
+          },
+          "committer": {
+            "email": "git@talagrand.org",
+            "name": "Eugene Talagrand",
+            "username": "talagrand"
+          },
+          "distinct": true,
+          "id": "c858a36e6e1e8d308889026ee96694659522e039",
+          "message": "Fix permissions on fuzzing workflow",
+          "timestamp": "2026-01-19T14:27:19-08:00",
+          "tree_id": "7792e7c43c7ce9909e77d755bff4668bb7f184df",
+          "url": "https://github.com/talagrand/parpl/commit/c858a36e6e1e8d308889026ee96694659522e039"
+        },
+        "date": 1768861865550,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "CEL Parsing/Simple (1 + 2)",
+            "value": 2227,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Arithmetic",
+            "value": 7921,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Comparison",
+            "value": 8367,
+            "range": "± 111",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Function Call",
+            "value": 10940,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Ternary",
+            "value": 8133,
+            "range": "± 223",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Complex",
+            "value": 21291,
+            "range": "± 75",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Simple (+ 1 2)",
+            "value": 1567,
+            "range": "± 1222",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Nested",
+            "value": 5366,
+            "range": "± 1678",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Factorial",
+            "value": 13364,
+            "range": "± 4422",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Lambda",
+            "value": 6087,
+            "range": "± 2141",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Quote",
+            "value": 5917,
+            "range": "± 2484",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Complex",
+            "value": 12155,
+            "range": "± 3657",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/Simple (+ 1 2)",
+            "value": 1264,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/Nested",
+            "value": 4691,
+            "range": "± 74",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/Factorial",
+            "value": 11438,
+            "range": "± 132",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/1K Sample",
+            "value": 11486,
+            "range": "± 134",
             "unit": "ns/iter"
           }
         ]
