@@ -137,6 +137,7 @@ pub fn winnow_err_to_parse_error(err: ErrMode<ContextError>, fallback_span: Span
 }
 
 /// Helper to produce a recoverable backtrack error with empty context.
+#[inline]
 pub fn winnow_backtrack<O>() -> PResult<O> {
     Err(ErrMode::Backtrack(ContextError::new()))
 }
@@ -199,6 +200,7 @@ pub fn lex_error<O>(nonterminal: &'static str) -> PResult<O> {
 /// <delimiter> ::= <whitespace> | <vertical line>
 ///               | ( | ) | " | ;
 /// ```
+#[inline]
 pub(crate) fn is_delimiter(ch: char) -> bool {
     matches!(ch, ' ' | '\t' | '\n' | '\r' | '|' | '(' | ')' | '"' | ';')
 }

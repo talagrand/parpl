@@ -214,5 +214,10 @@ fn bench_minischeme_parsing(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_cel_parsing, bench_scheme_parsing, bench_minischeme_parsing);
+criterion_group!(
+    benches,
+    bench_cel_parsing,
+    bench_scheme_parsing,
+    bench_minischeme_parsing
+);
 criterion_main!(benches);

@@ -356,6 +356,7 @@ fn lex_complex_with_radix<'i>(
 ///
 /// This is a thin wrapper around `lex_complex_with_radix` with
 /// `R = 10` and unspecified exactness.
+#[inline]
 pub(crate) fn lex_complex_decimal<'i>(input: &mut WinnowInput<'i>) -> PResult<NumberLiteral<'i>> {
     lex_complex_with_radix(input, 10, NumberExactness::Unspecified)
 }

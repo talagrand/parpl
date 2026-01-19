@@ -271,6 +271,7 @@ pub struct Lexer<'i> {
 impl<'i> Lexer<'i> {
     /// Map a winnow error into a `ParseError` with a span derived
     /// from the given token start and the current input offset.
+    #[inline]
     fn map_lex_error(&mut self, start: usize, err: ErrMode<ContextError>) -> ParseError {
         let end = self.input.current_token_start();
         let end = if end > start { end } else { start + 1 };
@@ -293,11 +294,13 @@ impl<'i> Lexer<'i> {
 
     /// Create a new lexer for the given source string with default
     /// configuration.
+    #[inline]
     pub fn new(source: &'i str) -> Self {
         Self::with_config(source, LexConfig::default())
     }
 
     /// Create a new lexer for the given source string and configuration.
+    #[inline]
     pub fn with_config(source: &'i str, config: LexConfig) -> Self {
         Self {
             input: WinnowInput::new(source),
@@ -483,11 +486,13 @@ impl<'i> Iterator for Lexer<'i> {
 /// <directive> ::= #!fold-case | #!no-fold-case
 /// ```
 /// Convenience constructor using the default `LexConfig`.
+#[inline]
 pub fn lex(source: &str) -> Lexer<'_> {
     Lexer::new(source)
 }
 
 /// Construct a lexer with an explicit `LexConfig`.
+#[inline]
 pub fn lex_with_config(source: &str, config: LexConfig) -> Lexer<'_> {
     Lexer::with_config(source, config)
 }
