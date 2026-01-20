@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1768873710067,
+  "lastUpdate": 1768944262979,
   "repoUrl": "https://github.com/talagrand/parpl",
   "entries": {
     "Parpl Benchmark": [
@@ -791,6 +791,126 @@ window.BENCHMARK_DATA = {
             "name": "MiniScheme Parsing/1K Sample",
             "value": 7153,
             "range": "± 108",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "git@talagrand.org",
+            "name": "Eugene",
+            "username": "talagrand"
+          },
+          "distinct": true,
+          "id": "24734daadc48b9f7d47d39cfb27ffae36ec3e110",
+          "message": "deps(deps): bump thiserror from 1.0.69 to 2.0.17\n\nBumps [thiserror](https://github.com/dtolnay/thiserror) from 1.0.69 to 2.0.17.\n- [Release notes](https://github.com/dtolnay/thiserror/releases)\n- [Commits](https://github.com/dtolnay/thiserror/compare/1.0.69...2.0.17)\n\n---\nupdated-dependencies:\n- dependency-name: thiserror\n  dependency-version: 2.0.17\n  dependency-type: direct:production\n  update-type: version-update:semver-major\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+          "timestamp": "2026-01-20T13:20:43-08:00",
+          "tree_id": "be8fdfb375056afbd572142d4f4f3771c300204b",
+          "url": "https://github.com/talagrand/parpl/commit/24734daadc48b9f7d47d39cfb27ffae36ec3e110"
+        },
+        "date": 1768944262160,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "CEL Parsing/Simple (1 + 2)",
+            "value": 2301,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Arithmetic",
+            "value": 8113,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Comparison",
+            "value": 8464,
+            "range": "± 92",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Function Call",
+            "value": 11209,
+            "range": "± 42",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Ternary",
+            "value": 8166,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Complex",
+            "value": 21365,
+            "range": "± 54",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Simple (+ 1 2)",
+            "value": 1151,
+            "range": "± 1959",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Nested",
+            "value": 3705,
+            "range": "± 2991",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Factorial",
+            "value": 9679,
+            "range": "± 4679",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Lambda",
+            "value": 4532,
+            "range": "± 2848",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Quote",
+            "value": 4469,
+            "range": "± 3529",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Complex",
+            "value": 8947,
+            "range": "± 3587",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/Simple (+ 1 2)",
+            "value": 820,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/Nested",
+            "value": 2939,
+            "range": "± 55",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/Factorial",
+            "value": 7580,
+            "range": "± 95",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/1K Sample",
+            "value": 7739,
+            "range": "± 94",
             "unit": "ns/iter"
           }
         ]
