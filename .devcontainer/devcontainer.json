@@ -36,7 +36,7 @@
     }
   ],
   // Install tools not available as features and fix volume permissions
-  "postCreateCommand": "sudo chmod -R g+w /usr/local/cargo/registry && cargo binstall --no-confirm sccache && rustup toolchain install nightly && cargo install cargo-fuzz flamegraph && sudo apt-get update && sudo apt-get install -y linux-perf",
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
   // VS Code extensions
   "customizations": {
     "vscode": {
