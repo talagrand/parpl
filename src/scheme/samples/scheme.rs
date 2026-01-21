@@ -1,5 +1,5 @@
 use crate::{
-    common::{Interner, Span, StringPool, StringPoolId, Syntax},
+    common::{Span, StringPool, StringPoolId, Syntax},
     scheme::{
         ParseError,
         datumtraits::{DatumInspector, DatumKind, DatumWriter},
@@ -15,14 +15,14 @@ pub enum Datum<'a> {
     Boolean(bool),
     Number(SimpleNumber),
     Character(char),
-    String(String),
-    Symbol(String),
-    ByteVector(Vec<u8>),
+    String(StringPoolId),
+    Symbol(StringPoolId),
+    ByteVector(&'a [u8]),
     /// The empty list `()`.
     EmptyList,
     /// Proper and improper lists are represented via pairs.
     Pair(&'a Syntax<Datum<'a>>, &'a Syntax<Datum<'a>>),
-    Vector(Vec<Syntax<Datum<'a>>>),
+    Vector(&'a [Syntax<Datum<'a>>]),
     /// A labeled datum: #n=datum
     Labeled(u64, &'a Syntax<Datum<'a>>),
     /// A reference to a previously defined label: #n#
@@ -40,6 +40,11 @@ impl<'a> SampleWriter<'a> {
             interner: StringPool::default(),
             arena,
         }
+    }
+
+    /// Returns a reference to the string pool for resolving string IDs.
+    pub fn string_pool(&self) -> &StringPool {
+        &self.interner
     }
 }
 
@@ -67,25 +72,16 @@ impl<'a> DatumWriter for SampleWriter<'a> {
     }
 
     fn string(&mut self, v: Self::StringId, s: Span) -> Result<Self::Output, Self::Error> {
-        let str_val = self
-            .interner
-            .resolve(&v)
-            .unwrap_or("<unresolved>")
-            .to_string();
-        Ok(Syntax::new(s, Datum::String(str_val)))
+        Ok(Syntax::new(s, Datum::String(v)))
     }
 
     fn symbol(&mut self, v: Self::StringId, s: Span) -> Result<Self::Output, Self::Error> {
-        let str_val = self
-            .interner
-            .resolve(&v)
-            .unwrap_or("<unresolved>")
-            .to_string();
-        Ok(Syntax::new(s, Datum::Symbol(str_val)))
+        Ok(Syntax::new(s, Datum::Symbol(v)))
     }
 
     fn bytevector(&mut self, v: &[u8], s: Span) -> Result<Self::Output, Self::Error> {
-        Ok(Syntax::new(s, Datum::ByteVector(v.to_vec())))
+        let bv = self.arena.alloc_slice_copy(v);
+        Ok(Syntax::new(s, Datum::ByteVector(bv)))
     }
 
     fn null(&mut self, s: Span) -> Result<Self::Output, Self::Error> {
@@ -135,7 +131,8 @@ impl<'a> DatumWriter for SampleWriter<'a> {
         I: IntoIterator<Item = Self::Output>,
         I::IntoIter: ExactSizeIterator,
     {
-        Ok(Syntax::new(s, Datum::Vector(iter.into_iter().collect())))
+        let vec = self.arena.alloc_slice_fill_iter(iter);
+        Ok(Syntax::new(s, Datum::Vector(vec)))
     }
 
     fn labeled(
@@ -160,11 +157,6 @@ impl<'a> DatumWriter for SampleWriter<'a> {
 }
 
 // Implement DatumInspector for Syntax<Datum>
-// We need a StringId type. We can use a wrapper around &str.
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct StrId<'a>(&'a str);
-// impl<'a> StringId for StrId<'a> {}
 
 pub struct SampleListIter<'a, 'd> {
     current: Option<&'a Syntax<Datum<'d>>>,
@@ -219,7 +211,7 @@ impl<'a, 'd> SampleListIter<'a, 'd> {
 impl<'d> DatumInspector for &Syntax<Datum<'d>> {
     type N = PrimitiveOps;
     type StringId<'b>
-        = StrId<'b>
+        = StringPoolId
     where
         Self: 'b;
     type Child<'b>
@@ -274,7 +266,7 @@ impl<'d> DatumInspector for &Syntax<Datum<'d>> {
 
     fn as_sym<'b>(&'b self) -> Option<Self::StringId<'b>> {
         if let Datum::Symbol(s) = &self.value {
-            Some(StrId(s.as_str()))
+            Some(*s)
         } else {
             None
         }
@@ -282,7 +274,7 @@ impl<'d> DatumInspector for &Syntax<Datum<'d>> {
 
     fn as_str<'b>(&'b self) -> Option<Self::StringId<'b>> {
         if let Datum::String(s) = &self.value {
-            Some(StrId(s.as_str()))
+            Some(*s)
         } else {
             None
         }

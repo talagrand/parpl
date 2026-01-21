@@ -712,11 +712,14 @@ pub fn parse_datum_with_max_depth<W: DatumWriter>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scheme::{
-        Unsupported,
-        lex::Token,
-        primitivenumbers::SimpleNumber,
-        samples::scheme::{Datum, SampleWriter},
+    use crate::{
+        common::Interner,
+        scheme::{
+            Unsupported,
+            lex::Token,
+            primitivenumbers::SimpleNumber,
+            samples::scheme::{Datum, SampleWriter},
+        },
     };
     use bumpalo::Bump;
 
@@ -780,7 +783,7 @@ mod tests {
                 Expected::Success(matcher) => {
                     let (syntax, _) = result
                         .unwrap_or_else(|e| panic!("{}: expected success, got {:?}", self.name, e));
-                    matcher.check(&syntax.value, self.name);
+                    matcher.check(&syntax.value, writer.string_pool(), self.name);
                 }
                 Expected::Error(matcher) => {
                     let err =
@@ -818,7 +821,12 @@ mod tests {
     }
 
     impl DatumMatcher {
-        fn check(&self, datum: &Datum, test_name: &str) {
+        fn check<I: Interner<Id = crate::common::StringPoolId>>(
+            &self,
+            datum: &Datum,
+            pool: &I,
+            test_name: &str,
+        ) {
             match (self, datum) {
                 (DatumMatcher::Bool(e), Datum::Boolean(a)) => {
                     assert_eq!(e, a, "{test_name}: boolean mismatch")
@@ -833,15 +841,17 @@ mod tests {
                     assert_eq!(e, a, "{test_name}: character mismatch")
                 }
                 (DatumMatcher::Str(e), Datum::String(a)) => {
-                    assert_eq!(e, a, "{test_name}: string mismatch")
+                    let actual = pool.resolve(a).expect("string id not found");
+                    assert_eq!(*e, actual, "{test_name}: string mismatch")
                 }
                 (DatumMatcher::Sym(e), Datum::Symbol(a)) => {
-                    assert_eq!(e, a, "{test_name}: symbol mismatch")
+                    let actual = pool.resolve(a).expect("symbol id not found");
+                    assert_eq!(*e, actual, "{test_name}: symbol mismatch")
                 }
                 (DatumMatcher::EmptyList, Datum::EmptyList) => {}
                 (DatumMatcher::Pair(e_car, e_cdr), Datum::Pair(a_car, a_cdr)) => {
-                    e_car.check(&a_car.value, test_name);
-                    e_cdr.check(&a_cdr.value, test_name);
+                    e_car.check(&a_car.value, pool, test_name);
+                    e_cdr.check(&a_cdr.value, pool, test_name);
                 }
                 (DatumMatcher::Vector(e_vec), Datum::Vector(a_vec)) => {
                     assert_eq!(
@@ -850,15 +860,15 @@ mod tests {
                         "{test_name}: vector length mismatch"
                     );
                     for (e, a) in e_vec.iter().zip(a_vec.iter()) {
-                        e.check(&a.value, test_name);
+                        e.check(&a.value, pool, test_name);
                     }
                 }
                 (DatumMatcher::ByteVector(e), Datum::ByteVector(a)) => {
-                    assert_eq!(e, a, "{test_name}: bytevector mismatch")
+                    assert_eq!(e.as_slice(), *a, "{test_name}: bytevector mismatch")
                 }
                 (DatumMatcher::Labeled(e_n, e_d), Datum::Labeled(a_n, a_d)) => {
                     assert_eq!(e_n, a_n, "{test_name}: label id mismatch");
-                    e_d.check(&a_d.value, test_name);
+                    e_d.check(&a_d.value, pool, test_name);
                 }
                 (DatumMatcher::LabelRef(e), Datum::LabelRef(a)) => {
                     assert_eq!(e, a, "{test_name}: label ref mismatch")
