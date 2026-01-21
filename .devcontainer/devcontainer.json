@@ -1,0 +1,51 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/rust
+{
+  "name": "Rust",
+  "image": "mcr.microsoft.com/devcontainers/rust:2-1-trixie",
+  // Features grouped by maintainer
+  "features": {
+    // Official devcontainers features
+    "ghcr.io/devcontainers/features/copilot-cli:1": {},
+    "ghcr.io/devcontainers/features/dotnet:2": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    // Rust-specific tools
+    "ghcr.io/lee-orr/rusty-dev-containers/cargo-audit:0": {},
+    "ghcr.io/lee-orr/rusty-dev-containers/cargo-expand:0": {},
+    "ghcr.io/lee-orr/rusty-dev-containers/cargo-llvm-cov:0": {},
+    // Community tools
+    "ghcr.io/devcontainers-extra/features/actions-runner:1": {},
+    "ghcr.io/devcontainers-extra/features/neovim-apt-get:1": {},
+    "ghcr.io/devcontainers-extra/features/ripgrep:1": {}
+  },
+  // Environment: configure sccache as the Rust compiler wrapper
+  "containerEnv": {
+    "RUSTC_WRAPPER": "sccache"
+  },
+  // Persistent storage for faster rebuilds
+  "mounts": [
+    {
+      "source": "devcontainer-cargo-cache-${devcontainerId}",
+      "target": "/usr/local/cargo",
+      "type": "volume"
+    },
+    {
+      "source": "devcontainer-target-cache-${devcontainerId}",
+      "target": "${containerWorkspaceFolder}/target",
+      "type": "volume"
+    }
+  ],
+  // Install tools not available as features and fix volume permissions
+  "postCreateCommand": "sudo chmod -R g+w /usr/local/cargo/registry && cargo binstall --no-confirm sccache && rustup toolchain install nightly && cargo install cargo-fuzz flamegraph && sudo apt-get update && sudo apt-get install -y linux-perf",
+  // VS Code extensions
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csdevkit",
+        "ms-vscode.cpptools",
+        "ms-vscode.powershell",
+        "rust-lang.rust-analyzer"
+      ]
+    }
+  }
+}
