@@ -1,12 +1,12 @@
 use crate::{
     cel::{
-        ast::{BinaryOp, Expr, ExprKind, Literal, Span, UnaryOp},
+        ast::{BinaryOp, Expr, ExprKind, Literal, UnaryOp},
         ast_builder::build_ast_from_pairs,
         error::Result,
         parser::{ParseConfig, parse_with_config},
         traits::CelWriter,
     },
-    common::{StringPool, StringPoolId},
+    common::{Span, StringPool, StringPoolId},
 };
 use bumpalo::Bump;
 

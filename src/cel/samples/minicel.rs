@@ -1,12 +1,12 @@
 use crate::{
     cel::{
-        ast::{BinaryOp, Literal, Span, UnaryOp},
+        ast::{BinaryOp, Literal, UnaryOp},
         ast_builder::build_expr,
         error::Result,
         parser::{ParseConfig, parse_with_config},
         traits::CelWriter,
     },
-    common::NoOpInterner,
+    common::{NoOpInterner, Span},
 };
 
 #[derive(Debug, Clone, PartialEq)]

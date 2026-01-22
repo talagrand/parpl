@@ -1,7 +1,9 @@
-use crate::common::{Span, Syntax};
-use crate::scheme::lex::{
-    FoldCaseMode, Input, PResult, SpannedToken, Token,
-    utils::{InputExt, backtrack, cut_lex_error_token, ensure_delimiter, incomplete, lex_error},
+use crate::{
+    common::{Span, Syntax},
+    scheme::lex::{
+        FoldCaseMode, Input, PResult, SpannedToken, Token,
+        utils::{InputExt, backtrack, cut_lex_error_token, ensure_delimiter, incomplete, lex_error},
+    },
 };
 use winnow::{
     Parser,

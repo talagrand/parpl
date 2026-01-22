@@ -11,13 +11,13 @@
 
 use crate::{
     cel::{
-        ast::{BinaryOp, Literal, QuoteStyle, RawLiteral, Span, UnaryOp},
+        ast::{BinaryOp, Literal, QuoteStyle, RawLiteral, UnaryOp},
         error::{Error, Result},
         literal::process_literal,
         parser::Rule,
         traits::CelWriter,
     },
-    common::Interner,
+    common::{Interner, Span},
 };
 use pest::iterators::Pair;
 

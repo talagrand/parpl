@@ -1,14 +1,16 @@
-use crate::common::{Span, Syntax};
-use crate::scheme::{
-    ParseError, Unsupported,
-    lex::{
-        boolean::lex_boolean,
-        identifiers::lex_identifier,
-        intertoken::lex_intertoken,
-        numbers::{lex_complex_decimal, lex_prefixed_number, try_fast_decimal_integer},
-        punctuation::{lex_dot, lex_hash_punctuation, simple_punct},
-        strings::{lex_character, lex_string},
-        utils::{INCOMPLETE_TOKEN_LABEL, InputExt},
+use crate::{
+    common::{Span, Syntax},
+    scheme::{
+        ParseError, Unsupported,
+        lex::{
+            boolean::lex_boolean,
+            identifiers::lex_identifier,
+            intertoken::lex_intertoken,
+            numbers::{lex_complex_decimal, lex_prefixed_number, try_fast_decimal_integer},
+            punctuation::{lex_dot, lex_hash_punctuation, simple_punct},
+            strings::{lex_character, lex_string},
+            utils::{INCOMPLETE_TOKEN_LABEL, InputExt},
+        },
     },
 };
 use std::borrow::Cow;

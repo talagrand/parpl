@@ -15,7 +15,7 @@ pub mod traits;
 #[cfg(test)]
 pub mod test_util;
 
-pub use ast::{BinaryOp, Expr, ExprKind, Literal, QuoteStyle, Span, UnaryOp};
+pub use ast::{BinaryOp, Expr, ExprKind, Literal, QuoteStyle, UnaryOp};
 pub use context::{Builder, CelParser};
 pub use error::{Error, ErrorKind, Phase, Result};
 pub use parser::{Pairs, ParseConfig, Rule, parse, parse_with_config};

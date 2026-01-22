@@ -7,8 +7,7 @@
 // - Deferred processing (escape sequences handled during value construction)
 // - Arena allocation for efficient memory management
 
-pub use crate::common::Span;
-use crate::common::StringPoolId;
+use crate::common::{Span, StringPoolId};
 use std::fmt;
 
 /// A complete CEL expression (the root of the AST)

@@ -9,7 +9,7 @@
 // By centralizing error handling, we avoid exposing pest's error types
 // throughout the codebase and provide consistent error reporting.
 
-use crate::cel::{ast::Span, parser::Rule};
+use crate::{cel::parser::Rule, common::Span};
 use std::fmt;
 
 /// Main error type for all CEL parser operations

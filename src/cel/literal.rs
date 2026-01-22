@@ -466,8 +466,8 @@ pub fn process_literal<W: CelWriter>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cel::ast::{QuoteStyle, Span};
-    use crate::common::{Interner, StringPool, StringPoolId};
+    use crate::cel::ast::QuoteStyle;
+    use crate::common::{Interner, Span, StringPool, StringPoolId};
     use bumpalo::Bump;
 
     struct TestContext {

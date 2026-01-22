@@ -1,8 +1,10 @@
-use crate::common::{Span, Syntax};
-use crate::scheme::lex::{
-    Input, PResult, SpannedToken, Token,
-    identifiers::is_dot_subsequent,
-    utils::{InputExt, backtrack, incomplete_token, lex_error},
+use crate::{
+    common::{Span, Syntax},
+    scheme::lex::{
+        Input, PResult, SpannedToken, Token,
+        identifiers::is_dot_subsequent,
+        utils::{InputExt, backtrack, incomplete_token, lex_error},
+    },
 };
 use winnow::{
     Parser,

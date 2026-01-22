@@ -1,5 +1,7 @@
-use crate::cel::ast::{BinaryOp, Literal, Span, UnaryOp};
-use crate::common::Interner;
+use crate::{
+    cel::ast::{BinaryOp, Literal, UnaryOp},
+    common::{Interner, Span},
+};
 use std::fmt::Debug;
 
 /// Trait for constructing CEL AST nodes.

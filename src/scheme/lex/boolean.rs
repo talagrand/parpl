@@ -1,8 +1,10 @@
-use super::{
-    Input, PResult, SpannedToken, Token,
-    utils::{InputExt, backtrack, ensure_delimiter},
+use crate::{
+    common::{Span, Syntax},
+    scheme::lex::{
+        Input, PResult, SpannedToken, Token,
+        utils::{InputExt, backtrack, ensure_delimiter},
+    },
 };
-use crate::common::{Span, Syntax};
 use winnow::{
     Parser,
     ascii::Caseless,
