@@ -7,8 +7,10 @@
 #![cfg(feature = "samples")]
 
 use bumpalo::Bump;
-use parpl::cel::{Builder, samples::cel::ArenaCelWriter};
-use parpl::common::StringPool;
+use parpl::{
+    StringPool,
+    cel::{Builder, samples::cel::ArenaCelWriter},
+};
 
 #[test]
 fn find_max_safe_depth() {

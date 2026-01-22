@@ -8,12 +8,13 @@
 // 5. Reuse patterns (driver reuse + arena reuse)
 
 use bumpalo::Bump;
-use parpl::cel::samples::cel::ArenaCelWriter;
-use parpl::cel::traits::CelWriter;
-use parpl::cel::{
-    Builder, CelParser, Expr, PrettyConfig, Result, pretty_print, pretty_print_with_config,
+use parpl::{
+    StringPool,
+    cel::{
+        Builder, CelParser, Expr, PrettyConfig, Result, pretty_print, pretty_print_with_config,
+        samples::cel::ArenaCelWriter, traits::CelWriter,
+    },
 };
-use parpl::common::StringPool;
 
 fn parse_scoped<R>(
     parser: &CelParser,

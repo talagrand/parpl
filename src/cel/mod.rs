@@ -8,6 +8,7 @@ mod error;
 mod literal;
 mod parser;
 mod pretty;
+#[cfg(any(test, feature = "samples"))]
 pub mod samples;
 pub mod traits;
 
@@ -15,8 +16,9 @@ pub mod traits;
 #[cfg(test)]
 pub mod test_util;
 
+// Re-export key types for convenient access (single canonical path)
 pub use ast::{BinaryOp, Expr, ExprKind, Literal, QuoteStyle, UnaryOp};
 pub use context::{Builder, CelParser};
-pub use error::{Error, ErrorKind, Phase, Result};
-pub use parser::{Pairs, ParseConfig, Rule, parse, parse_with_config};
+pub use error::{Error, ErrorKind, Phase, Result, SyntaxError};
+pub use parser::{ParseConfig, parse, parse_with_config};
 pub use pretty::{PrettyConfig, pretty_print, pretty_print_with_config};

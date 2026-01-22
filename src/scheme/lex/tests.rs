@@ -1,7 +1,4 @@
-use crate::scheme::{
-    lex::*,
-    Unsupported,
-};
+use crate::scheme::{Unsupported, lex::*};
 
 // --- Test Infrastructure ---
 

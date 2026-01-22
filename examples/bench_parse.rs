@@ -8,8 +8,8 @@
 
 use bumpalo::Bump;
 use parpl::{
+    StringPool,
     cel::{Builder, Result, samples::cel::ArenaCelWriter},
-    common::StringPool,
 };
 use std::time::Instant;
 
