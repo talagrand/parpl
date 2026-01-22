@@ -1,9 +1,9 @@
 use crate::common::{Span, Syntax};
 use crate::scheme::lex::{
-    FoldCaseMode, PResult, SpannedToken, Token, WinnowInput,
+    FoldCaseMode, Input, PResult, SpannedToken, Token,
     utils::{
-        InputExt, cut_lex_error_token, ensure_delimiter, is_delimiter, lex_error, winnow_backtrack,
-        winnow_incomplete,
+        InputExt, backtrack, cut_lex_error_token, ensure_delimiter, incomplete, is_delimiter,
+        lex_error,
     },
 };
 use std::borrow::Cow;
@@ -164,7 +164,7 @@ pub(crate) fn is_dot_subsequent(ch: char) -> bool {
 /// Returns the slice of subsequent characters consumed.
 #[inline]
 #[expect(clippy::indexing_slicing, clippy::string_slice)]
-fn take_subsequent<'i>(input: &mut WinnowInput<'i>) -> &'i str {
+fn take_subsequent<'i>(input: &mut Input<'i>) -> &'i str {
     let slice = input.as_ref();
     let bytes = slice.as_bytes();
 
@@ -204,7 +204,7 @@ fn take_subsequent<'i>(input: &mut WinnowInput<'i>) -> &'i str {
 
 /// Parse a hex escape inside a vertical-line delimited identifier.
 /// The leading `\x` has been consumed; parse `<hex digits>;`.
-fn lex_identifier_hex_escape<'i>(input: &mut WinnowInput<'i>) -> PResult<char> {
+fn lex_identifier_hex_escape<'i>(input: &mut Input<'i>) -> PResult<char> {
     let digits = cut_lex_error_token(hex_digit1, "<identifier>").parse_next(input)?;
     let _ = cut_lex_error_token(';', "<identifier>").parse_next(input)?;
 
@@ -227,7 +227,7 @@ fn lex_identifier_hex_escape<'i>(input: &mut WinnowInput<'i>) -> PResult<char> {
 /// <symbol element> ::= any character other than <vertical line> or \
 ///                    | <inline hex escape> | <mnemonic escape> | \|
 /// ```
-fn lex_symbol_element<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<char>> {
+fn lex_symbol_element<'i>(input: &mut Input<'i>) -> PResult<Option<char>> {
     let ch = input.peek_or_incomplete()?;
 
     match ch {
@@ -255,7 +255,7 @@ fn lex_symbol_element<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<char>> 
 
 /// Parse a vertical-line delimited identifier: `|<symbol element>*|`.
 /// The opening `|` has already been consumed.
-fn lex_vertical_line_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<Cow<'i, str>> {
+fn lex_vertical_line_identifier<'i>(input: &mut Input<'i>) -> PResult<Cow<'i, str>> {
     // Fast path: consume characters that don't need escaping
     let simple_part = take_while(0.., |c| c != '|' && c != '\\').parse_next(input)?;
 
@@ -275,12 +275,12 @@ fn lex_vertical_line_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<Cow<
 
             // Consume the closing `|`
             if !input.eat('|') {
-                return winnow_incomplete();
+                return incomplete();
             }
 
             Ok(Cow::Owned(result))
         }
-        _ => winnow_incomplete(),
+        _ => incomplete(),
     }
 }
 
@@ -296,7 +296,7 @@ fn lex_vertical_line_identifier<'i>(input: &mut WinnowInput<'i>) -> PResult<Cow<
 ///
 /// IMPORTANT: This must NOT match `+i`, `-i`, or `<infnan>` which are numbers.
 /// We handle this by checking for these cases and backtracking.
-fn lex_peculiar_identifier_content<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
+fn lex_peculiar_identifier_content<'i>(input: &mut Input<'i>) -> PResult<()> {
     let start = *input;
     let first = input.peek_or_backtrack()?;
 
@@ -320,7 +320,7 @@ fn lex_peculiar_identifier_content<'i>(input: &mut WinnowInput<'i>) -> PResult<(
 
                     if !is_dot_subsequent(ds) {
                         *input = start;
-                        return winnow_backtrack();
+                        return backtrack();
                     }
                     let _ = input.next_token();
 
@@ -343,12 +343,12 @@ fn lex_peculiar_identifier_content<'i>(input: &mut WinnowInput<'i>) -> PResult<(
                             None => {
                                 // This is `+i` or `-i` - a number, not identifier
                                 *input = start;
-                                return winnow_backtrack();
+                                return backtrack();
                             }
                             Some(c) if is_delimiter(c) => {
                                 // This is `+i` or `-i` - a number, not identifier
                                 *input = start;
-                                return winnow_backtrack();
+                                return backtrack();
                             }
                             _ => {
                                 // Something follows - could be `+if` etc., valid identifier
@@ -367,12 +367,12 @@ fn lex_peculiar_identifier_content<'i>(input: &mut WinnowInput<'i>) -> PResult<(
                                 None => {
                                     // This is infnan - a number
                                     *input = start;
-                                    return winnow_backtrack();
+                                    return backtrack();
                                 }
                                 Some(c) if is_delimiter(c) => {
                                     // This is infnan - a number
                                     *input = start;
-                                    return winnow_backtrack();
+                                    return backtrack();
                                 }
                                 _ => {
                                     // Something follows - continue as identifier
@@ -391,7 +391,7 @@ fn lex_peculiar_identifier_content<'i>(input: &mut WinnowInput<'i>) -> PResult<(
                 _ => {
                     // Invalid character after sign
                     *input = start;
-                    winnow_backtrack()
+                    backtrack()
                 }
             }
         }
@@ -407,7 +407,7 @@ fn lex_peculiar_identifier_content<'i>(input: &mut WinnowInput<'i>) -> PResult<(
 
             if !is_dot_subsequent(ds) {
                 *input = start;
-                return winnow_backtrack();
+                return backtrack();
             }
 
             // Check for `...` which is a valid peculiar identifier
@@ -422,7 +422,7 @@ fn lex_peculiar_identifier_content<'i>(input: &mut WinnowInput<'i>) -> PResult<(
             let _ = take_subsequent(input);
             Ok(())
         }
-        _ => winnow_backtrack(),
+        _ => backtrack(),
     }
 }
 
@@ -443,7 +443,7 @@ fn lex_peculiar_identifier_content<'i>(input: &mut WinnowInput<'i>) -> PResult<(
 /// the naive `take_while(0.., is_subsequent)` approach for identifier-heavy
 /// code, because it avoids the overhead of winnow's generic iterator.
 pub fn lex_identifier<'i>(
-    input: &mut WinnowInput<'i>,
+    input: &mut Input<'i>,
     fold_case_mode: FoldCaseMode,
 ) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
@@ -466,7 +466,7 @@ pub fn lex_identifier<'i>(
             let slice = lex_peculiar_identifier_content.take().parse_next(input)?;
             Cow::Borrowed(slice)
         }
-        _ => return winnow_backtrack(),
+        _ => return backtrack(),
     };
 
     // Identifiers not starting with `|` must be followed by delimiter or EOF

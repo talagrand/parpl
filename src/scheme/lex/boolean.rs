@@ -1,6 +1,6 @@
 use super::{
-    PResult, SpannedToken, Token, WinnowInput,
-    utils::{InputExt, ensure_delimiter, winnow_backtrack},
+    Input, PResult, SpannedToken, Token,
+    utils::{InputExt, backtrack, ensure_delimiter},
 };
 use crate::common::{Span, Syntax};
 use winnow::{
@@ -20,12 +20,12 @@ use winnow::{
 ///
 /// This helper is consulted before `<number>` prefix handling so that
 /// `#t` / `#f` and their long forms are always recognized as booleans.
-pub fn lex_boolean<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
+pub fn lex_boolean<'i>(input: &mut Input<'i>) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
     let mut probe = *input;
 
     if !probe.eat('#') {
-        return winnow_backtrack();
+        return backtrack();
     }
 
     let value = match probe.next_token() {
@@ -39,7 +39,7 @@ pub fn lex_boolean<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>>
             let _: Result<&str, ErrMode<ContextError>> = Caseless("alse").parse_next(&mut probe);
             false
         }
-        _ => return winnow_backtrack(),
+        _ => return backtrack(),
     };
 
     // Enforce delimiter: the next character, if any, must be a

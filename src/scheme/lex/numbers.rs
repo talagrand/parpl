@@ -1,9 +1,9 @@
 use crate::scheme::lex::{
-    FiniteRealKind, FiniteRealMagnitude, NumberExactness, NumberLiteral, NumberLiteralKind,
-    NumberRadix, NumberValue, PResult, RealMagnitude, RealRepr, Sign, WinnowInput,
+    FiniteRealKind, FiniteRealMagnitude, Input, NumberExactness, NumberLiteral, NumberLiteralKind,
+    NumberRadix, NumberValue, PResult, RealMagnitude, RealRepr, Sign,
     utils::{
-        InputExt, cut_lex_error_token, ensure_delimiter, is_delimiter, lex_error, winnow_backtrack,
-        winnow_incomplete_token,
+        InputExt, backtrack, cut_lex_error_token, ensure_delimiter, incomplete_token, is_delimiter,
+        lex_error,
     },
 };
 use winnow::{
@@ -34,7 +34,7 @@ use winnow::{
 ///
 /// On success, consumes the sign and `i` characters and returns the sign.
 /// On failure (not `+i`/`-i`), returns `None` without consuming input.
-fn try_parse_unit_imaginary<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<char>> {
+fn try_parse_unit_imaginary<'i>(input: &mut Input<'i>) -> PResult<Option<char>> {
     let mut probe = *input;
     let Some(sign_ch) = probe.eat_if(|c| c == '+' || c == '-') else {
         return Ok(None);
@@ -68,7 +68,7 @@ fn try_parse_unit_imaginary<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<c
 /// This helper consumes the suffix text (if any).
 /// Returns `Ok(())` if no exponent marker is present (the `<empty>` case)
 /// or if a complete exponent suffix was parsed successfully.
-fn parse_exponent_suffix<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
+fn parse_exponent_suffix<'i>(input: &mut Input<'i>) -> PResult<()> {
     let Some(_) = input.eat_if(|c| c == 'e' || c == 'E') else {
         return Ok(());
     };
@@ -95,7 +95,7 @@ fn parse_exponent_suffix<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
 ///
 /// This first tries `<infnan>` and, on backtrack,
 /// falls back to `<sign> <ureal R>`.
-fn lex_real_repr<'i>(input: &mut WinnowInput<'i>, radix: NumberRadix) -> PResult<RealRepr<'i>> {
+fn lex_real_repr<'i>(input: &mut Input<'i>, radix: NumberRadix) -> PResult<RealRepr<'i>> {
     // Check for sign
     let sign_ch = input.eat_if(|c| c == '+' || c == '-');
     let sign = match sign_ch {
@@ -181,7 +181,7 @@ fn lex_real_repr<'i>(input: &mut WinnowInput<'i>, radix: NumberRadix) -> PResult
 /// handles all radixes uniformly (with decimal-specific forms like
 /// `.digits` and exponents enabled only for radix 10).
 fn lex_complex_with_radix<'i>(
-    input: &mut WinnowInput<'i>,
+    input: &mut Input<'i>,
     radix: NumberRadix,
     exactness: NumberExactness,
 ) -> PResult<NumberLiteral<'i>> {
@@ -349,7 +349,7 @@ fn lex_complex_with_radix<'i>(
         .into_literal());
     }
 
-    winnow_backtrack()
+    backtrack()
 }
 
 /// Canonical `<number>` parser for decimal radix (`<num 10>`).
@@ -357,7 +357,7 @@ fn lex_complex_with_radix<'i>(
 /// This is a thin wrapper around `lex_complex_with_radix` with
 /// `R = 10` and unspecified exactness.
 #[inline]
-pub(crate) fn lex_complex_decimal<'i>(input: &mut WinnowInput<'i>) -> PResult<NumberLiteral<'i>> {
+pub(crate) fn lex_complex_decimal<'i>(input: &mut Input<'i>) -> PResult<NumberLiteral<'i>> {
     lex_complex_with_radix(input, 10, NumberExactness::Unspecified)
 }
 
@@ -384,7 +384,7 @@ pub(crate) fn lex_complex_decimal<'i>(input: &mut WinnowInput<'i>) -> PResult<Nu
 ///
 /// This helper parses one or more radix/exactness prefixes and then
 /// delegates to `lex_complex_with_radix` for the `<complex R>` part.
-pub(crate) fn lex_prefixed_number<'i>(input: &mut WinnowInput<'i>) -> PResult<NumberLiteral<'i>> {
+pub(crate) fn lex_prefixed_number<'i>(input: &mut Input<'i>) -> PResult<NumberLiteral<'i>> {
     let mut probe = *input;
 
     let mut radix: Option<NumberRadix> = None;
@@ -398,9 +398,9 @@ pub(crate) fn lex_prefixed_number<'i>(input: &mut WinnowInput<'i>) -> PResult<Nu
             None => {
                 if radix.is_some() || exactness.is_some() {
                     // Already saw a prefix like `#b`, then another `#` at EOF.
-                    return winnow_incomplete_token();
+                    return incomplete_token();
                 } else {
-                    return winnow_backtrack();
+                    return backtrack();
                 }
             }
         };
@@ -436,14 +436,14 @@ pub(crate) fn lex_prefixed_number<'i>(input: &mut WinnowInput<'i>) -> PResult<Nu
                 if radix.is_some() || exactness.is_some() {
                     return lex_error("<number>");
                 } else {
-                    return winnow_backtrack();
+                    return backtrack();
                 }
             }
         }
     }
 
     if !saw_prefix {
-        return winnow_backtrack();
+        return backtrack();
     }
 
     let radix_value = radix.unwrap_or(10);
@@ -478,26 +478,23 @@ pub(crate) fn lex_prefixed_number<'i>(input: &mut WinnowInput<'i>) -> PResult<Nu
 /// productions, so decimal points and exponents are only valid for
 /// radix 10. This function handles all radixes uniformly, with the
 /// decimal-specific forms enabled only when `radix == Decimal`.
-fn lex_ureal<'i>(
-    input: &mut WinnowInput<'i>,
-    radix: NumberRadix,
-) -> PResult<FiniteRealMagnitude<'i>> {
+fn lex_ureal<'i>(input: &mut Input<'i>, radix: NumberRadix) -> PResult<FiniteRealMagnitude<'i>> {
     let is_decimal = radix == 10;
     let first = input.peek_or_backtrack()?;
 
-    let (kind, slice) = (move |input: &mut WinnowInput<'i>| -> PResult<FiniteRealKind> {
+    let (kind, slice) = (move |input: &mut Input<'i>| -> PResult<FiniteRealKind> {
         // Decimal-only: `.digits+` form (e.g., `.5`, `.123e4`).
         if is_decimal && first == '.' {
             let _ = input.next_token();
 
             if input.peek_token().is_none() {
-                return winnow_backtrack();
+                return backtrack();
             }
 
             let digits = take_while(0.., |c: char| c.is_ascii_digit()).parse_next(input)?;
             let saw_digit = !digits.is_empty();
             if !saw_digit {
-                return winnow_backtrack();
+                return backtrack();
             }
 
             parse_exponent_suffix(input)?;
@@ -508,7 +505,7 @@ fn lex_ureal<'i>(
         let digits = take_while(0.., |c| is_digit_for_radix(c, radix)).parse_next(input)?;
         let saw_digit = !digits.is_empty();
         if !saw_digit {
-            return winnow_backtrack();
+            return backtrack();
         }
 
         // Check what follows the integer part.
@@ -593,7 +590,7 @@ pub(crate) fn signed_int_repr(sign: Sign, digits: &str) -> RealRepr<'_> {
 /// Returns `Ok(Some(literal))` if a simple integer was consumed,
 /// `Ok(None)` if the input requires the full parser (complex number, etc.).
 pub(crate) fn try_fast_decimal_integer<'i>(
-    input: &mut WinnowInput<'i>,
+    input: &mut Input<'i>,
 ) -> PResult<Option<NumberLiteral<'i>>> {
     // Checkpoint so we can backtrack if this isn't a simple integer.
     let checkpoint = *input;

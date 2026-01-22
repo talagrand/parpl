@@ -1,6 +1,6 @@
 use crate::scheme::lex::{
-    FoldCaseMode, PResult, WinnowInput,
-    utils::{InputExt, cut_lex_error_token, ensure_delimiter, winnow_backtrack},
+    FoldCaseMode, Input, PResult,
+    utils::{InputExt, backtrack, cut_lex_error_token, ensure_delimiter},
 };
 use winnow::{Parser, ascii::Caseless, combinator::alt, stream::Stream};
 
@@ -21,7 +21,7 @@ use winnow::{Parser, ascii::Caseless, combinator::alt, stream::Stream};
 /// per comment—overhead that adds up on the hottest lexer path. At authoring
 /// time, this manual loop approach was responsible for ~6% performance
 /// improvement on parsing a 1K Scheme program.
-pub fn lex_intertoken<'i>(input: &mut WinnowInput<'i>) -> PResult<bool> {
+pub fn lex_intertoken<'i>(input: &mut Input<'i>) -> PResult<bool> {
     let mut saw_comment = false;
 
     loop {
@@ -95,16 +95,16 @@ pub fn lex_intertoken<'i>(input: &mut WinnowInput<'i>) -> PResult<bool> {
 /// lexical errors, and the span is anchored to the `#!` prefix so that
 /// errors like `#!unknown-directive` highlight just the directive marker.
 #[cold]
-pub(crate) fn lex_directive<'i>(input: &mut WinnowInput<'i>) -> PResult<FoldCaseMode> {
+pub(crate) fn lex_directive<'i>(input: &mut Input<'i>) -> PResult<FoldCaseMode> {
     // First, look ahead to see if we have a `#!` prefix.
     // Use a probe so we can backtrack cleanly for non-directive tokens
     // such as `#(`, `#\`, etc.
     let mut probe = *input;
     if !probe.eat('#') {
-        return winnow_backtrack();
+        return backtrack();
     }
     if !probe.eat('!') {
-        return winnow_backtrack();
+        return backtrack();
     }
 
     // From here on, parse against `probe`, but always commit its
@@ -142,7 +142,7 @@ pub(crate) fn lex_directive<'i>(input: &mut WinnowInput<'i>) -> PResult<FoldCase
 ///
 /// <comment cont> ::= <nested comment> <comment text>
 /// ```
-fn lex_nested_comment_body<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
+fn lex_nested_comment_body<'i>(input: &mut Input<'i>) -> PResult<()> {
     let mut depth = 1usize;
 
     loop {

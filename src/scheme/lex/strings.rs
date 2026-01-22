@@ -1,10 +1,7 @@
 use crate::common::{Span, Syntax};
 use crate::scheme::lex::{
-    FoldCaseMode, PResult, SpannedToken, Token, WinnowInput,
-    utils::{
-        InputExt, cut_lex_error_token, ensure_delimiter, lex_error, winnow_backtrack,
-        winnow_incomplete,
-    },
+    FoldCaseMode, Input, PResult, SpannedToken, Token,
+    utils::{InputExt, backtrack, cut_lex_error_token, ensure_delimiter, incomplete, lex_error},
 };
 use winnow::{
     Parser,
@@ -59,11 +56,11 @@ fn is_string_terminator(c: char) -> bool {
     c == '"' || c == '\\' || c == '\n' || c == '\r'
 }
 
-fn lex_string_fragment<'i>(input: &mut WinnowInput<'i>) -> PResult<Fragment<'i>> {
+fn lex_string_fragment<'i>(input: &mut Input<'i>) -> PResult<Fragment<'i>> {
     match input.peek_token() {
-        Some('"') => return winnow_backtrack(),
+        Some('"') => return backtrack(),
         Some('\n' | '\r') => return lex_error("<string>"),
-        None => return winnow_incomplete(),
+        None => return incomplete(),
         _ => {}
     }
 
@@ -80,7 +77,7 @@ fn lex_string_fragment<'i>(input: &mut WinnowInput<'i>) -> PResult<Fragment<'i>>
 
 /// This function assumes the opening `"` has already been consumed
 /// and stops just before the closing `"`.
-fn lex_string_body<'i>(input: &mut WinnowInput<'i>) -> PResult<std::borrow::Cow<'i, str>> {
+fn lex_string_body<'i>(input: &mut Input<'i>) -> PResult<std::borrow::Cow<'i, str>> {
     let simple_part = take_while(0.., |c| !is_string_terminator(c)).parse_next(input)?;
 
     match input.peek_or_incomplete()? {
@@ -109,7 +106,7 @@ fn lex_string_body<'i>(input: &mut WinnowInput<'i>) -> PResult<std::borrow::Cow<
 
 /// Parse the body of a hex escape sequence: `<hex digits>;`.
 /// The leading `x` has already been consumed.
-fn lex_hex_escape<'i>(input: &mut WinnowInput<'i>) -> PResult<char> {
+fn lex_hex_escape<'i>(input: &mut Input<'i>) -> PResult<char> {
     let digits = cut_lex_error_token(hex_digit1, "<string>").parse_next(input)?;
     let _ = cut_lex_error_token(';', "<string>").parse_next(input)?;
 
@@ -129,7 +126,7 @@ fn lex_hex_escape<'i>(input: &mut WinnowInput<'i>) -> PResult<char> {
 }
 
 /// Parse a single string escape sequence (after the backslash).
-fn lex_string_escape<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<char>> {
+fn lex_string_escape<'i>(input: &mut Input<'i>) -> PResult<Option<char>> {
     alt((
         // Hex escape: \x...;
         preceded(alt(('x', 'X')), lex_hex_escape).map(Some),
@@ -159,7 +156,7 @@ fn lex_string_escape<'i>(input: &mut WinnowInput<'i>) -> PResult<Option<char>> {
 ///
 /// The `<string element>` production itself is implemented by
 /// `lex_string_body`.
-pub(crate) fn lex_string<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
+pub(crate) fn lex_string<'i>(input: &mut Input<'i>) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
 
     literal("\"").parse_next(input)?;
@@ -191,7 +188,7 @@ pub(crate) fn lex_string<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToke
 /// scalar values and reports lexical errors using the `<character>`
 /// nonterminal.
 pub(crate) fn lex_character<'i>(
-    input: &mut WinnowInput<'i>,
+    input: &mut Input<'i>,
     fold_case_names: FoldCaseMode,
 ) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
@@ -222,7 +219,7 @@ pub(crate) fn lex_character<'i>(
             })
         },
         // Any character
-        |i: &mut WinnowInput<'i>| i.next_or_incomplete_token(),
+        |i: &mut Input<'i>| i.next_or_incomplete_token(),
     )))
     .parse_next(input)?;
 
@@ -237,7 +234,7 @@ pub(crate) fn lex_character<'i>(
 }
 
 /// Parse a line splice: `\ <ws> <line ending> <ws>`.
-pub(crate) fn lex_line_splice<'i>(input: &mut WinnowInput<'i>) -> PResult<()> {
+pub(crate) fn lex_line_splice<'i>(input: &mut Input<'i>) -> PResult<()> {
     let _: &str = space0.parse_next(input)?;
     let _: &str = line_ending.parse_next(input)?;
     let _: &str = space0.parse_next(input)?;

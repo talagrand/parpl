@@ -1,8 +1,8 @@
 use crate::common::{Span, Syntax};
 use crate::scheme::lex::{
-    PResult, SpannedToken, Token, WinnowInput,
+    Input, PResult, SpannedToken, Token,
     identifiers::is_dot_subsequent,
-    utils::{InputExt, lex_error, winnow_backtrack, winnow_incomplete_token},
+    utils::{InputExt, backtrack, incomplete_token, lex_error},
 };
 use winnow::{
     Parser,
@@ -22,7 +22,7 @@ use winnow::{
 ///
 /// Simple punctuation (`(`, `)`, `'`, `` ` ``, `,`, `,@`) is handled
 /// directly by the first-character dispatcher for efficiency.
-pub fn lex_hash_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
+pub fn lex_hash_punctuation<'i>(input: &mut Input<'i>) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
 
     // Use a probe so we only commit to `input` once we've identified
@@ -31,7 +31,7 @@ pub fn lex_hash_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedT
     let mut probe = *input;
 
     if !probe.eat('#') {
-        return winnow_backtrack();
+        return backtrack();
     }
 
     let token = match probe.peek_token() {
@@ -46,7 +46,7 @@ pub fn lex_hash_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedT
             if probe.eat('8') && probe.eat('(') {
                 Token::ByteVectorStart
             } else {
-                return winnow_backtrack();
+                return backtrack();
             }
         }
         Some(';') => {
@@ -74,22 +74,22 @@ pub fn lex_hash_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedT
                         };
                         Token::LabelRef(n)
                     }
-                    None => return winnow_incomplete_token(),
+                    None => return incomplete_token(),
                     _ => return lex_error("label definition or reference"),
                 }
             } else {
-                return winnow_backtrack();
+                return backtrack();
             }
         }
         Some('!') => {
             // `#!` starts a directive; let the directive lexer handle it.
-            return winnow_backtrack();
+            return backtrack();
         }
-        None => return winnow_incomplete_token(),
+        None => return incomplete_token(),
         _ => {
             // No other valid punctuation tokens start with `#`.
             // Don't error here - let other parsers try (e.g., booleans, numbers).
-            return winnow_backtrack();
+            return backtrack();
         }
     };
 
@@ -105,26 +105,26 @@ pub fn lex_hash_punctuation<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedT
 /// since `.` can start identifiers like `...` or `.foo`.
 ///
 /// Returns `Token::Dot` only if `.` is followed by a delimiter or EOF.
-pub fn lex_dot<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
+pub fn lex_dot<'i>(input: &mut Input<'i>) -> PResult<SpannedToken<'i>> {
     let start = input.current_token_start();
 
     if !input.eat('.') {
-        return winnow_backtrack();
+        return backtrack();
     }
 
     // Check what follows - if it could continue an identifier or number, backtrack
     match input.peek_token() {
         Some(c) if c.is_ascii_digit() => {
             // Decimal number like `.5` - should have been caught by number parser
-            return winnow_backtrack();
+            return backtrack();
         }
         Some('.') => {
             // Could be `...` - should have been caught by identifier parser
-            return winnow_backtrack();
+            return backtrack();
         }
         Some(c) if is_dot_subsequent(c) => {
             // Could be `.foo` - should have been caught by identifier parser
-            return winnow_backtrack();
+            return backtrack();
         }
         _ => {
             // Lone `.` followed by delimiter or EOF
@@ -141,7 +141,7 @@ pub fn lex_dot<'i>(input: &mut WinnowInput<'i>) -> PResult<SpannedToken<'i>> {
 /// the overhead of the full `lex_punctuation` parser for common tokens.
 #[inline]
 pub(crate) fn simple_punct<'i>(
-    input: &mut WinnowInput<'i>,
+    input: &mut Input<'i>,
     start: usize,
     token: Token<'i>,
 ) -> SpannedToken<'i> {

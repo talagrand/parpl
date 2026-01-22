@@ -1,8 +1,4 @@
-use crate::common::Span;
-use crate::scheme::{
-    ParseError,
-    lex::{PResult, WinnowInput},
-};
+use crate::scheme::lex::{Input, PResult};
 use winnow::{
     Parser,
     error::{ContextError, ErrMode, Needed, StrContext},
@@ -45,7 +41,7 @@ pub trait InputExt {
     fn next_or_incomplete_token(&mut self) -> PResult<char>;
 }
 
-impl InputExt for WinnowInput<'_> {
+impl InputExt for Input<'_> {
     #[inline]
     fn eat(&mut self, expected: char) -> bool {
         if self.peek_token() == Some(expected) {
@@ -105,45 +101,16 @@ impl InputExt for WinnowInput<'_> {
 }
 
 /// Sentinel label used to distinguish `IncompleteToken` from `Incomplete`.
-const INCOMPLETE_TOKEN_LABEL: &str = "__incomplete_token__";
-
-pub fn winnow_err_to_parse_error(err: ErrMode<ContextError>, fallback_span: Span) -> ParseError {
-    match err {
-        ErrMode::Incomplete(_) => ParseError::Incomplete,
-        ErrMode::Cut(e) | ErrMode::Backtrack(e) => {
-            // Check for the special incomplete-token sentinel.
-            for ctx in e.context() {
-                if let StrContext::Label(INCOMPLETE_TOKEN_LABEL) = ctx {
-                    return ParseError::IncompleteToken;
-                }
-            }
-
-            // Try to recover the most specific nonterminal label from the
-            // `ContextError`. If none is present, fall back to a generic
-            // `<token>` context.
-            let mut nonterminal = "<token>";
-            for ctx in e.context() {
-                if let StrContext::Label(label) = ctx {
-                    nonterminal = label;
-                }
-            }
-
-            // For now, we do not yet plumb precise spans from `LocatingSlice`.
-            // During the full migration we will replace `fallback_span` with
-            // spans derived from `with_span` and the input location.
-            ParseError::lexical(fallback_span, nonterminal, e.to_string())
-        }
-    }
-}
+pub(crate) const INCOMPLETE_TOKEN_LABEL: &str = "__incomplete_token__";
 
 /// Helper to produce a recoverable backtrack error with empty context.
 #[inline]
-pub fn winnow_backtrack<O>() -> PResult<O> {
+pub fn backtrack<O>() -> PResult<O> {
     Err(ErrMode::Backtrack(ContextError::new()))
 }
 
 /// Helper to produce an incomplete input error (REPL should prompt for more).
-pub fn winnow_incomplete<O>() -> PResult<O> {
+pub fn incomplete<O>() -> PResult<O> {
     Err(ErrMode::Incomplete(Needed::Unknown))
 }
 
@@ -152,7 +119,7 @@ pub fn winnow_incomplete<O>() -> PResult<O> {
 /// This indicates the input ended in the middle of a token (e.g., `#\`,
 /// `1e+`, `3/`). In a REPL, this is typically a user error rather than a
 /// prompt-for-more signal.
-pub fn winnow_incomplete_token<O>() -> PResult<O> {
+pub fn incomplete_token<O>() -> PResult<O> {
     let mut ctx = ContextError::new();
     ctx.push(StrContext::Label(INCOMPLETE_TOKEN_LABEL));
     Err(ErrMode::Cut(ctx))
@@ -163,11 +130,11 @@ pub fn winnow_incomplete_token<O>() -> PResult<O> {
 pub fn cut_lex_error_token<'i, O, P>(
     mut parser: P,
     nonterminal: &'static str,
-) -> impl Parser<WinnowInput<'i>, O, ErrMode<ContextError>>
+) -> impl Parser<Input<'i>, O, ErrMode<ContextError>>
 where
-    P: Parser<WinnowInput<'i>, O, ErrMode<ContextError>>,
+    P: Parser<Input<'i>, O, ErrMode<ContextError>>,
 {
-    move |input: &mut WinnowInput<'i>| {
+    move |input: &mut Input<'i>| {
         parser.parse_next(input).map_err(|e| match e {
             ErrMode::Backtrack(_) => {
                 if input.is_empty() {
@@ -212,7 +179,7 @@ pub(crate) fn is_delimiter(ch: char) -> bool {
 /// label if violated.
 #[inline]
 pub(crate) fn ensure_delimiter<'i>(
-    input: &mut WinnowInput<'i>,
+    input: &mut Input<'i>,
     nonterminal: &'static str,
 ) -> PResult<()> {
     if input.peek_token().is_some_and(|ch| !is_delimiter(ch)) {

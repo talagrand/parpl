@@ -8,12 +8,12 @@ use crate::scheme::{
         numbers::{lex_complex_decimal, lex_prefixed_number, try_fast_decimal_integer},
         punctuation::{lex_dot, lex_hash_punctuation, simple_punct},
         strings::{lex_character, lex_string},
-        utils::{InputExt, winnow_err_to_parse_error},
+        utils::{INCOMPLETE_TOKEN_LABEL, InputExt},
     },
 };
 use std::borrow::Cow;
 use winnow::{
-    error::{ContextError, ErrMode},
+    error::{ContextError, ErrMode, StrContext},
     stream::{Location, Stream},
 };
 
@@ -28,7 +28,7 @@ mod tests;
 pub mod utils;
 
 // Internal input and result types used by the lexer implementation.
-pub type WinnowInput<'i> = winnow::stream::LocatingSlice<winnow::stream::Str<'i>>;
+pub type Input<'i> = winnow::stream::LocatingSlice<winnow::stream::Str<'i>>;
 pub type PResult<O> = Result<O, ErrMode<ContextError>>;
 
 /// Radix of a Scheme number literal as specified by `<radix R>`.
@@ -260,7 +260,7 @@ pub type SpannedToken<'a> = Syntax<Token<'a>>;
 
 /// An iterator over tokens in the source string.
 pub struct Lexer<'i> {
-    input: WinnowInput<'i>,
+    input: Input<'i>,
     source: &'i str,
     /// Current fold-case mode for identifiers and character names.
     fold_case_mode: FoldCaseMode,
@@ -276,14 +276,37 @@ impl<'i> Lexer<'i> {
         let end = self.input.current_token_start();
         let end = if end > start { end } else { start + 1 };
         let span = Span { start, end };
-        winnow_err_to_parse_error(err, span)
+
+        match err {
+            ErrMode::Incomplete(_) => ParseError::Incomplete,
+            ErrMode::Cut(e) | ErrMode::Backtrack(e) => {
+                // Check for the special incomplete-token sentinel.
+                for ctx in e.context() {
+                    if let StrContext::Label(INCOMPLETE_TOKEN_LABEL) = ctx {
+                        return ParseError::IncompleteToken;
+                    }
+                }
+
+                // Try to recover the most specific nonterminal label from the
+                // `ContextError`. If none is present, fall back to a generic
+                // `<token>` context.
+                let mut nonterminal = "<token>";
+                for ctx in e.context() {
+                    if let StrContext::Label(label) = ctx {
+                        nonterminal = label;
+                    }
+                }
+
+                ParseError::lexical(span, nonterminal, e.to_string())
+            }
+        }
     }
 
     /// Run a lexing parser starting at `start`, mapping backtrack to
     /// `Ok(None)` and other errors into `ParseError`.
     fn run_lex<O, F>(&mut self, start: usize, parser: F) -> Result<Option<O>, ParseError>
     where
-        F: FnOnce(&mut WinnowInput<'i>) -> PResult<O>,
+        F: FnOnce(&mut Input<'i>) -> PResult<O>,
     {
         match parser(&mut self.input) {
             Ok(output) => Ok(Some(output)),
@@ -303,7 +326,7 @@ impl<'i> Lexer<'i> {
     #[inline]
     pub fn with_config(source: &'i str, config: LexConfig) -> Self {
         Self {
-            input: WinnowInput::new(source),
+            input: Input::new(source),
             source,
             fold_case_mode: FoldCaseMode::Off,
             config,
