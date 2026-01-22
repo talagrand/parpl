@@ -8,7 +8,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Value {
+pub enum MiniDatum {
     /// Numbers (integers only)
     Number(i64),
     /// Symbols (identifiers)
@@ -18,7 +18,7 @@ pub enum Value {
     /// Boolean values
     Bool(bool),
     /// Lists (proper lists only)
-    List(Vec<Value>),
+    List(Vec<MiniDatum>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,12 +88,12 @@ impl SchemeNumberOps for MiniNumberOps {
 }
 
 #[derive(Default)]
-pub struct MiniWriter {
+pub struct MiniDatumWriter {
     interner: NoOpInterner,
 }
 
-impl DatumWriter for MiniWriter {
-    type Output = Value;
+impl DatumWriter for MiniDatumWriter {
+    type Output = MiniDatum;
     type Error = ParseError;
     type Interner = NoOpInterner;
     type StringId = String;
@@ -104,11 +104,11 @@ impl DatumWriter for MiniWriter {
     }
 
     fn bool(&mut self, v: bool, _s: Span) -> Result<Self::Output, Self::Error> {
-        Ok(Value::Bool(v))
+        Ok(MiniDatum::Bool(v))
     }
 
     fn number(&mut self, v: i64, _s: Span) -> Result<Self::Output, Self::Error> {
-        Ok(Value::Number(v))
+        Ok(MiniDatum::Number(v))
     }
 
     fn char(&mut self, _v: char, s: Span) -> Result<Self::Output, Self::Error> {
@@ -116,11 +116,11 @@ impl DatumWriter for MiniWriter {
     }
 
     fn string(&mut self, v: Self::StringId, _s: Span) -> Result<Self::Output, Self::Error> {
-        Ok(Value::String(v))
+        Ok(MiniDatum::String(v))
     }
 
     fn symbol(&mut self, v: Self::StringId, _s: Span) -> Result<Self::Output, Self::Error> {
-        Ok(Value::Symbol(v))
+        Ok(MiniDatum::Symbol(v))
     }
 
     fn bytevector(&mut self, _v: &[u8], s: Span) -> Result<Self::Output, Self::Error> {
@@ -128,16 +128,16 @@ impl DatumWriter for MiniWriter {
     }
 
     fn null(&mut self, _s: Span) -> Result<Self::Output, Self::Error> {
-        // Empty list is represented as List(vec![]) in Value::List?
+        // Empty list is represented as List(vec![]) in MiniDatum::List?
         // Or maybe we should have an EmptyList variant?
-        // minireader.rs says: "Lists (including proper and improper lists, empty list represents nil) List(Vec<Syntax<Value>>)"
-        // But wait, minireader.rs Value definition:
-        // List(Vec<Syntax<Value>>),
+        // minireader.rs says: "Lists (including proper and improper lists, empty list represents nil) List(Vec<Syntax<MiniDatum>>)"
+        // But wait, minireader.rs MiniDatum definition:
+        // List(Vec<Syntax<MiniDatum>>),
         // It doesn't have EmptyList.
         // So null is List(vec![]).
         // But we need a span for it.
-        // Syntax::new(s, Value::List(vec![]))
-        Ok(Value::List(vec![]))
+        // Syntax::new(s, MiniDatum::List(vec![]))
+        Ok(MiniDatum::List(vec![]))
     }
 
     fn list<I>(&mut self, iter: I, _s: Span) -> Result<Self::Output, Self::Error>
@@ -146,7 +146,7 @@ impl DatumWriter for MiniWriter {
         I::IntoIter: ExactSizeIterator,
     {
         let elements: Vec<_> = iter.into_iter().collect();
-        Ok(Value::List(elements))
+        Ok(MiniDatum::List(elements))
     }
 
     fn improper_list<I>(
@@ -194,11 +194,11 @@ impl DatumWriter for MiniWriter {
     }
 }
 
-pub fn read(source: &str) -> Result<Value, ParseError> {
+pub fn read(source: &str) -> Result<MiniDatum, ParseError> {
     read_with_max_depth(source, 64)
 }
 
-pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<Value, ParseError> {
+pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<MiniDatum, ParseError> {
     let lexer = crate::scheme::lex::lex_with_config(
         source,
         crate::scheme::lex::LexConfig {
@@ -207,7 +207,7 @@ pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<Value, ParseE
         },
     );
     let mut stream = crate::scheme::reader::TokenStream::new(lexer);
-    let mut writer = MiniWriter::default();
+    let mut writer = MiniDatumWriter::default();
     stream
         .parse_datum_with_max_depth(&mut writer, max_depth)
         .map(|(datum, _span)| datum)
@@ -264,21 +264,21 @@ mod tests {
     }
 
     impl ValueMatcher {
-        fn check(&self, value: &Value, test_name: &str) {
+        fn check(&self, value: &MiniDatum, test_name: &str) {
             match (self, value) {
-                (ValueMatcher::Number(e), Value::Number(a)) => {
+                (ValueMatcher::Number(e), MiniDatum::Number(a)) => {
                     assert_eq!(e, a, "{test_name}: number mismatch")
                 }
-                (ValueMatcher::Symbol(e), Value::Symbol(a)) => {
+                (ValueMatcher::Symbol(e), MiniDatum::Symbol(a)) => {
                     assert_eq!(e, a, "{test_name}: symbol mismatch")
                 }
-                (ValueMatcher::Str(e), Value::String(a)) => {
+                (ValueMatcher::Str(e), MiniDatum::String(a)) => {
                     assert_eq!(e, a, "{test_name}: string mismatch")
                 }
-                (ValueMatcher::Bool(e), Value::Bool(a)) => {
+                (ValueMatcher::Bool(e), MiniDatum::Bool(a)) => {
                     assert_eq!(e, a, "{test_name}: bool mismatch")
                 }
-                (ValueMatcher::List(elems), Value::List(actual)) => {
+                (ValueMatcher::List(elems), MiniDatum::List(actual)) => {
                     assert_eq!(
                         elems.len(),
                         actual.len(),
@@ -288,7 +288,9 @@ mod tests {
                         e.check(a, test_name);
                     }
                 }
-                _ => panic!("{test_name}: value type mismatch. Expected {self:?}, got {value:?}"),
+                _ => {
+                    panic!("{test_name}: MiniDatum type mismatch. Expected {self:?}, got {value:?}")
+                }
             }
         }
     }

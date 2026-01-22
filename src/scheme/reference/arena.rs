@@ -1,8 +1,8 @@
+use super::numbers::{SimpleNumber, SimpleNumberOps};
 use crate::{
     common::{Span, StringPool, StringPoolId, Syntax},
     scheme::{
         ParseError,
-        primitivenumbers::{PrimitiveOps, SimpleNumber},
         traits::{DatumInspector, DatumKind, DatumWriter},
     },
 };
@@ -29,12 +29,12 @@ pub enum Datum<'a> {
     LabelRef(u64),
 }
 
-pub struct SampleWriter<'a> {
+pub struct ArenaDatumWriter<'a> {
     interner: StringPool,
     arena: &'a Bump,
 }
 
-impl<'a> SampleWriter<'a> {
+impl<'a> ArenaDatumWriter<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         Self {
             interner: StringPool::default(),
@@ -48,12 +48,12 @@ impl<'a> SampleWriter<'a> {
     }
 }
 
-impl<'a> DatumWriter for SampleWriter<'a> {
+impl<'a> DatumWriter for ArenaDatumWriter<'a> {
     type Output = Syntax<Datum<'a>>;
     type Error = (); // Infallible for this sample
     type Interner = StringPool;
     type StringId = StringPoolId;
-    type N = PrimitiveOps;
+    type N = SimpleNumberOps;
 
     fn interner(&mut self) -> &mut Self::Interner {
         &mut self.interner
@@ -209,7 +209,7 @@ impl<'a, 'd> SampleListIter<'a, 'd> {
 }
 
 impl<'d> DatumInspector for &Syntax<Datum<'d>> {
-    type N = PrimitiveOps;
+    type N = SimpleNumberOps;
     type StringId<'b>
         = StringPoolId
     where
@@ -353,7 +353,7 @@ pub fn read_with_max_depth<'a>(
         },
     );
     let mut stream = crate::scheme::reader::TokenStream::new(lexer);
-    let mut writer = SampleWriter::new(arena);
+    let mut writer = ArenaDatumWriter::new(arena);
     stream
         .parse_datum_with_max_depth(&mut writer, max_depth)
         .map(|(datum, _span)| datum)

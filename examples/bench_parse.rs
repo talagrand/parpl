@@ -9,7 +9,7 @@
 use bumpalo::Bump;
 use parpl::{
     StringPool,
-    cel::{Builder, Result, samples::cel::ArenaCelWriter},
+    cel::{Builder, Result, reference::arena::ArenaCelWriter},
 };
 use std::time::Instant;
 

@@ -717,8 +717,8 @@ mod tests {
         scheme::{
             Unsupported,
             lex::Token,
-            primitivenumbers::SimpleNumber,
-            samples::scheme::{Datum, SampleWriter},
+            reference::arena::{ArenaDatumWriter, Datum},
+            reference::numbers::SimpleNumber,
         },
     };
     use bumpalo::Bump;
@@ -777,7 +777,7 @@ mod tests {
 
         fn run_datum(&self, expected: &Expected<DatumMatcher>) {
             let arena = Bump::new();
-            let mut writer = SampleWriter::new(&arena);
+            let mut writer = ArenaDatumWriter::new(&arena);
             let result = parse_datum(self.input, &mut writer);
             match expected {
                 Expected::Success(matcher) => {
@@ -927,7 +927,7 @@ mod tests {
         }
 
         let arena = Bump::new();
-        let mut writer = SampleWriter::new(&arena);
+        let mut writer = ArenaDatumWriter::new(&arena);
         let result = parse_datum(&input, &mut writer);
         let err = result.expect_err("expected depth-limit error");
         ErrorMatcher::UnsupportedDepth.check(&err, "depth_limit_enforced_by_default");
@@ -947,7 +947,7 @@ mod tests {
         }
 
         let arena = Bump::new();
-        let mut writer = SampleWriter::new(&arena);
+        let mut writer = ArenaDatumWriter::new(&arena);
         let (syntax, _) = parse_datum_with_max_depth(&input, &mut writer, 128)
             .expect("expected success with increased max depth");
         if let Datum::Pair(_, _) = syntax.value {

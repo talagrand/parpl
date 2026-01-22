@@ -1,5 +1,5 @@
 use crate::{
-    common::{Interner, Span, StringId},
+    Interner, Span, StringId,
     scheme::{ParseError, lex},
 };
 use std::fmt::Debug;

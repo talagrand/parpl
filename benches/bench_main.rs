@@ -133,7 +133,7 @@ fn bench_scheme_parsing(c: &mut Criterion) {
         b.iter_batched_ref(
             Bump::new,
             |arena| {
-                let _ = parpl::scheme::samples::scheme::read(black_box(SCHEME_SIMPLE), arena);
+                let _ = parpl::scheme::reference::arena::read(black_box(SCHEME_SIMPLE), arena);
             },
             BatchSize::SmallInput,
         )
@@ -143,7 +143,7 @@ fn bench_scheme_parsing(c: &mut Criterion) {
         b.iter_batched_ref(
             Bump::new,
             |arena| {
-                let _ = parpl::scheme::samples::scheme::read(black_box(SCHEME_NESTED), arena);
+                let _ = parpl::scheme::reference::arena::read(black_box(SCHEME_NESTED), arena);
             },
             BatchSize::SmallInput,
         )
@@ -153,7 +153,7 @@ fn bench_scheme_parsing(c: &mut Criterion) {
         b.iter_batched_ref(
             Bump::new,
             |arena| {
-                let _ = parpl::scheme::samples::scheme::read(black_box(SCHEME_FACTORIAL), arena);
+                let _ = parpl::scheme::reference::arena::read(black_box(SCHEME_FACTORIAL), arena);
             },
             BatchSize::SmallInput,
         )
@@ -163,7 +163,7 @@ fn bench_scheme_parsing(c: &mut Criterion) {
         b.iter_batched_ref(
             Bump::new,
             |arena| {
-                let _ = parpl::scheme::samples::scheme::read(black_box(SCHEME_LAMBDA), arena);
+                let _ = parpl::scheme::reference::arena::read(black_box(SCHEME_LAMBDA), arena);
             },
             BatchSize::SmallInput,
         )
@@ -173,7 +173,7 @@ fn bench_scheme_parsing(c: &mut Criterion) {
         b.iter_batched_ref(
             Bump::new,
             |arena| {
-                let _ = parpl::scheme::samples::scheme::read(black_box(SCHEME_QUOTE), arena);
+                let _ = parpl::scheme::reference::arena::read(black_box(SCHEME_QUOTE), arena);
             },
             BatchSize::SmallInput,
         )
@@ -183,7 +183,7 @@ fn bench_scheme_parsing(c: &mut Criterion) {
         b.iter_batched_ref(
             Bump::new,
             |arena| {
-                let _ = parpl::scheme::samples::scheme::read(black_box(SCHEME_COMPLEX), arena);
+                let _ = parpl::scheme::reference::arena::read(black_box(SCHEME_COMPLEX), arena);
             },
             BatchSize::SmallInput,
         )
@@ -196,19 +196,19 @@ fn bench_minischeme_parsing(c: &mut Criterion) {
     let mut group = c.benchmark_group("MiniScheme Parsing");
 
     group.bench_function("Simple (+ 1 2)", |b| {
-        b.iter(|| parpl::scheme::samples::minischeme::read(black_box(SCHEME_SIMPLE)))
+        b.iter(|| parpl::scheme::reference::mini::read(black_box(SCHEME_SIMPLE)))
     });
 
     group.bench_function("Nested", |b| {
-        b.iter(|| parpl::scheme::samples::minischeme::read(black_box(SCHEME_NESTED)))
+        b.iter(|| parpl::scheme::reference::mini::read(black_box(SCHEME_NESTED)))
     });
 
     group.bench_function("Factorial", |b| {
-        b.iter(|| parpl::scheme::samples::minischeme::read(black_box(SCHEME_FACTORIAL)))
+        b.iter(|| parpl::scheme::reference::mini::read(black_box(SCHEME_FACTORIAL)))
     });
 
     group.bench_function("1K Sample", |b| {
-        b.iter(|| parpl::scheme::samples::minischeme::read(black_box(SCHEME_1K_SAMPLE)))
+        b.iter(|| parpl::scheme::reference::mini::read(black_box(SCHEME_1K_SAMPLE)))
     });
 
     group.finish();

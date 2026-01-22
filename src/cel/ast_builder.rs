@@ -10,6 +10,7 @@
 // - Identifier resolution: handled during evaluation
 
 use crate::{
+    Interner, Span,
     cel::{
         ast::{BinaryOp, Literal, QuoteStyle, RawLiteral, UnaryOp},
         error::{Error, Result},
@@ -17,7 +18,6 @@ use crate::{
         parser::Rule,
         traits::CelWriter,
     },
-    common::{Interner, Span},
 };
 use pest::iterators::Pair;
 

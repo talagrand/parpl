@@ -1,4 +1,5 @@
 use crate::{
+    Span, StringPool, StringPoolId,
     cel::{
         ast::{BinaryOp, Expr, ExprKind, Literal, UnaryOp},
         ast_builder::build_ast_from_pairs,
@@ -6,7 +7,6 @@ use crate::{
         parser::{ParseConfig, parse_with_config},
         traits::CelWriter,
     },
-    common::{Span, StringPool, StringPoolId},
 };
 use bumpalo::Bump;
 

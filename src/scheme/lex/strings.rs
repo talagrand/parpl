@@ -1,5 +1,5 @@
 use crate::{
-    common::{Span, Syntax},
+    Span, Syntax,
     scheme::lex::{
         FoldCaseMode, Input, PResult, SpannedToken, Token,
         utils::{

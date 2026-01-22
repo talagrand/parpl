@@ -16,9 +16,9 @@ pub enum SimpleNumber {
 
 /// Default implementation using `SimpleNumber`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PrimitiveOps;
+pub struct SimpleNumberOps;
 
-impl SchemeNumberOps for PrimitiveOps {
+impl SchemeNumberOps for SimpleNumberOps {
     type Number = SimpleNumber;
 
     fn from_literal(lit: &lex::NumberLiteral<'_>, span: Span) -> Result<Self::Number, ParseError> {

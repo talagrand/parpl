@@ -1,6 +1,6 @@
 use crate::{
+    Interner, Span,
     cel::ast::{BinaryOp, Literal, UnaryOp},
-    common::{Interner, Span},
 };
 use std::fmt::Debug;
 

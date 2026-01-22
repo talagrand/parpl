@@ -12,9 +12,9 @@ use crate::{
         error::{ErrorKind, Result},
         parser::ParseConfig,
         pretty::pretty_print,
-        samples::cel::ArenaCelWriter,
+        reference::arena::ArenaCelWriter,
     },
-    common::{Interner, StringPool, StringPoolId},
+    Interner, StringPool, StringPoolId,
 };
 use bumpalo::Bump;
 

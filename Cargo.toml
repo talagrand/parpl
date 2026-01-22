@@ -14,7 +14,7 @@ categories = ["parsing", "compilers"]
 default = ["cel", "scheme"]
 cel = ["dep:pest", "dep:pest_derive"]
 scheme = ["dep:winnow", "dep:unicase", "dep:thiserror"]
-samples = ["cel", "scheme"]
+reference = ["cel", "scheme"]
 
 [dependencies]
 winnow = { version = "0.7.14", optional = true }
@@ -27,7 +27,7 @@ string-interner = "0.19"
 
 [[test]]
 name = "stack_depth_test"
-required-features = ["samples"]
+required-features = ["reference"]
 
 [[example]]
 name = "scheme_lex_benchmark"
@@ -35,11 +35,11 @@ required-features = ["scheme"]
 
 [[example]]
 name = "demo"
-required-features = ["samples"]
+required-features = ["reference"]
 
 [[example]]
 name = "bench_parse"
-required-features = ["samples"]
+required-features = ["reference"]
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -47,7 +47,7 @@ criterion = { version = "0.8", features = ["html_reports"] }
 [[bench]]
 name = "bench_main"
 harness = false
-required-features = ["samples"]
+required-features = ["reference"]
 
 [lints.clippy]
 unwrap_used = "warn"

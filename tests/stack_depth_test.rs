@@ -4,12 +4,12 @@
 // NOTE: Stack overflow occurs at very low nesting depths
 // This suggests recursion in the parser or AST builder
 
-#![cfg(feature = "samples")]
+#![cfg(feature = "reference")]
 
 use bumpalo::Bump;
 use parpl::{
     StringPool,
-    cel::{Builder, samples::cel::ArenaCelWriter},
+    cel::{Builder, reference::arena::ArenaCelWriter},
 };
 
 #[test]

@@ -5,8 +5,8 @@
 // of parsed expressions.
 
 use crate::{
+    Interner, StringPoolId,
     cel::ast::{Expr, ExprKind, Literal},
-    common::{Interner, StringPoolId},
 };
 
 /// Configuration for pretty-printing

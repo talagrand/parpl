@@ -8,8 +8,8 @@ mod error;
 mod literal;
 mod parser;
 mod pretty;
-#[cfg(any(test, feature = "samples"))]
-pub mod samples;
+#[cfg(any(test, feature = "reference"))]
+pub mod reference;
 pub mod traits;
 
 // Test utilities - only available in test builds

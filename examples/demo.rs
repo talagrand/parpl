@@ -12,7 +12,7 @@ use parpl::{
     StringPool,
     cel::{
         Builder, CelParser, Expr, PrettyConfig, Result, pretty_print, pretty_print_with_config,
-        samples::cel::ArenaCelWriter, traits::CelWriter,
+        reference::arena::ArenaCelWriter, traits::CelWriter,
     },
 };
 

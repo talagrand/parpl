@@ -1,5 +1,5 @@
 use crate::{
-    common::{Span, Syntax},
+    Span, Syntax,
     scheme::lex::{
         Input, PResult, SpannedToken, Token,
         identifiers::is_dot_subsequent,

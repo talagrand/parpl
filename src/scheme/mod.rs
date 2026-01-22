@@ -1,14 +1,12 @@
 pub mod lex;
-mod primitivenumbers;
 mod reader;
-#[cfg(any(test, feature = "samples"))]
-pub mod samples;
+#[cfg(any(test, feature = "reference"))]
+pub mod reference;
 pub mod traits;
 
 use crate::Span;
 
 // Re-export key types for convenient access (single canonical path)
-pub use primitivenumbers::{PrimitiveOps, SimpleNumber};
 pub use reader::{TokenStream, parse_datum, parse_datum_with_max_depth};
 
 /// Enumerates specific unsupported features that can be reported via

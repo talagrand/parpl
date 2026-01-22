@@ -12,12 +12,12 @@
 // **CEL Spec Reference**: langdef.md lines 270-360 (string/bytes semantics)
 
 use crate::{
+    Interner,
     cel::traits::CelWriter,
     cel::{
         ast::{Literal, RawLiteral},
         error::{Error, ErrorKind, Phase, Result},
     },
-    common::Interner,
 };
 
 //==============================================================================
@@ -467,7 +467,7 @@ pub fn process_literal<W: CelWriter>(
 mod tests {
     use super::*;
     use crate::cel::ast::QuoteStyle;
-    use crate::common::{Interner, Span, StringPool, StringPoolId};
+    use crate::{Interner, Span, StringPool, StringPoolId};
     use bumpalo::Bump;
 
     struct TestContext {
