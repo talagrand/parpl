@@ -218,14 +218,8 @@ impl ErrorMatcher {
                     test_name, end, span.end
                 );
             }
-            (
-                ErrorMatcher::Unsupported(expected_feature),
-                ParseError::Unsupported { feature, .. },
-            ) => {
-                assert_eq!(
-                    expected_feature, feature,
-                    "{test_name}: unsupported feature mismatch"
-                );
+            (ErrorMatcher::Unsupported(expected_kind), ParseError::Unsupported { kind, .. }) => {
+                assert_eq!(expected_kind, kind, "{test_name}: unsupported mismatch");
             }
             _ => panic!("{test_name}: error mismatch. Expected {self:?}, got {err:?}"),
         }
@@ -243,7 +237,7 @@ impl std::fmt::Debug for ErrorMatcher {
                 .field(arg1)
                 .field(arg2)
                 .finish(),
-            Self::Unsupported(msg) => f.debug_tuple("Unsupported").field(msg).finish(),
+            Self::Unsupported(kind) => f.debug_tuple("Unsupported").field(kind).finish(),
         }
     }
 }

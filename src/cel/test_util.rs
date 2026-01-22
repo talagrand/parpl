@@ -5,6 +5,7 @@
 // the boilerplate of creating arenas, interners, and writers.
 
 use crate::{
+    Interner, StringPool, StringPoolId,
     cel::{
         CelParser,
         ast::{BinaryOp, Expr, ExprKind, Literal},
@@ -14,7 +15,6 @@ use crate::{
         pretty::pretty_print,
         reference::arena::ArenaCelWriter,
     },
-    Interner, StringPool, StringPoolId,
 };
 use bumpalo::Bump;
 

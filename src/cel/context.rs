@@ -96,6 +96,7 @@ impl Builder {
     ///     .max_parse_depth(128)
     ///     .build();
     /// ```
+    #[must_use]
     pub fn max_parse_depth(mut self, depth: usize) -> Self {
         self.max_parse_depth = depth;
         self
@@ -115,6 +116,7 @@ impl Builder {
     ///     .max_ast_depth(30)
     ///     .build();
     /// ```
+    #[must_use]
     pub fn max_ast_depth(mut self, depth: usize) -> Self {
         self.max_ast_depth = depth;
         self
@@ -133,6 +135,7 @@ impl Builder {
     ///     .max_nesting_depth(100)
     ///     .build();
     /// ```
+    #[must_use]
     pub fn max_nesting_depth(mut self, depth: usize) -> Self {
         self.max_parse_depth = depth;
         self.max_ast_depth = depth;
@@ -152,6 +155,7 @@ impl Builder {
     ///     .max_call_limit(50_000_000)
     ///     .build();
     /// ```
+    #[must_use]
     pub fn max_call_limit(mut self, limit: usize) -> Self {
         self.max_call_limit = limit;
         self
@@ -170,6 +174,7 @@ impl Builder {
     ///     .strict_mode(true)
     ///     .build();
     /// ```
+    #[must_use]
     pub fn strict_mode(mut self, enabled: bool) -> Self {
         self.strict_mode = enabled;
         self
@@ -185,6 +190,7 @@ impl Builder {
     ///
     /// let parser = Builder::default().build();
     /// ```
+    #[must_use]
     pub fn build(self) -> CelParser {
         CelParser {
             config: ParseConfig {

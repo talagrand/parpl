@@ -1,5 +1,5 @@
 use crate::{
-    common::{NoOpInterner, Span},
+    NoOpInterner, Span,
     scheme::{
         ParseError, Unsupported,
         lex::{self, FiniteRealKind, NumberExactness, Sign},
@@ -36,7 +36,7 @@ impl SchemeNumberOps for MiniNumberOps {
             NumberExactness::Exact | NumberExactness::Inexact => {
                 return Err(ParseError::unsupported(
                     span,
-                    Unsupported::InvalidIntegerFormat,
+                    Unsupported::NumericRepresentation,
                 ));
             }
         }
@@ -48,26 +48,26 @@ impl SchemeNumberOps for MiniNumberOps {
                     let val = match u64::from_str_radix(finite.spelling, radix) {
                         Ok(v) => v,
                         Err(e) => {
-                            let feature = match e.kind() {
+                            let kind = match e.kind() {
                                 std::num::IntErrorKind::PosOverflow
                                 | std::num::IntErrorKind::NegOverflow => {
-                                    Unsupported::IntegerOverflow
+                                    Unsupported::NumericOverflow
                                 }
-                                _ => Unsupported::InvalidIntegerFormat,
+                                _ => Unsupported::NumericRepresentation,
                             };
-                            return Err(ParseError::unsupported(span, feature));
+                            return Err(ParseError::unsupported(span, kind));
                         }
                     };
 
                     let result = match real.effective_sign() {
                         Sign::Positive => i64::try_from(val).map_err(|_| {
-                            ParseError::unsupported(span, Unsupported::IntegerOverflow)
+                            ParseError::unsupported(span, Unsupported::NumericOverflow)
                         })?,
                         Sign::Negative => {
                             if val > i64::MIN.unsigned_abs() {
                                 return Err(ParseError::unsupported(
                                     span,
-                                    Unsupported::IntegerOverflow,
+                                    Unsupported::NumericOverflow,
                                 ));
                             }
                             (val as i64).wrapping_neg()
@@ -76,9 +76,15 @@ impl SchemeNumberOps for MiniNumberOps {
 
                     Ok(result)
                 }
-                _ => Err(ParseError::unsupported(span, Unsupported::NonIntegerNumber)),
+                _ => Err(ParseError::unsupported(
+                    span,
+                    Unsupported::NumericRepresentation,
+                )),
             },
-            _ => Err(ParseError::unsupported(span, Unsupported::NonIntegerNumber)),
+            _ => Err(ParseError::unsupported(
+                span,
+                Unsupported::NumericRepresentation,
+            )),
         }
     }
 
@@ -306,21 +312,18 @@ mod tests {
                     )
                 }
                 (
-                    ErrorMatcher::Unsupported(expected_feature),
-                    ParseError::Unsupported { feature, .. },
+                    ErrorMatcher::Unsupported(expected_kind),
+                    ParseError::Unsupported { kind, .. },
                 ) => {
-                    assert_eq!(
-                        expected_feature, feature,
-                        "{test_name}: unsupported feature mismatch"
-                    )
+                    assert_eq!(expected_kind, kind, "{test_name}: unsupported mismatch")
                 }
-                (ErrorMatcher::Unsupported(expected_feature), ParseError::WriterError(msg)) => {
+                (ErrorMatcher::Unsupported(expected_kind), ParseError::WriterError(msg)) => {
                     // The generic reader wraps writer errors in WriterError(String).
                     // We check if the debug string of the feature is present in the message.
-                    let feature_str = format!("{expected_feature:?}");
+                    let kind_str = format!("{expected_kind:?}");
                     assert!(
-                        msg.contains(&feature_str),
-                        "{test_name}: expected WriterError containing {feature_str:?}, got {msg:?}"
+                        msg.contains(&kind_str),
+                        "{test_name}: expected WriterError containing {kind_str:?}, got {msg:?}"
                     )
                 }
                 _ => panic!("{test_name}: error mismatch. Expected {self:?}, got {err:?}"),
@@ -408,17 +411,23 @@ mod tests {
             TestCase {
                 name: "unsupported_float",
                 input: "1.5",
-                expected: Error(ErrorMatcher::Unsupported(Unsupported::NonIntegerNumber)),
+                expected: Error(ErrorMatcher::Unsupported(
+                    Unsupported::NumericRepresentation,
+                )),
             },
             TestCase {
                 name: "unsupported_exact_number",
                 input: "#e42",
-                expected: Error(ErrorMatcher::Unsupported(Unsupported::InvalidIntegerFormat)),
+                expected: Error(ErrorMatcher::Unsupported(
+                    Unsupported::NumericRepresentation,
+                )),
             },
             TestCase {
                 name: "unsupported_inexact_number",
                 input: "#i42",
-                expected: Error(ErrorMatcher::Unsupported(Unsupported::InvalidIntegerFormat)),
+                expected: Error(ErrorMatcher::Unsupported(
+                    Unsupported::NumericRepresentation,
+                )),
             },
             // Syntax errors
             TestCase {
@@ -445,12 +454,12 @@ mod tests {
             TestCase {
                 name: "number_overflow_max_plus_one",
                 input: "9223372036854775808",
-                expected: Error(ErrorMatcher::Unsupported(Unsupported::IntegerOverflow)),
+                expected: Error(ErrorMatcher::Unsupported(Unsupported::NumericOverflow)),
             },
             TestCase {
                 name: "number_overflow_min_minus_one",
                 input: "-9223372036854775809",
-                expected: Error(ErrorMatcher::Unsupported(Unsupported::IntegerOverflow)),
+                expected: Error(ErrorMatcher::Unsupported(Unsupported::NumericOverflow)),
             },
             // Fold-case directives are not supported in MiniReader; they
             // should be reported as unsupported features rather than

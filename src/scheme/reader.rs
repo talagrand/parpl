@@ -1,7 +1,7 @@
 use crate::{
-    common::{Interner, Span},
+    Interner, Span,
     scheme::{
-        ParseError, Unsupported,
+        LimitExceeded, ParseError,
         lex::{self, FiniteRealKind, NumberExactness, SpannedToken, Token},
         traits::{DatumWriter, SchemeNumberOps},
     },
@@ -32,6 +32,7 @@ const DEFAULT_MAX_DEPTH: u32 = 64;
 impl<'i> TokenStream<'i> {
     /// Create a new token stream from lexed tokens.
     #[inline]
+    #[must_use]
     pub fn new(lexer: lex::Lexer<'i>) -> Self {
         Self {
             lexer,
@@ -41,6 +42,7 @@ impl<'i> TokenStream<'i> {
 
     /// Lex source and create a token stream.
     #[inline]
+    #[must_use]
     pub fn from_source(source: &'i str) -> Self {
         Self::new(lex::lex(source))
     }
@@ -146,7 +148,10 @@ impl<'i> TokenStream<'i> {
             match span {
                 Some(span) => {
                     if depth == 0 {
-                        return Err(ParseError::unsupported(span, Unsupported::DepthLimit));
+                        return Err(ParseError::limit_exceeded(
+                            span,
+                            LimitExceeded::NestingDepth,
+                        ));
                     }
                     let _ = self.raw_next(); // consume #;
                     // Skip the commented datum at one level deeper.
@@ -183,7 +188,10 @@ impl<'i> TokenStream<'i> {
         };
 
         if depth == 0 {
-            return Err(ParseError::unsupported(span, Unsupported::DepthLimit));
+            return Err(ParseError::limit_exceeded(
+                span,
+                LimitExceeded::NestingDepth,
+            ));
         }
 
         match token_type {
@@ -320,7 +328,10 @@ impl<'i> TokenStream<'i> {
         let span = token.span;
 
         if depth == 0 {
-            return Err(ParseError::unsupported(span, Unsupported::DepthLimit));
+            return Err(ParseError::limit_exceeded(
+                span,
+                LimitExceeded::NestingDepth,
+            ));
         }
 
         match token.value {
@@ -404,7 +415,10 @@ impl<'i> TokenStream<'i> {
         depth: u32,
     ) -> Result<(W::Output, Span), ParseError> {
         if depth == 0 {
-            return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
+            return Err(ParseError::limit_exceeded(
+                start_span,
+                LimitExceeded::NestingDepth,
+            ));
         }
 
         let mut elements = Vec::new();
@@ -488,7 +502,10 @@ impl<'i> TokenStream<'i> {
         depth: u32,
     ) -> Result<(W::Output, Span), ParseError> {
         if depth == 0 {
-            return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
+            return Err(ParseError::limit_exceeded(
+                start_span,
+                LimitExceeded::NestingDepth,
+            ));
         }
 
         let mut elements = Vec::new();
@@ -535,7 +552,10 @@ impl<'i> TokenStream<'i> {
         depth: u32,
     ) -> Result<(W::Output, Span), ParseError> {
         if depth == 0 {
-            return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
+            return Err(ParseError::limit_exceeded(
+                start_span,
+                LimitExceeded::NestingDepth,
+            ));
         }
 
         let (datum, datum_span) = self.parse_datum_with_max_depth(writer, depth - 1)?;
@@ -568,7 +588,10 @@ impl<'i> TokenStream<'i> {
         depth: u32,
     ) -> Result<(W::Output, Span), ParseError> {
         if depth == 0 {
-            return Err(ParseError::unsupported(start_span, Unsupported::DepthLimit));
+            return Err(ParseError::limit_exceeded(
+                start_span,
+                LimitExceeded::NestingDepth,
+            ));
         }
 
         let mut elements = Vec::new();
@@ -713,9 +736,8 @@ pub fn parse_datum_with_max_depth<W: DatumWriter>(
 mod tests {
     use super::*;
     use crate::{
-        common::Interner,
+        Interner,
         scheme::{
-            Unsupported,
             lex::Token,
             reference::arena::{ArenaDatumWriter, Datum},
             reference::numbers::SimpleNumber,
@@ -764,7 +786,7 @@ mod tests {
     enum ErrorMatcher {
         Incomplete,
         Syntax(&'static str),
-        UnsupportedDepth,
+        LimitExceeded,
     }
 
     impl TestCase {
@@ -821,7 +843,7 @@ mod tests {
     }
 
     impl DatumMatcher {
-        fn check<I: Interner<Id = crate::common::StringPoolId>>(
+        fn check<I: Interner<Id = crate::StringPoolId>>(
             &self,
             datum: &Datum,
             pool: &I,
@@ -901,13 +923,13 @@ mod tests {
                         "{test_name}: nonterminal mismatch"
                     );
                 }
-                (ErrorMatcher::UnsupportedDepth, ParseError::Unsupported { feature, .. }) => {
-                    assert_eq!(
-                        feature,
-                        &Unsupported::DepthLimit,
-                        "{test_name}: expected depth-limit unsupported error",
-                    );
-                }
+                (
+                    ErrorMatcher::LimitExceeded,
+                    ParseError::LimitExceeded {
+                        kind: LimitExceeded::NestingDepth,
+                        ..
+                    },
+                ) => {}
                 _ => panic!("{test_name}: error mismatch. Expected {self:?}, got {err:?}"),
             }
         }
@@ -930,7 +952,7 @@ mod tests {
         let mut writer = ArenaDatumWriter::new(&arena);
         let result = parse_datum(&input, &mut writer);
         let err = result.expect_err("expected depth-limit error");
-        ErrorMatcher::UnsupportedDepth.check(&err, "depth_limit_enforced_by_default");
+        ErrorMatcher::LimitExceeded.check(&err, "depth_limit_enforced_by_default");
     }
 
     #[test]

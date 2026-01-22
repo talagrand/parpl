@@ -1,6 +1,6 @@
 use super::numbers::{SimpleNumber, SimpleNumberOps};
 use crate::{
-    common::{Span, StringPool, StringPoolId, Syntax},
+    Span, StringPool, StringPoolId, Syntax,
     scheme::{
         ParseError,
         traits::{DatumInspector, DatumKind, DatumWriter},

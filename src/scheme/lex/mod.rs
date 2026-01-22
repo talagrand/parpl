@@ -1,5 +1,5 @@
 use crate::{
-    common::{Span, Syntax},
+    Span, Syntax,
     scheme::{
         ParseError, Unsupported,
         lex::{
@@ -238,7 +238,7 @@ pub enum FoldCaseMode {
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
 pub struct LexConfig {
     /// If true, fold-case directives are rejected as
-    /// `Unsupported::FoldCaseDirectives` and identifiers and character
+    /// [`Unsupported::FoldCaseDirectives`] and identifiers and character
     /// names are always case-sensitive.
     ///
     /// When false (the default), `#!fold-case` / `#!no-fold-case`
@@ -248,7 +248,7 @@ pub struct LexConfig {
     pub reject_fold_case: bool,
 
     /// If true, any comment (line comment `;`, nested comment `#| |#`, or
-    /// datum comment `#;`) is rejected with `Unsupported::Comments`.
+    /// datum comment `#;`) is rejected with [`Unsupported::Comments`].
     ///
     /// When false (the default), comments are treated according to the
     /// normal R7RS rules: line and nested comments are part of
@@ -320,12 +320,14 @@ impl<'i> Lexer<'i> {
     /// Create a new lexer for the given source string with default
     /// configuration.
     #[inline]
+    #[must_use]
     pub fn new(source: &'i str) -> Self {
         Self::with_config(source, LexConfig::default())
     }
 
     /// Create a new lexer for the given source string and configuration.
     #[inline]
+    #[must_use]
     pub fn with_config(source: &'i str, config: LexConfig) -> Self {
         Self {
             input: Input::new(source),
@@ -572,12 +574,14 @@ impl<'i> Iterator for Lexer<'i> {
 /// ```
 /// Convenience constructor using the default `LexConfig`.
 #[inline]
+#[must_use]
 pub fn lex(source: &str) -> Lexer<'_> {
     Lexer::new(source)
 }
 
 /// Construct a lexer with an explicit `LexConfig`.
 #[inline]
+#[must_use]
 pub fn lex_with_config(source: &str, config: LexConfig) -> Lexer<'_> {
     Lexer::with_config(source, config)
 }

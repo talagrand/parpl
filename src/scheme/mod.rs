@@ -9,39 +9,81 @@ use crate::Span;
 // Re-export key types for convenient access (single canonical path)
 pub use reader::{TokenStream, parse_datum, parse_datum_with_max_depth};
 
-/// Enumerates specific unsupported features that can be reported via
-/// `ParseError::Unsupported`.
+// ============================================================================
+// Error Categories
+// ============================================================================
+
+/// Features or formats that a [`DatumWriter`](traits::DatumWriter) or
+/// [`SchemeNumberOps`](traits::SchemeNumberOps) implementation may reject.
+///
+/// These variants represent errors that implementations *can* raise when
+/// they encounter constructs they don't handle. For example:
+/// - A minimal writer might reject vectors or characters
+/// - A lexer configuration might reject comments
+/// - A number implementation might reject floats or bignums
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unsupported {
+    // --- Datum types (rejected by DatumWriter) ---
+    /// Vector literals `#(...)`.
     Vectors,
+    /// Bytevector literals `#u8(...)`.
     Bytevectors,
+    /// Quasiquote/unquote forms.
     Quasiquote,
+    /// Labeled data `#n=` / `#n#`.
     Labels,
+    /// Character literals `#\x`.
     Characters,
-    Comments,
-    DepthLimit,
+    /// Improper (dotted) lists.
     ImproperLists,
-    IntegerOverflow,
-    InvalidIntegerFormat,
-    NonIntegerNumber,
+
+    // --- Lexer restrictions (rejected by LexConfig) ---
+    /// Comments (`;`, `#|...|#`, `#;`) rejected by configuration.
+    Comments,
+    /// Fold-case directives (`#!fold-case`, `#!no-fold-case`) rejected.
     FoldCaseDirectives,
+
+    // --- Number conversion (rejected by SchemeNumberOps) ---
+    /// Integer literal exceeds the target type's range.
+    /// (R7RS recommends arbitrary precision, but implementations may use fixed-width types.)
+    NumericOverflow,
+    /// Number representation not handled by the implementation
+    /// (e.g., floats, rationals, complex numbers, exactness prefixes).
+    NumericRepresentation,
 }
 
 impl std::fmt::Display for Unsupported {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
+            // Datum types
             Unsupported::Vectors => "vectors",
             Unsupported::Bytevectors => "bytevectors",
             Unsupported::Quasiquote => "quasiquote/unquote",
             Unsupported::Labels => "labels",
             Unsupported::Characters => "characters",
-            Unsupported::Comments => "comments",
-            Unsupported::DepthLimit => "maximum nesting depth",
             Unsupported::ImproperLists => "improper lists",
-            Unsupported::IntegerOverflow => "integer overflow",
-            Unsupported::InvalidIntegerFormat => "invalid integer format",
-            Unsupported::NonIntegerNumber => "non-integer number",
+            // Lexer restrictions
+            Unsupported::Comments => "comments",
             Unsupported::FoldCaseDirectives => "fold-case directives",
+            // Number conversion
+            Unsupported::NumericOverflow => "numeric overflow",
+            Unsupported::NumericRepresentation => "unsupported numeric representation",
+        };
+        f.write_str(s)
+    }
+}
+
+/// Safety limits exceeded during parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitExceeded {
+    /// Maximum nesting depth was exceeded.
+    NestingDepth,
+}
+
+impl std::fmt::Display for LimitExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            LimitExceeded::NestingDepth => "maximum nesting depth exceeded",
         };
         f.write_str(s)
     }
@@ -89,13 +131,18 @@ pub enum ParseError {
         message: String,
     },
 
-    /// An unsupported feature was encountered.
-    #[error("unsupported feature at {span:?}: {feature}")]
-    Unsupported { span: Span, feature: Unsupported },
+    /// A feature or format is not supported.
+    #[error("unsupported at {span:?}: {kind}")]
+    Unsupported { span: Span, kind: Unsupported },
+
+    /// A safety limit was exceeded.
+    #[error("limit exceeded at {span:?}: {kind}")]
+    LimitExceeded { span: Span, kind: LimitExceeded },
 }
 
 impl ParseError {
     /// Helper for constructing a lexical error.
+    #[must_use]
     pub fn lexical(span: Span, nonterminal: &'static str, message: impl Into<String>) -> Self {
         ParseError::Lex {
             span,
@@ -105,6 +152,7 @@ impl ParseError {
     }
 
     /// Helper for constructing a syntax error.
+    #[must_use]
     pub fn syntax(span: Span, nonterminal: &'static str, message: impl Into<String>) -> Self {
         ParseError::Syntax {
             span,
@@ -114,7 +162,14 @@ impl ParseError {
     }
 
     /// Helper for constructing an unsupported error.
-    pub fn unsupported(span: Span, feature: Unsupported) -> Self {
-        ParseError::Unsupported { span, feature }
+    #[must_use]
+    pub fn unsupported(span: Span, kind: Unsupported) -> Self {
+        ParseError::Unsupported { span, kind }
+    }
+
+    /// Helper for constructing a limit exceeded error.
+    #[must_use]
+    pub fn limit_exceeded(span: Span, kind: LimitExceeded) -> Self {
+        ParseError::LimitExceeded { span, kind }
     }
 }
