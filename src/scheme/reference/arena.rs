@@ -84,10 +84,6 @@ impl<'a> DatumWriter for ArenaDatumWriter<'a> {
         Ok(Syntax::new(s, Datum::ByteVector(bv)))
     }
 
-    fn null(&mut self, s: Span) -> Result<Self::Output, Self::Error> {
-        Ok(Syntax::new(s, Datum::EmptyList))
-    }
-
     fn list<I>(&mut self, iter: I, s: Span) -> Result<Self::Output, Self::Error>
     where
         I: IntoIterator<Item = Self::Output>,

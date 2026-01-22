@@ -145,10 +145,14 @@ pub trait DatumWriter {
     fn symbol(&mut self, v: Self::StringId, s: Span) -> Result<Self::Output, Self::Error>;
 
     fn bytevector(&mut self, v: &[u8], s: Span) -> Result<Self::Output, Self::Error>;
-    fn null(&mut self, s: Span) -> Result<Self::Output, Self::Error>;
 
     // --- Compounds ---
 
+    /// Construct a proper list from the given elements.
+    ///
+    /// Empty lists (`()` / nil) are also sent here with an empty iterator.
+    /// Implementations are free to represent empty lists however they choose
+    /// (e.g., a dedicated `EmptyList` variant, or `List(vec![])`).
     fn list<I>(&mut self, iter: I, s: Span) -> Result<Self::Output, Self::Error>
     where
         I: IntoIterator<Item = Self::Output>,

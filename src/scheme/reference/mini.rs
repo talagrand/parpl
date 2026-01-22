@@ -133,19 +133,6 @@ impl DatumWriter for MiniDatumWriter {
         Err(ParseError::unsupported(s, Unsupported::Bytevectors))
     }
 
-    fn null(&mut self, _s: Span) -> Result<Self::Output, Self::Error> {
-        // Empty list is represented as List(vec![]) in MiniDatum::List?
-        // Or maybe we should have an EmptyList variant?
-        // minireader.rs says: "Lists (including proper and improper lists, empty list represents nil) List(Vec<Syntax<MiniDatum>>)"
-        // But wait, minireader.rs MiniDatum definition:
-        // List(Vec<Syntax<MiniDatum>>),
-        // It doesn't have EmptyList.
-        // So null is List(vec![]).
-        // But we need a span for it.
-        // Syntax::new(s, MiniDatum::List(vec![]))
-        Ok(MiniDatum::List(vec![]))
-    }
-
     fn list<I>(&mut self, iter: I, _s: Span) -> Result<Self::Output, Self::Error>
     where
         I: IntoIterator<Item = Self::Output>,
