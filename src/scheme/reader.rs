@@ -2,8 +2,8 @@ use crate::{
     common::{Interner, Span},
     scheme::{
         ParseError, Unsupported,
-        datumtraits::{DatumWriter, SchemeNumberOps},
         lex::{self, FiniteRealKind, NumberExactness, SpannedToken, Token},
+        traits::{DatumWriter, SchemeNumberOps},
     },
 };
 

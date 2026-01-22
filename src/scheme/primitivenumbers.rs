@@ -2,8 +2,8 @@ use crate::{
     common::Span,
     scheme::{
         ParseError, Unsupported,
-        datumtraits::SchemeNumberOps,
         lex::{self, FiniteRealKind, NumberExactness, Sign},
+        traits::SchemeNumberOps,
     },
 };
 

@@ -2,8 +2,8 @@ use crate::{
     common::{Span, StringPool, StringPoolId, Syntax},
     scheme::{
         ParseError,
-        datumtraits::{DatumInspector, DatumKind, DatumWriter},
         primitivenumbers::{PrimitiveOps, SimpleNumber},
+        traits::{DatumInspector, DatumKind, DatumWriter},
     },
 };
 use bumpalo::Bump;
