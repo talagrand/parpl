@@ -12,7 +12,7 @@ bumpalo = "3"
 
 [dependencies.parpl]
 path = ".."
-features = ["cel", "scheme", "samples"]
+features = ["cel", "scheme", "reference"]
 
 [[bin]]
 name = "parse_cel"
