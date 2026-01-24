@@ -299,7 +299,7 @@ impl<'i> Lexer<'i> {
                     }
                 }
 
-                Error::lexical(span, nonterminal, e.to_string())
+                Error::syntax(span, nonterminal, e.to_string())
             }
         }
     }
@@ -517,7 +517,7 @@ impl<'i> Lexer<'i> {
         let end = start.saturating_add(ch.len_utf8()).min(self.source.len());
         let span = Span { start, end };
 
-        Err(Error::lexical(
+        Err(Error::syntax(
             span,
             "<token>",
             format!("unexpected character: {ch:?}"),

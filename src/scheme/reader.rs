@@ -707,7 +707,7 @@ pub fn parse_datum_with_max_depth<W: DatumWriter>(
     if !stream.is_empty() {
         // If there are remaining tokens, it's an error for a single datum parse
         let next = stream.peek()?.ok_or(Error::Incomplete)?;
-        return Err(Error::lexical(
+        return Err(Error::syntax(
             next.span,
             "<datum>",
             "unexpected token after datum",

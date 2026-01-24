@@ -112,17 +112,8 @@ pub enum Error {
     #[error("incomplete token; input ends mid-token")]
     IncompleteToken,
 
-    /// A lexical error detected while recognizing a particular
-    /// nonterminal (for example, `<string>` or `<identifier>`).
-    #[error("lexical error in {nonterminal} at {span:?}: {message}")]
-    Lex {
-        span: Span,
-        nonterminal: &'static str,
-        message: String,
-    },
-
-    /// A syntactic error detected while parsing a particular
-    /// nonterminal (for example, `<datum>` or `<expression>`).
+    /// A syntax error detected while lexing or parsing a particular
+    /// nonterminal (for example, `<token>`, `<string>`, or `<datum>`).
     #[error("syntax error in {nonterminal} at {span:?}: {message}")]
     Syntax {
         span: Span,
@@ -140,16 +131,6 @@ pub enum Error {
 }
 
 impl Error {
-    /// Helper for constructing a lexical error.
-    #[must_use]
-    pub fn lexical(span: Span, nonterminal: &'static str, message: impl Into<String>) -> Self {
-        Error::Lex {
-            span,
-            nonterminal,
-            message: message.into(),
-        }
-    }
-
     /// Helper for constructing a syntax error.
     #[must_use]
     pub fn syntax(span: Span, nonterminal: &'static str, message: impl Into<String>) -> Self {
