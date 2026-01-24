@@ -28,8 +28,8 @@ pub enum ErrorKind {
     Syntax(SyntaxError),
     /// Nesting depth exceeded
     NestingDepthExceeded { depth: usize, max: usize },
-    /// Custom error (for extension points)
-    Custom(String),
+    /// Writer error (from CelWriter implementation)
+    WriterError(String),
 }
 
 /// Syntax error details
@@ -170,8 +170,15 @@ impl From<pest::error::Error<Rule>> for Error {
                         message: msg,
                     }
                 } else {
+                    // We only emit NestingDepthExceeded as custom errors during parsing,
+                    // so this branch should never be reached. We handle it defensively
+                    // as a syntax error since it occurs during parsing, not writing.
                     Self {
-                        kind: ErrorKind::Custom(msg.clone()),
+                        kind: ErrorKind::Syntax(SyntaxError {
+                            expected: String::new(),
+                            found: None,
+                            position,
+                        }),
                         span: Some(Span::new(position, position)),
                         message: msg,
                     }
@@ -221,7 +228,7 @@ mod tests {
 
         test_error_with_span: {
             let err = Error::new(
-                ErrorKind::Custom("test error".to_string()),
+                ErrorKind::NestingDepthExceeded { depth: 10, max: 5 },
                 "Test error".to_string(),
             )
             .with_span(Span::new(10, 15));

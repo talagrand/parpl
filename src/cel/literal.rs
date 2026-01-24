@@ -819,11 +819,7 @@ mod tests {
         }
 
         // Sequence of invalid UTF-8 bytes
-        let raw = RawLiteral::Bytes(
-            "\\xFF\\xFE\\xFD",
-            false,
-            QuoteStyle::DoubleQuote,
-        );
+        let raw = RawLiteral::Bytes("\\xFF\\xFE\\xFD", false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.writer()).unwrap();
 
         if let Literal::Bytes(bytes) = result {

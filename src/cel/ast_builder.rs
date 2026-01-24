@@ -23,7 +23,7 @@ use pest::iterators::Pair;
 
 fn map_writer_error<E: std::fmt::Debug>(e: E, span: Span) -> Error {
     Error::new(
-        crate::cel::error::ErrorKind::Custom(format!("{e:?}")),
+        crate::cel::error::ErrorKind::WriterError(format!("{e:?}")),
         "Error constructing AST node".to_string(),
     )
     .with_span(span)

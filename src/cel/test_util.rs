@@ -71,7 +71,7 @@ impl TestContext {
     pub fn ast(&self) -> Result<&'static Expr<'static>> {
         self.ast.ok_or_else(|| {
             crate::cel::error::Error::new(
-                crate::cel::error::ErrorKind::Custom("No AST".into()),
+                crate::cel::error::ErrorKind::WriterError("No AST".into()),
                 "No AST parsed".into(),
             )
         })
