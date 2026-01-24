@@ -10,8 +10,11 @@
 use crate::{Span, cel::parser::Rule};
 use std::fmt;
 
+/// Type alias for a boxed writer error.
+pub type WriterErrorInner = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 /// Main error type for CEL parser operations
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct Error {
     /// The kind of error
     pub kind: ErrorKind,
@@ -22,14 +25,14 @@ pub struct Error {
 }
 
 /// The kind of error that occurred
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum ErrorKind {
     /// Syntax error from the parser
     Syntax(SyntaxError),
     /// Nesting depth exceeded
     NestingDepthExceeded { depth: usize, max: usize },
     /// Writer error (from CelWriter implementation)
-    WriterError(String),
+    WriterError(WriterErrorInner),
 }
 
 /// Syntax error details

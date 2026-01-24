@@ -7,6 +7,12 @@ use crate::{
     },
 };
 
+/// Convert a writer error to a parse error.
+#[inline]
+fn writer_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> Error {
+    Error::WriterError(Box::new(e))
+}
+
 // Datum enum removed. Use generic DatumWriter.
 
 // ============================================================================
@@ -56,17 +62,34 @@ impl<'i> TokenStream<'i> {
     }
 
     /// Internal: peek at the raw next token without consuming.
+    /// Returns `Err` if the lexer produced an error (consuming the error).
+    /// Returns `Ok(None)` at EOF.
+    /// Returns `Ok(Some(&token))` if a token is available.
     #[inline]
-    fn raw_peek(&mut self) -> Option<&Result<SpannedToken<'i>, Error>> {
+    fn raw_peek(&mut self) -> Result<Option<&SpannedToken<'i>>, Error> {
         self.fill_peek();
-        self.peeked.as_ref()
+        match self.peeked.take() {
+            Some(Ok(token)) => {
+                self.peeked = Some(Ok(token));
+                Ok(self.peeked.as_ref().and_then(|r| r.as_ref().ok()))
+            }
+            Some(Err(e)) => Err(e),
+            None => Ok(None),
+        }
     }
 
     /// Internal: consume the peeked token.
+    /// Returns `Err` if the lexer produced an error.
+    /// Returns `Ok(None)` at EOF.
+    /// Returns `Ok(Some(token))` with the consumed token.
     #[inline]
-    fn raw_next(&mut self) -> Option<Result<SpannedToken<'i>, Error>> {
+    fn raw_next(&mut self) -> Result<Option<SpannedToken<'i>>, Error> {
         self.fill_peek();
-        self.peeked.take()
+        match self.peeked.take() {
+            Some(Ok(token)) => Ok(Some(token)),
+            Some(Err(e)) => Err(e),
+            None => Ok(None),
+        }
     }
 
     /// Peek at the next token without consuming it, skipping intertoken
@@ -74,11 +97,7 @@ impl<'i> TokenStream<'i> {
     /// used when skipping comments.
     fn peek_with_max_depth(&mut self, depth: u32) -> Result<Option<&SpannedToken<'i>>, Error> {
         self.consume_intertoken_space_with_max_depth(depth)?;
-        match self.raw_peek() {
-            Some(Ok(token)) => Ok(Some(token)),
-            Some(Err(e)) => Err(e.clone()),
-            None => Ok(None),
-        }
+        self.raw_peek()
     }
 
     /// Public peek that uses the default maximum depth when skipping
@@ -105,11 +124,7 @@ impl<'i> TokenStream<'i> {
     /// with an explicit maximum depth used when skipping comments.
     fn next_token_with_max_depth(&mut self, depth: u32) -> Result<Option<SpannedToken<'i>>, Error> {
         self.consume_intertoken_space_with_max_depth(depth)?;
-        match self.raw_next() {
-            Some(Ok(token)) => Ok(Some(token)),
-            Some(Err(e)) => Err(e),
-            None => Ok(None),
-        }
+        self.raw_next()
     }
 
     /// Public `next_token` that uses the default maximum depth when
@@ -130,26 +145,17 @@ impl<'i> TokenStream<'i> {
     /// when skipping the commented datums.
     fn consume_intertoken_space_with_max_depth(&mut self, depth: u32) -> Result<(), Error> {
         loop {
-            let span = match self.raw_peek() {
-                Some(Ok(token)) => match token.value {
-                    Token::DatumComment => Some(token.span),
-                    _ => None,
-                },
-                Some(Err(e)) => return Err(e.clone()),
-                None => None,
+            let span = match self.raw_peek()? {
+                Some(token) if matches!(token.value, Token::DatumComment) => token.span,
+                _ => break,
             };
 
-            match span {
-                Some(span) => {
-                    if depth == 0 {
-                        return Err(Error::limit_exceeded(span, LimitExceeded::NestingDepth));
-                    }
-                    let _ = self.raw_next(); // consume #;
-                    // Skip the commented datum at one level deeper.
-                    self.skip_one_datum_with_max_depth(depth - 1)?;
-                }
-                None => break,
+            if depth == 0 {
+                return Err(Error::limit_exceeded(span, LimitExceeded::NestingDepth));
             }
+            let _ = self.raw_next(); // consume #;
+            // Skip the commented datum at one level deeper.
+            self.skip_one_datum_with_max_depth(depth - 1)?;
         }
         Ok(())
     }
@@ -169,13 +175,9 @@ impl<'i> TokenStream<'i> {
     fn skip_one_datum_with_max_depth(&mut self, depth: u32) -> Result<(), Error> {
         // First, skip any leading datum comments within this datum.
         self.consume_intertoken_space_with_max_depth(depth)?;
-        let (span, token_type) = {
-            let token = match self.raw_peek() {
-                Some(Ok(token)) => token,
-                Some(Err(e)) => return Err(e.clone()),
-                None => return Ok(()),
-            };
-            (token.span, token.value.clone())
+        let (span, token_type) = match self.raw_peek()? {
+            Some(token) => (token.span, token.value.clone()),
+            None => return Ok(()),
         };
 
         if depth == 0 {
@@ -250,9 +252,8 @@ impl<'i> TokenStream<'i> {
         loop {
             self.consume_intertoken_space_with_max_depth(depth)?;
 
-            let token_type = match self.raw_peek() {
-                Some(Ok(token)) => token.value.clone(),
-                Some(Err(e)) => return Err(e.clone()),
+            let token_type = match self.raw_peek()? {
+                Some(token) => token.value.clone(),
                 None => return Ok(()),
             };
 
@@ -267,7 +268,7 @@ impl<'i> TokenStream<'i> {
                     self.skip_one_datum_with_max_depth(depth - 1)?;
                     // Now expect )
                     self.consume_intertoken_space_with_max_depth(depth)?;
-                    if let Some(Ok(token)) = self.raw_peek()
+                    if let Some(token) = self.raw_peek()?
                         && matches!(token.value, Token::RParen)
                     {
                         let _ = self.raw_next();
@@ -323,31 +324,31 @@ impl<'i> TokenStream<'i> {
             Token::Boolean(b) => writer
                 .bool(b, span)
                 .map(|d| (d, span))
-                .map_err(|e| Error::WriterError(format!("{e:?}"))),
+                .map_err(writer_error),
             Token::Number(n) => {
                 let num = W::N::from_literal(&n, span)?;
                 writer
                     .number(num, span)
                     .map(|d| (d, span))
-                    .map_err(|e| Error::WriterError(format!("{e:?}")))
+                    .map_err(writer_error)
             }
             Token::Character(c) => writer
                 .char(c, span)
                 .map(|d| (d, span))
-                .map_err(|e| Error::WriterError(format!("{e:?}"))),
+                .map_err(writer_error),
             Token::String(s) => {
                 let id = writer.interner().intern(&s);
                 writer
                     .string(id, span)
                     .map(|d| (d, span))
-                    .map_err(|e| Error::WriterError(format!("{e:?}")))
+                    .map_err(writer_error)
             }
             Token::Identifier(s) => {
                 let id = writer.interner().intern(&s);
                 writer
                     .symbol(id, span)
                     .map(|d| (d, span))
-                    .map_err(|e| Error::WriterError(format!("{e:?}")))
+                    .map_err(writer_error)
             }
             Token::LParen => self.parse_list_with_max_depth(writer, span, depth),
             Token::VectorStart => self.parse_vector_with_max_depth(writer, span, depth),
@@ -367,12 +368,12 @@ impl<'i> TokenStream<'i> {
                 writer
                     .labeled(n, datum, full_span)
                     .map(|d| (d, full_span))
-                    .map_err(|e| Error::WriterError(format!("{e:?}")))
+                    .map_err(writer_error)
             }
             Token::LabelRef(n) => writer
                 .label_ref(n, span)
                 .map(|d| (d, span))
-                .map_err(|e| Error::WriterError(format!("{e:?}"))),
+                .map_err(writer_error),
 
             // Invalid start of datum
             Token::RParen | Token::Dot => Err(Error::syntax(
@@ -464,12 +465,12 @@ impl<'i> TokenStream<'i> {
             writer
                 .improper_list(elements, tail, span)
                 .map(|d| (d, span))
-                .map_err(|e| Error::WriterError(format!("{e:?}")))
+                .map_err(writer_error)
         } else {
             writer
                 .list(elements, span)
                 .map(|d| (d, span))
-                .map_err(|e| Error::WriterError(format!("{e:?}")))
+                .map_err(writer_error)
         }
     }
 
@@ -516,7 +517,7 @@ impl<'i> TokenStream<'i> {
         writer
             .vector(elements, span)
             .map(|d| (d, span))
-            .map_err(|e| Error::WriterError(format!("{e:?}")))
+            .map_err(writer_error)
     }
 
     /// Parse an `<abbreviation>` (quote, quasiquote, unquote variants).
@@ -547,15 +548,13 @@ impl<'i> TokenStream<'i> {
         let span = start_span.merge(datum_span);
 
         let sym_id = writer.interner().intern(name);
-        let sym = writer
-            .symbol(sym_id, start_span)
-            .map_err(|e| Error::WriterError(format!("{e:?}")))?;
+        let sym = writer.symbol(sym_id, start_span).map_err(writer_error)?;
 
         // Build (name datum)
         writer
             .list([sym, datum], span)
             .map(|d| (d, span))
-            .map_err(|e| Error::WriterError(format!("{e:?}")))
+            .map_err(writer_error)
     }
 
     /// Parse a `<bytevector>` datum once the `#u8(` prefix has been consumed.
@@ -622,7 +621,7 @@ impl<'i> TokenStream<'i> {
         writer
             .bytevector(&elements, span)
             .map(|d| (d, span))
-            .map_err(|e| Error::WriterError(format!("{e:?}")))
+            .map_err(writer_error)
     }
 }
 
@@ -806,7 +805,11 @@ mod tests {
             match expected {
                 Expected::Success(matchers) => {
                     let mut tokens = Vec::new();
-                    while let Some(tok) = ts.next_token().unwrap() {
+                    let name = self.name;
+                    while let Some(tok) = ts
+                        .next_token()
+                        .unwrap_or_else(|_| panic!("{name}: unexpected lex error"))
+                    {
                         tokens.push(tok);
                     }
 

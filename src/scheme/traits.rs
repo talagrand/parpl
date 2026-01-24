@@ -114,7 +114,8 @@ pub trait DatumInspector: Sized {
 pub trait DatumWriter {
     /// The concrete type being built
     type Output;
-    type Error: Debug;
+    /// The error type returned by this writer
+    type Error: std::error::Error + Send + Sync + 'static;
 
     /// The interner used by this writer.
     ///
@@ -184,20 +185,19 @@ pub trait DatumWriter {
 
     // --- Optimization Hook ---
 
-    /// Optimized copy from an inspector.
+    /// Zero-cost copy of a datum.
     ///
-    /// This method allows the writer to perform a deep copy of the datum
-    /// represented by `inspector`.
+    /// Because `source` is `&Self::Output`, this enforces at compile time
+    /// that the source datum is compatible with this writer (same arena,
+    /// same string pool, same number representation).
     ///
-    /// # Implementation Notes
+    /// For arena-based writers, this is typically just a clone of the
+    /// reference structure - O(1) for atoms, O(n) shallow pointer copies
+    /// for compound structures. No new allocations are needed.
     ///
-    /// Implementors should check if `I::StringId` matches `Self::StringId`.
-    /// If they match (or can be converted cheaply), the copy can be efficient.
-    /// If they do not match, the implementation may need to fail or panic,
-    /// as this trait does not provide an `Interner` to translate IDs.
-    fn copy<I>(&mut self, inspector: &I) -> Result<Self::Output, Self::Error>
-    where
-        I: DatumInspector;
+    /// This is designed for macro expansion where unchanged subtrees
+    /// are copied directly into the output without transformation.
+    fn copy(&mut self, source: &Self::Output) -> Result<Self::Output, Self::Error>;
 }
 
 // NOTE: We intentionally do not define a reader-owned number-literal IR.

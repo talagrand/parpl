@@ -18,6 +18,18 @@ use crate::{
 };
 use bumpalo::Bump;
 
+/// A simple string-based error for test utilities.
+#[derive(Debug)]
+struct TestError(String);
+
+impl std::fmt::Display for TestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for TestError {}
+
 // ============================================================================
 // Test Context
 // ============================================================================
@@ -71,7 +83,7 @@ impl TestContext {
     pub fn ast(&self) -> Result<&'static Expr<'static>> {
         self.ast.ok_or_else(|| {
             crate::cel::error::Error::new(
-                crate::cel::error::ErrorKind::WriterError("No AST".into()),
+                crate::cel::error::ErrorKind::WriterError(Box::new(TestError("No AST".into()))),
                 "No AST parsed".into(),
             )
         })
@@ -175,22 +187,26 @@ pub fn assert_parse_fails(input: &str) {
 
 /// Assert that parsing fails with a specific error kind
 ///
+/// Takes a matcher function that returns `true` if the error kind matches.
+///
 /// # Examples
 /// ```ignore
 /// # use parpl::cel::test_util::*;
 /// # use parpl::cel::ErrorKind;
-/// assert_parse_fails_with("1 +", ErrorKind::Syntax(..));
+/// assert_parse_fails_with("1 +", |k| matches!(k, ErrorKind::Syntax(_)));
 /// ```
 #[track_caller]
-pub fn assert_parse_fails_with(input: &str, expected_kind: ErrorKind) {
+pub fn assert_parse_fails_with<F>(input: &str, matcher: F)
+where
+    F: FnOnce(&ErrorKind) -> bool,
+{
     let mut ctx = TestContext::new(ParseConfig::default());
     match ctx.parse(input) {
-        Ok(()) => panic!("Expected '{input}' to fail with {expected_kind:?}, but it succeeded"),
+        Ok(()) => panic!("Expected '{input}' to fail, but it succeeded"),
         Err(e) => {
             assert!(
-                !(e.kind != expected_kind),
-                "Expected error kind {:?} for '{}', but got {:?}: {}",
-                expected_kind,
+                matcher(&e.kind),
+                "Error kind did not match for '{}', got {:?}: {}",
                 input,
                 e.kind,
                 e

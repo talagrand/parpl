@@ -7,6 +7,7 @@ use crate::{
     },
 };
 use bumpalo::Bump;
+use std::convert::Infallible;
 
 /// Datum syntax as defined in the "External representations" section
 /// of `spec/syn.md`.
@@ -50,7 +51,7 @@ impl<'a> ArenaDatumWriter<'a> {
 
 impl<'a> DatumWriter for ArenaDatumWriter<'a> {
     type Output = Syntax<Datum<'a>>;
-    type Error = (); // Infallible for this sample
+    type Error = Infallible;
     type Interner = StringPool;
     type StringId = StringPoolId;
     type N = SimpleNumberOps;
@@ -144,11 +145,10 @@ impl<'a> DatumWriter for ArenaDatumWriter<'a> {
         Ok(Syntax::new(s, Datum::LabelRef(id)))
     }
 
-    fn copy<I>(&mut self, _inspector: &I) -> Result<Self::Output, Self::Error>
-    where
-        I: DatumInspector,
-    {
-        Err(())
+    fn copy(&mut self, source: &Self::Output) -> Result<Self::Output, Self::Error> {
+        // Zero-cost: clone just copies the reference structure,
+        // all data remains in the same arena.
+        Ok(source.clone())
     }
 }
 

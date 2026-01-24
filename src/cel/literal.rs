@@ -476,7 +476,7 @@ mod tests {
         type Interner = StringPool;
         type Bytes = &'a [u8];
         type Expr = ();
-        type Error = ();
+        type Error = std::convert::Infallible;
 
         fn interner(&mut self) -> &mut Self::Interner {
             self.interner

@@ -19,7 +19,7 @@ pub trait CelWriter {
     type Expr: Clone + PartialEq + Debug;
 
     /// The error type returned by this writer
-    type Error: Debug;
+    type Error: std::error::Error + Send + Sync + 'static;
 
     /// The interner used by this writer
     type Interner: Interner<Id = Self::StringId>;

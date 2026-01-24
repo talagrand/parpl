@@ -13,6 +13,9 @@ pub use reader::{TokenStream, parse_datum, parse_datum_with_max_depth};
 // Error Categories
 // ============================================================================
 
+/// Type alias for a boxed writer error.
+pub type WriterErrorInner = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 /// Features or formats that a [`DatumWriter`](traits::DatumWriter) or
 /// [`SchemeNumberOps`](traits::SchemeNumberOps) implementation may reject.
 ///
@@ -90,7 +93,7 @@ impl std::fmt::Display for LimitExceeded {
 }
 
 /// Top-level error type for Scheme parsing.
-#[derive(Debug, thiserror::Error, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The input ends in the middle of a grammatically valid construct
     /// and more characters are required to decide the result.
@@ -100,8 +103,9 @@ pub enum Error {
     #[error("input is incomplete; more data required")]
     Incomplete,
 
+    /// An error from the [`DatumWriter`](traits::DatumWriter) implementation.
     #[error("writer error: {0}")]
-    WriterError(String),
+    WriterError(WriterErrorInner),
 
     /// The input ends in the middle of a token (e.g., `#\`, `1e+`, `3/`).
     ///

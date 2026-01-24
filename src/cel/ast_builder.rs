@@ -21,9 +21,9 @@ use crate::{
 };
 use pest::iterators::Pair;
 
-fn map_writer_error<E: std::fmt::Debug>(e: E, span: Span) -> Error {
+fn map_writer_error<E: std::error::Error + Send + Sync + 'static>(e: E, span: Span) -> Error {
     Error::new(
-        crate::cel::error::ErrorKind::WriterError(format!("{e:?}")),
+        crate::cel::error::ErrorKind::WriterError(Box::new(e)),
         "Error constructing AST node".to_string(),
     )
     .with_span(span)

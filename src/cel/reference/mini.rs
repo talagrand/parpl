@@ -36,6 +36,17 @@ pub enum MiniError {
     UnsupportedNull,
 }
 
+impl std::fmt::Display for MiniError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MiniError::UnsupportedFloat => write!(f, "floats are not supported"),
+            MiniError::UnsupportedNull => write!(f, "null is not supported"),
+        }
+    }
+}
+
+impl std::error::Error for MiniError {}
+
 pub struct MiniCelWriter {
     interner: NoOpInterner,
 }

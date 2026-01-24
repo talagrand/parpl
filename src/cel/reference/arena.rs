@@ -26,7 +26,7 @@ impl<'a, 'arena> CelWriter for ArenaCelWriter<'a, 'arena> {
     type Interner = StringPool;
     type Bytes = &'arena [u8];
     type Expr = &'arena Expr<'arena>;
-    type Error = ();
+    type Error = std::convert::Infallible;
 
     fn interner(&mut self) -> &mut Self::Interner {
         self.interner

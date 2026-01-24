@@ -3,7 +3,7 @@ use crate::{
     scheme::{
         Error, Unsupported,
         lex::{self, FiniteRealKind, NumberExactness, Sign},
-        traits::{DatumInspector, DatumWriter, SchemeNumberOps},
+        traits::{DatumWriter, SchemeNumberOps},
     },
 };
 
@@ -163,11 +163,8 @@ impl DatumWriter for MiniDatumWriter {
         Err(Error::unsupported(s, Unsupported::Labels))
     }
 
-    fn copy<I>(&mut self, _inspector: &I) -> Result<Self::Output, Self::Error>
-    where
-        I: DatumInspector,
-    {
-        Err(Error::unsupported(Span::new(0, 0), Unsupported::Quasiquote)) // Just a dummy error, copy not supported
+    fn copy(&mut self, source: &Self::Output) -> Result<Self::Output, Self::Error> {
+        Ok(source.clone())
     }
 }
 
@@ -285,10 +282,11 @@ mod tests {
                 (ErrorMatcher::Unsupported(expected_kind), Error::Unsupported { kind, .. }) => {
                     assert_eq!(expected_kind, kind, "{test_name}: unsupported mismatch")
                 }
-                (ErrorMatcher::Unsupported(expected_kind), Error::WriterError(msg)) => {
-                    // The generic reader wraps writer errors in WriterError(String).
-                    // We check if the debug string of the feature is present in the message.
-                    let kind_str = format!("{expected_kind:?}");
+                (ErrorMatcher::Unsupported(expected_kind), Error::WriterError(inner)) => {
+                    // The generic reader wraps writer errors in WriterError.
+                    // Check if the feature name is present in the message.
+                    let kind_str = format!("{expected_kind}");
+                    let msg = inner.to_string();
                     assert!(
                         msg.contains(&kind_str),
                         "{test_name}: expected WriterError containing {kind_str:?}, got {msg:?}"
