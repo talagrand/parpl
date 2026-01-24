@@ -16,7 +16,7 @@ use crate::{
     cel::traits::CelWriter,
     cel::{
         ast::{Literal, RawLiteral},
-        error::{Error, ErrorKind, Result},
+        error::{Error, Result},
     },
 };
 
@@ -396,66 +396,47 @@ pub fn process_bytes_escapes<W: CelWriter>(s: &str, writer: &mut W) -> Result<W:
 /// For strings and bytes:
 /// - If `is_raw` is true, no escape processing is performed
 /// - If `is_raw` is false, escape sequences are processed
+/// - String interning happens AFTER processing (not before)
 ///
 /// For numbers:
-/// - Parse and validate the numeric format
+/// - Parse and validate the numeric format directly from borrowed input
 /// - Check for overflow
 ///
 /// Returns a `Literal` with all values parsed and validated.
 pub fn process_literal<W: CelWriter>(
-    raw: &RawLiteral<W::StringId>,
+    raw: &RawLiteral<'_>,
     writer: &mut W,
 ) -> Result<Literal<W::StringId, W::Bytes>> {
-    #[inline]
-    fn resolve_required<W: CelWriter>(writer: &W, id: &W::StringId) -> Result<String> {
-        writer
-            .interner_ref()
-            .resolve(id)
-            .map(|s| s.to_string())
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Custom("unresolved interned string id".to_string()),
-                    format!("unresolved interned string id: {id:?}"),
-                )
-            })
-    }
-
     match raw {
-        RawLiteral::Int(id) => {
-            let s = resolve_required(writer, id)?;
-            let value = parse_int(&s)?;
+        RawLiteral::Int(s) => {
+            let value = parse_int(s)?;
             Ok(Literal::Int(value))
         }
-        RawLiteral::UInt(id) => {
-            let s = resolve_required(writer, id)?;
-            let value = parse_uint(&s)?;
+        RawLiteral::UInt(s) => {
+            let value = parse_uint(s)?;
             Ok(Literal::UInt(value))
         }
-        RawLiteral::Float(id) => {
-            let s = resolve_required(writer, id)?;
-            let value = parse_float(&s)?;
+        RawLiteral::Float(s) => {
+            let value = parse_float(s)?;
             Ok(Literal::Float(value))
         }
         RawLiteral::String(content, is_raw, _quote_style) => {
             if *is_raw {
-                // Raw strings: no escape processing
-                Ok(Literal::String(content.clone()))
+                // Raw strings: no escape processing, intern directly
+                Ok(Literal::String(writer.interner().intern(content)))
             } else {
-                // Process escape sequences
-                let content_str = resolve_required(writer, content)?;
-                let processed = process_string_escapes(&content_str, writer)?;
+                // Process escape sequences, then intern the result
+                let processed = process_string_escapes(content, writer)?;
                 Ok(Literal::String(processed))
             }
         }
         RawLiteral::Bytes(content, is_raw, _quote_style) => {
             if *is_raw {
                 // Raw bytes: no escape processing, just convert string to bytes
-                let content_str = resolve_required(writer, content)?;
-                Ok(Literal::Bytes(writer.bytes(content_str.as_bytes())))
+                Ok(Literal::Bytes(writer.bytes(content.as_bytes())))
             } else {
                 // Process escape sequences
-                let content_str = resolve_required(writer, content)?;
-                let processed = process_bytes_escapes(&content_str, writer)?;
+                let processed = process_bytes_escapes(content, writer)?;
                 Ok(Literal::Bytes(processed))
             }
         }
@@ -716,27 +697,27 @@ mod tests {
         let mut ctx = TestContext::default();
 
         // Decimal integers
-        let raw = RawLiteral::Int(ctx.interner.intern("123"));
+        let raw = RawLiteral::Int("123");
         assert_eq!(
             process_literal(&raw, &mut ctx.writer()).unwrap(),
             Literal::Int(123)
         );
 
-        let raw = RawLiteral::Int(ctx.interner.intern("-456"));
+        let raw = RawLiteral::Int("-456");
         assert_eq!(
             process_literal(&raw, &mut ctx.writer()).unwrap(),
             Literal::Int(-456)
         );
 
         // Hex integers
-        let raw = RawLiteral::Int(ctx.interner.intern("0xFF"));
+        let raw = RawLiteral::Int("0xFF");
         assert_eq!(
             process_literal(&raw, &mut ctx.writer()).unwrap(),
             Literal::Int(255)
         );
 
         // Unsigned integers
-        let raw = RawLiteral::UInt(ctx.interner.intern("789"));
+        let raw = RawLiteral::UInt("789");
         assert_eq!(
             process_literal(&raw, &mut ctx.writer()).unwrap(),
             Literal::UInt(789)
@@ -747,7 +728,7 @@ mod tests {
     fn test_process_literal_floats() {
         let mut ctx = TestContext::default();
 
-        let raw = RawLiteral::Float(ctx.interner.intern("3.14"));
+        let raw = RawLiteral::Float("3.14");
         if let Literal::Float(val) = process_literal(&raw, &mut ctx.writer()).unwrap() {
             #[expect(clippy::approx_constant)] // Test value, not using constant
             {
@@ -763,16 +744,17 @@ mod tests {
         let mut ctx = TestContext::default();
 
         // Raw string - no processing
-        let content = ctx.interner.intern("hello\\nworld");
-        let raw = RawLiteral::String(content, true, QuoteStyle::DoubleQuote);
-        assert_eq!(
-            process_literal(&raw, &mut ctx.writer()).unwrap(),
-            Literal::String(content)
-        );
+        let raw = RawLiteral::String("hello\\nworld", true, QuoteStyle::DoubleQuote);
+        let lit = process_literal(&raw, &mut ctx.writer()).unwrap();
+        match lit {
+            Literal::String(id) => {
+                assert_eq!(ctx.interner.resolve(&id).unwrap(), "hello\\nworld");
+            }
+            _ => panic!("Expected String literal"),
+        }
 
         // Non-raw string - process escapes
-        let content = ctx.interner.intern("hello\\nworld");
-        let raw = RawLiteral::String(content, false, QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::String("hello\\nworld", false, QuoteStyle::DoubleQuote);
         let lit = process_literal(&raw, &mut ctx.writer()).unwrap();
         match lit {
             Literal::String(id) => {
@@ -813,7 +795,7 @@ mod tests {
         let mut ctx = TestContext::default();
 
         // \xFF is byte 255 - NOT valid UTF-8 on its own
-        let raw = RawLiteral::Bytes(ctx.interner.intern("\\xFF"), false, QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::Bytes("\\xFF", false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.writer()).unwrap();
 
         if let Literal::Bytes(bytes) = result {
@@ -826,7 +808,7 @@ mod tests {
         }
 
         // \377 (octal) is also byte 255
-        let raw = RawLiteral::Bytes(ctx.interner.intern("\\377"), false, QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::Bytes("\\377", false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.writer()).unwrap();
 
         if let Literal::Bytes(bytes) = result {
@@ -838,7 +820,7 @@ mod tests {
 
         // Sequence of invalid UTF-8 bytes
         let raw = RawLiteral::Bytes(
-            ctx.interner.intern("\\xFF\\xFE\\xFD"),
+            "\\xFF\\xFE\\xFD",
             false,
             QuoteStyle::DoubleQuote,
         );
@@ -859,7 +841,7 @@ mod tests {
         let mut ctx = TestContext::default();
 
         // ASCII is valid UTF-8
-        let raw = RawLiteral::Bytes(ctx.interner.intern("abc"), false, QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::Bytes("abc", false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.writer()).unwrap();
 
         if let Literal::Bytes(bytes) = result {
@@ -870,7 +852,7 @@ mod tests {
         }
 
         // CEL Spec example (line 335): b"ÿ" is bytes [195, 191] (UTF-8 of ÿ)
-        let raw = RawLiteral::Bytes(ctx.interner.intern("ÿ"), false, QuoteStyle::DoubleQuote);
+        let raw = RawLiteral::Bytes("ÿ", false, QuoteStyle::DoubleQuote);
         let result = process_literal(&raw, &mut ctx.writer()).unwrap();
 
         if let Literal::Bytes(bytes) = result {

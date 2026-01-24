@@ -89,19 +89,22 @@ pub enum ExprKind<'arena> {
 ///
 /// This represents the literal as it appears in the source code, before any
 /// processing or validation. The ast_builder converts these to `Literal` nodes.
+///
+/// The lifetime `'a` borrows from the input source text, avoiding interning
+/// until after literal processing (escape sequences, number parsing, etc.).
 #[derive(Debug, Clone, PartialEq)]
-pub enum RawLiteral<S> {
+pub enum RawLiteral<'a> {
     /// Integer literal: "123", "0xFF", "-456"
     /// CEL Spec (line 145): INT_LIT ::= -? DIGIT+ | -? 0x HEXDIGIT+
-    Int(S),
+    Int(&'a str),
 
     /// Unsigned integer literal: "123", "0xFF" (without 'u' suffix)
     /// CEL Spec (line 146): UINT_LIT ::= INT_LIT [uU]
-    UInt(S),
+    UInt(&'a str),
 
     /// Floating-point literal: "3.14", "1e10", ".5"
     /// CEL Spec (line 147): FLOAT_LIT
-    Float(S),
+    Float(&'a str),
 
     /// String literal: raw content between quotes
     /// CEL Spec (lines 149-153): STRING_LIT
@@ -109,12 +112,12 @@ pub enum RawLiteral<S> {
     /// - content: the text between quotes (without the quotes themselves)
     /// - is_raw: true if prefixed with r/R (no escape processing needed)
     /// - quote_style: which quote delimiters were used
-    String(S, bool, QuoteStyle),
+    String(&'a str, bool, QuoteStyle),
 
     /// Bytes literal: raw content between quotes
     /// CEL Spec (line 154): BYTES_LIT = [bB] STRING_LIT
     /// Stores: (content, is_raw, quote_style)
-    Bytes(S, bool, QuoteStyle),
+    Bytes(&'a str, bool, QuoteStyle),
 
     /// Boolean literal: true, false
     /// CEL Spec (line 160): BOOL_LIT

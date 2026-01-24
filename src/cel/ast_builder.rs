@@ -662,19 +662,19 @@ fn process_literal_pair<W: CelWriter>(
     };
 
     let raw_literal = match inner.as_rule() {
-        Rule::int_lit => RawLiteral::Int(writer.interner().intern(inner.as_str())),
+        Rule::int_lit => RawLiteral::Int(inner.as_str()),
         Rule::uint_lit => {
             let s = inner.as_str();
             let s_without_suffix = s
                 .strip_suffix('u')
                 .or_else(|| s.strip_suffix('U'))
                 .expect("Parser validated: uint_lit ends with 'u' or 'U'");
-            RawLiteral::UInt(writer.interner().intern(s_without_suffix))
+            RawLiteral::UInt(s_without_suffix)
         }
-        Rule::float_lit => RawLiteral::Float(writer.interner().intern(inner.as_str())),
+        Rule::float_lit => RawLiteral::Float(inner.as_str()),
         Rule::string_lit => {
             let s = inner.as_str();
-            let (content, is_raw, quote_style) = parse_string_literal(s, writer);
+            let (content, is_raw, quote_style) = parse_string_literal(s);
             RawLiteral::String(content, is_raw, quote_style)
         }
         Rule::bytes_lit => {
@@ -683,7 +683,7 @@ fn process_literal_pair<W: CelWriter>(
                 .strip_prefix('b')
                 .or_else(|| s.strip_prefix('B'))
                 .expect("Parser validated: bytes_lit starts with 'b' or 'B'");
-            let (content, is_raw, quote_style) = parse_string_literal(s_without_prefix, writer);
+            let (content, is_raw, quote_style) = parse_string_literal(s_without_prefix);
             RawLiteral::Bytes(content, is_raw, quote_style)
         }
         Rule::bool_lit => RawLiteral::Bool(inner.as_str() == "true"),
@@ -698,7 +698,7 @@ fn process_literal_pair<W: CelWriter>(
 ///
 /// **CEL-RESTRICTED**: Escape sequences are NOT processed here.
 /// They will be processed during value construction.
-fn parse_string_literal<W: CelWriter>(s: &str, writer: &mut W) -> (W::StringId, bool, QuoteStyle) {
+fn parse_string_literal(s: &str) -> (&str, bool, QuoteStyle) {
     // Check for raw string prefix using pattern matching
     let (s, is_raw) = if let Some(rest) = s.strip_prefix('r').or_else(|| s.strip_prefix('R')) {
         (rest, true)
@@ -731,7 +731,7 @@ fn parse_string_literal<W: CelWriter>(s: &str, writer: &mut W) -> (W::StringId, 
         unreachable!("invalid string literal: {}", s)
     };
 
-    (writer.interner().intern(content), is_raw, quote_style)
+    (content, is_raw, quote_style)
 }
 
 /// Build an expression list
