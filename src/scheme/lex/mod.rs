@@ -1,7 +1,7 @@
 use crate::{
     Span, Syntax,
     scheme::{
-        ParseError, Unsupported,
+        Error, Unsupported,
         lex::{
             boolean::lex_boolean,
             identifiers::lex_identifier,
@@ -271,21 +271,21 @@ pub struct Lexer<'i> {
 }
 
 impl<'i> Lexer<'i> {
-    /// Map a winnow error into a `ParseError` with a span derived
+    /// Map a winnow error into a `Error` with a span derived
     /// from the given token start and the current input offset.
     #[inline]
-    fn map_lex_error(&mut self, start: usize, err: ErrMode<ContextError>) -> ParseError {
+    fn map_lex_error(&mut self, start: usize, err: ErrMode<ContextError>) -> Error {
         let end = self.input.current_token_start();
         let end = if end > start { end } else { start + 1 };
         let span = Span { start, end };
 
         match err {
-            ErrMode::Incomplete(_) => ParseError::Incomplete,
+            ErrMode::Incomplete(_) => Error::Incomplete,
             ErrMode::Cut(e) | ErrMode::Backtrack(e) => {
                 // Check for the special incomplete-token sentinel.
                 for ctx in e.context() {
                     if let StrContext::Label(INCOMPLETE_TOKEN_LABEL) = ctx {
-                        return ParseError::IncompleteToken;
+                        return Error::IncompleteToken;
                     }
                 }
 
@@ -299,14 +299,14 @@ impl<'i> Lexer<'i> {
                     }
                 }
 
-                ParseError::lexical(span, nonterminal, e.to_string())
+                Error::lexical(span, nonterminal, e.to_string())
             }
         }
     }
 
     /// Run a lexing parser starting at `start`, mapping backtrack to
-    /// `Ok(None)` and other errors into `ParseError`.
-    fn run_lex<O, F>(&mut self, start: usize, parser: F) -> Result<Option<O>, ParseError>
+    /// `Ok(None)` and other errors into `Error`.
+    fn run_lex<O, F>(&mut self, start: usize, parser: F) -> Result<Option<O>, Error>
     where
         F: FnOnce(&mut Input<'i>) -> PResult<O>,
     {
@@ -339,7 +339,7 @@ impl<'i> Lexer<'i> {
 
     /// Lex a single token from the input stream, returning `Ok(None)` at EOF.
     /// This driver uses first-character dispatch for efficiency, then delegates to the canonical lex_* parsers.
-    fn token_with_span(&mut self) -> Result<Option<SpannedToken<'i>>, ParseError> {
+    fn token_with_span(&mut self) -> Result<Option<SpannedToken<'i>>, Error> {
         // Skip `<intertoken space>` before each token.
         let start_before = self.input.current_token_start();
 
@@ -353,7 +353,7 @@ impl<'i> Lexer<'i> {
                 start: start_before,
                 end,
             };
-            return Err(ParseError::unsupported(span, Unsupported::Comments));
+            return Err(Error::unsupported(span, Unsupported::Comments));
         }
 
         let start = self.input.current_token_start();
@@ -426,7 +426,7 @@ impl<'i> Lexer<'i> {
                 // Hash punctuation: #(, #u8(, #;, #n=, #n#
                 if let Some(spanned) = self.run_lex(start, lex_hash_punctuation)? {
                     if self.config.reject_comments && spanned.value == Token::DatumComment {
-                        return Err(ParseError::unsupported(spanned.span, Unsupported::Comments));
+                        return Err(Error::unsupported(spanned.span, Unsupported::Comments));
                     }
                     return Ok(Some(spanned));
                 }
@@ -437,10 +437,7 @@ impl<'i> Lexer<'i> {
                     let span = Span { start, end };
 
                     if self.config.reject_fold_case {
-                        return Err(ParseError::unsupported(
-                            span,
-                            Unsupported::FoldCaseDirectives,
-                        ));
+                        return Err(Error::unsupported(span, Unsupported::FoldCaseDirectives));
                     }
 
                     self.fold_case_mode = mode;
@@ -520,7 +517,7 @@ impl<'i> Lexer<'i> {
         let end = start.saturating_add(ch.len_utf8()).min(self.source.len());
         let span = Span { start, end };
 
-        Err(ParseError::lexical(
+        Err(Error::lexical(
             span,
             "<token>",
             format!("unexpected character: {ch:?}"),
@@ -529,7 +526,7 @@ impl<'i> Lexer<'i> {
 }
 
 impl<'i> Iterator for Lexer<'i> {
-    type Item = Result<SpannedToken<'i>, ParseError>;
+    type Item = Result<SpannedToken<'i>, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.token_with_span() {

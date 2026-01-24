@@ -155,17 +155,17 @@ fn assert_infnan(
 
 impl TestCase {
     fn run(&self) {
-        let result: Result<Vec<SpannedToken>, ParseError> = lex(self.input).collect();
+        let result: Result<Vec<SpannedToken>, Error> = lex(self.input).collect();
         self.run_with_result(result);
     }
 
     fn run_with_config(&self, config: LexConfig) {
-        let result: Result<Vec<SpannedToken>, ParseError> =
+        let result: Result<Vec<SpannedToken>, Error> =
             lex_with_config(self.input, config).collect();
         self.run_with_result(result);
     }
 
-    fn run_with_result(&self, result: Result<Vec<SpannedToken>, ParseError>) {
+    fn run_with_result(&self, result: Result<Vec<SpannedToken>, Error>) {
         match &self.expected {
             Expected::Tokens(expected_tokens) => {
                 let tokens = result.unwrap_or_else(|e| {
@@ -196,13 +196,13 @@ impl TestCase {
 }
 
 impl ErrorMatcher {
-    fn check(&self, err: &ParseError, test_name: &str) {
+    fn check(&self, err: &Error, test_name: &str) {
         match (self, err) {
-            (ErrorMatcher::Incomplete, ParseError::Incomplete) => {}
-            (ErrorMatcher::IncompleteToken, ParseError::IncompleteToken) => {}
+            (ErrorMatcher::Incomplete, Error::Incomplete) => {}
+            (ErrorMatcher::IncompleteToken, Error::IncompleteToken) => {}
             (
                 ErrorMatcher::LexSpan(nt, start, end),
-                ParseError::Lex {
+                Error::Lex {
                     span, nonterminal, ..
                 },
             ) => {
@@ -218,7 +218,7 @@ impl ErrorMatcher {
                     test_name, end, span.end
                 );
             }
-            (ErrorMatcher::Unsupported(expected_kind), ParseError::Unsupported { kind, .. }) => {
+            (ErrorMatcher::Unsupported(expected_kind), Error::Unsupported { kind, .. }) => {
                 assert_eq!(expected_kind, kind, "{test_name}: unsupported mismatch");
             }
             _ => panic!("{test_name}: error mismatch. Expected {self:?}, got {err:?}"),

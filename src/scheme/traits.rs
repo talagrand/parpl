@@ -1,6 +1,6 @@
 use crate::{
     Interner, Span, StringId,
-    scheme::{ParseError, lex},
+    scheme::{Error, lex},
 };
 use std::fmt::Debug;
 
@@ -31,7 +31,7 @@ pub trait SchemeNumberOps: Debug + Sized {
 
     /// The single lowering hook.
     /// The Reader calls this once per number token.
-    fn from_literal(lit: &lex::NumberLiteral<'_>, span: Span) -> Result<Self::Number, ParseError>;
+    fn from_literal(lit: &lex::NumberLiteral<'_>, span: Span) -> Result<Self::Number, Error>;
 
     /// The semantic equality hook.
     /// Required for `syntax-rules` pattern matching (e.g. matching `1` against `1.0`).

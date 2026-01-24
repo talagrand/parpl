@@ -1,7 +1,7 @@
 use crate::{
     NoOpInterner, Span,
     scheme::{
-        ParseError, Unsupported,
+        Error, Unsupported,
         lex::{self, FiniteRealKind, NumberExactness, Sign},
         traits::{DatumInspector, DatumWriter, SchemeNumberOps},
     },
@@ -27,17 +27,14 @@ pub struct MiniNumberOps;
 impl SchemeNumberOps for MiniNumberOps {
     type Number = i64;
 
-    fn from_literal(lit: &lex::NumberLiteral<'_>, span: Span) -> Result<Self::Number, ParseError> {
+    fn from_literal(lit: &lex::NumberLiteral<'_>, span: Span) -> Result<Self::Number, Error> {
         // MiniScheme only supports integers.
         // Logic adapted from minireader.rs parse_number
 
         match lit.kind.exactness {
             NumberExactness::Unspecified => {}
             NumberExactness::Exact | NumberExactness::Inexact => {
-                return Err(ParseError::unsupported(
-                    span,
-                    Unsupported::NumericRepresentation,
-                ));
+                return Err(Error::unsupported(span, Unsupported::NumericRepresentation));
             }
         }
 
@@ -55,20 +52,16 @@ impl SchemeNumberOps for MiniNumberOps {
                                 }
                                 _ => Unsupported::NumericRepresentation,
                             };
-                            return Err(ParseError::unsupported(span, kind));
+                            return Err(Error::unsupported(span, kind));
                         }
                     };
 
                     let result = match real.effective_sign() {
-                        Sign::Positive => i64::try_from(val).map_err(|_| {
-                            ParseError::unsupported(span, Unsupported::NumericOverflow)
-                        })?,
+                        Sign::Positive => i64::try_from(val)
+                            .map_err(|_| Error::unsupported(span, Unsupported::NumericOverflow))?,
                         Sign::Negative => {
                             if val > i64::MIN.unsigned_abs() {
-                                return Err(ParseError::unsupported(
-                                    span,
-                                    Unsupported::NumericOverflow,
-                                ));
+                                return Err(Error::unsupported(span, Unsupported::NumericOverflow));
                             }
                             (val as i64).wrapping_neg()
                         }
@@ -76,15 +69,9 @@ impl SchemeNumberOps for MiniNumberOps {
 
                     Ok(result)
                 }
-                _ => Err(ParseError::unsupported(
-                    span,
-                    Unsupported::NumericRepresentation,
-                )),
+                _ => Err(Error::unsupported(span, Unsupported::NumericRepresentation)),
             },
-            _ => Err(ParseError::unsupported(
-                span,
-                Unsupported::NumericRepresentation,
-            )),
+            _ => Err(Error::unsupported(span, Unsupported::NumericRepresentation)),
         }
     }
 
@@ -100,7 +87,7 @@ pub struct MiniDatumWriter {
 
 impl DatumWriter for MiniDatumWriter {
     type Output = MiniDatum;
-    type Error = ParseError;
+    type Error = Error;
     type Interner = NoOpInterner;
     type StringId = String;
     type N = MiniNumberOps;
@@ -118,7 +105,7 @@ impl DatumWriter for MiniDatumWriter {
     }
 
     fn char(&mut self, _v: char, s: Span) -> Result<Self::Output, Self::Error> {
-        Err(ParseError::unsupported(s, Unsupported::Characters))
+        Err(Error::unsupported(s, Unsupported::Characters))
     }
 
     fn string(&mut self, v: Self::StringId, _s: Span) -> Result<Self::Output, Self::Error> {
@@ -130,7 +117,7 @@ impl DatumWriter for MiniDatumWriter {
     }
 
     fn bytevector(&mut self, _v: &[u8], s: Span) -> Result<Self::Output, Self::Error> {
-        Err(ParseError::unsupported(s, Unsupported::Bytevectors))
+        Err(Error::unsupported(s, Unsupported::Bytevectors))
     }
 
     fn list<I>(&mut self, iter: I, _s: Span) -> Result<Self::Output, Self::Error>
@@ -152,7 +139,7 @@ impl DatumWriter for MiniDatumWriter {
         I: IntoIterator<Item = Self::Output>,
         I::IntoIter: ExactSizeIterator,
     {
-        Err(ParseError::unsupported(s, Unsupported::ImproperLists))
+        Err(Error::unsupported(s, Unsupported::ImproperLists))
     }
 
     fn vector<I>(&mut self, _iter: I, s: Span) -> Result<Self::Output, Self::Error>
@@ -160,7 +147,7 @@ impl DatumWriter for MiniDatumWriter {
         I: IntoIterator<Item = Self::Output>,
         I::IntoIter: ExactSizeIterator,
     {
-        Err(ParseError::unsupported(s, Unsupported::Vectors))
+        Err(Error::unsupported(s, Unsupported::Vectors))
     }
 
     fn labeled(
@@ -169,29 +156,26 @@ impl DatumWriter for MiniDatumWriter {
         _inner: Self::Output,
         s: Span,
     ) -> Result<Self::Output, Self::Error> {
-        Err(ParseError::unsupported(s, Unsupported::Labels))
+        Err(Error::unsupported(s, Unsupported::Labels))
     }
 
     fn label_ref(&mut self, _id: u64, s: Span) -> Result<Self::Output, Self::Error> {
-        Err(ParseError::unsupported(s, Unsupported::Labels))
+        Err(Error::unsupported(s, Unsupported::Labels))
     }
 
     fn copy<I>(&mut self, _inspector: &I) -> Result<Self::Output, Self::Error>
     where
         I: DatumInspector,
     {
-        Err(ParseError::unsupported(
-            Span::new(0, 0),
-            Unsupported::Quasiquote,
-        )) // Just a dummy error, copy not supported
+        Err(Error::unsupported(Span::new(0, 0), Unsupported::Quasiquote)) // Just a dummy error, copy not supported
     }
 }
 
-pub fn read(source: &str) -> Result<MiniDatum, ParseError> {
+pub fn read(source: &str) -> Result<MiniDatum, Error> {
     read_with_max_depth(source, 64)
 }
 
-pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<MiniDatum, ParseError> {
+pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<MiniDatum, Error> {
     let lexer = crate::scheme::lex::lex_with_config(
         source,
         crate::scheme::lex::LexConfig {
@@ -209,7 +193,7 @@ pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<MiniDatum, Pa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scheme::{ParseError, Unsupported};
+    use crate::scheme::{Error, Unsupported};
 
     struct TestCase {
         name: &'static str,
@@ -289,22 +273,19 @@ mod tests {
     }
 
     impl ErrorMatcher {
-        fn check(&self, err: &ParseError, test_name: &str) {
+        fn check(&self, err: &Error, test_name: &str) {
             match (self, err) {
-                (ErrorMatcher::Incomplete, ParseError::Incomplete) => {}
-                (ErrorMatcher::Syntax(expected_msg), ParseError::Syntax { message, .. }) => {
+                (ErrorMatcher::Incomplete, Error::Incomplete) => {}
+                (ErrorMatcher::Syntax(expected_msg), Error::Syntax { message, .. }) => {
                     assert_eq!(
                         expected_msg, message,
                         "{test_name}: syntax message mismatch"
                     )
                 }
-                (
-                    ErrorMatcher::Unsupported(expected_kind),
-                    ParseError::Unsupported { kind, .. },
-                ) => {
+                (ErrorMatcher::Unsupported(expected_kind), Error::Unsupported { kind, .. }) => {
                     assert_eq!(expected_kind, kind, "{test_name}: unsupported mismatch")
                 }
-                (ErrorMatcher::Unsupported(expected_kind), ParseError::WriterError(msg)) => {
+                (ErrorMatcher::Unsupported(expected_kind), Error::WriterError(msg)) => {
                     // The generic reader wraps writer errors in WriterError(String).
                     // We check if the debug string of the feature is present in the message.
                     let kind_str = format!("{expected_kind:?}");

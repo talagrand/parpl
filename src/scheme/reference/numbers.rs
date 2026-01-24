@@ -1,7 +1,7 @@
 use crate::{
     Span,
     scheme::{
-        ParseError, Unsupported,
+        Error, Unsupported,
         lex::{self, FiniteRealKind, NumberExactness, Sign},
         traits::SchemeNumberOps,
     },
@@ -21,7 +21,7 @@ pub struct SimpleNumberOps;
 impl SchemeNumberOps for SimpleNumberOps {
     type Number = SimpleNumber;
 
-    fn from_literal(lit: &lex::NumberLiteral<'_>, span: Span) -> Result<Self::Number, ParseError> {
+    fn from_literal(lit: &lex::NumberLiteral<'_>, span: Span) -> Result<Self::Number, Error> {
         let kind = &lit.kind;
 
         let radix = kind.radix;
@@ -72,7 +72,7 @@ impl SchemeNumberOps for SimpleNumberOps {
                     }
                     (_, FiniteRealKind::Decimal) => {
                         if kind.exactness == NumberExactness::Exact {
-                            return Err(ParseError::unsupported(
+                            return Err(Error::unsupported(
                                 span,
                                 Unsupported::NumericRepresentation,
                             ));
@@ -108,10 +108,7 @@ impl SchemeNumberOps for SimpleNumberOps {
         }
 
         // Fallback
-        Err(ParseError::unsupported(
-            span,
-            Unsupported::NumericRepresentation,
-        ))
+        Err(Error::unsupported(span, Unsupported::NumericRepresentation))
     }
 
     fn eqv(a: &Self::Number, b: &Self::Number) -> bool {

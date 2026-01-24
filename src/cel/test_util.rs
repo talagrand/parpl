@@ -71,7 +71,6 @@ impl TestContext {
     pub fn ast(&self) -> Result<&'static Expr<'static>> {
         self.ast.ok_or_else(|| {
             crate::cel::error::Error::new(
-                crate::cel::error::Phase::Evaluation,
                 crate::cel::error::ErrorKind::Custom("No AST".into()),
                 "No AST parsed".into(),
             )
@@ -177,10 +176,10 @@ pub fn assert_parse_fails(input: &str) {
 /// Assert that parsing fails with a specific error kind
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// # use parpl::cel::test_util::*;
 /// # use parpl::cel::ErrorKind;
-/// assert_parse_fails_with("1 +", ErrorKind::UnexpectedEOF);
+/// assert_parse_fails_with("1 +", ErrorKind::Syntax(..));
 /// ```
 #[track_caller]
 pub fn assert_parse_fails_with(input: &str, expected_kind: ErrorKind) {

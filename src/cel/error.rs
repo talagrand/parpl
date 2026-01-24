@@ -1,10 +1,8 @@
 // Error types for the CEL parser
 //
-// This module defines error types for all phases of CEL processing:
+// This module defines error types for CEL parsing:
 // - Parsing errors (syntax errors from pest)
-// - AST construction errors
-// - Evaluation errors (runtime errors)
-// - Type errors (if type checking is enabled)
+// - AST construction errors (literal parsing, etc.)
 //
 // By centralizing error handling, we avoid exposing pest's error types
 // throughout the codebase and provide consistent error reporting.
@@ -12,30 +10,15 @@
 use crate::{Span, cel::parser::Rule};
 use std::fmt;
 
-/// Main error type for all CEL parser operations
+/// Main error type for CEL parser operations
 #[derive(Debug, Clone, PartialEq)]
 pub struct Error {
-    /// The phase where the error occurred
-    pub phase: Phase,
     /// The kind of error
     pub kind: ErrorKind,
     /// Source location (if available)
     pub span: Option<Span>,
     /// Human-readable error message
     pub message: String,
-}
-
-/// The phase of processing where an error occurred
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Phase {
-    /// Error during parsing (syntax error)
-    Parsing,
-    /// Error during AST construction
-    AstConstruction,
-    /// Error during evaluation (runtime error)
-    Evaluation,
-    /// Error during type checking
-    TypeChecking,
 }
 
 /// The kind of error that occurred
@@ -45,26 +28,6 @@ pub enum ErrorKind {
     Syntax(SyntaxError),
     /// Nesting depth exceeded
     NestingDepthExceeded { depth: usize, max: usize },
-    /// Call limit exceeded (DoS protection)
-    CallLimitExceeded,
-    /// Invalid escape sequence in string literal
-    InvalidEscape { message: String },
-    /// Invalid numeric literal
-    InvalidNumber { literal: String },
-    /// Undefined variable reference
-    UndefinedVariable { name: String },
-    /// Type mismatch during evaluation
-    TypeMismatch { expected: String, got: String },
-    /// Division by zero
-    DivisionByZero,
-    /// Index out of bounds
-    IndexOutOfBounds { index: i64, length: usize },
-    /// Invalid member access
-    InvalidMember { type_name: String, member: String },
-    /// Function not found
-    UndefinedFunction { name: String },
-    /// Wrong number of arguments
-    ArgumentCount { expected: usize, got: usize },
     /// Custom error (for extension points)
     Custom(String),
 }
@@ -73,7 +36,7 @@ pub enum ErrorKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SyntaxError {
     /// What was expected
-    pub expected: Vec<String>,
+    pub expected: String,
     /// What was found (if available)
     pub found: Option<String>,
     /// Position in the input
@@ -82,9 +45,8 @@ pub struct SyntaxError {
 
 impl Error {
     /// Create a new error
-    pub fn new(phase: Phase, kind: ErrorKind, message: String) -> Self {
+    pub fn new(kind: ErrorKind, message: String) -> Self {
         Self {
-            phase,
             kind,
             span: None,
             message,
@@ -100,9 +62,8 @@ impl Error {
     /// Create a syntax error
     pub fn syntax(message: String, position: usize) -> Self {
         Self {
-            phase: Phase::Parsing,
             kind: ErrorKind::Syntax(SyntaxError {
-                expected: vec![],
+                expected: String::new(),
                 found: None,
                 position,
             }),
@@ -114,7 +75,6 @@ impl Error {
     /// Create a nesting depth error
     pub fn nesting_depth(depth: usize, max: usize) -> Self {
         Self {
-            phase: Phase::Parsing,
             kind: ErrorKind::NestingDepthExceeded { depth, max },
             span: None,
             message: format!(
@@ -123,48 +83,14 @@ impl Error {
         }
     }
 
-    /// Create an undefined variable error
-    pub fn undefined_variable(name: String, span: Span) -> Self {
-        Self {
-            phase: Phase::Evaluation,
-            kind: ErrorKind::UndefinedVariable { name: name.clone() },
-            span: Some(span),
-            message: format!("Undefined variable: {name}"),
-        }
-    }
-
-    /// Create a type mismatch error
-    pub fn type_mismatch(expected: String, got: String, span: Span) -> Self {
-        Self {
-            phase: Phase::Evaluation,
-            kind: ErrorKind::TypeMismatch {
-                expected: expected.clone(),
-                got: got.clone(),
-            },
-            span: Some(span),
-            message: format!("Type mismatch: expected {expected}, got {got}"),
-        }
-    }
-
-    /// Create an invalid number error
-    pub fn invalid_number(literal: String) -> Self {
-        Self {
-            phase: Phase::AstConstruction,
-            kind: ErrorKind::InvalidNumber {
-                literal: literal.clone(),
-            },
-            span: None,
-            message: format!("Invalid number: {literal}"),
-        }
-    }
-
     /// Create an invalid escape sequence error
     pub fn invalid_escape(message: String) -> Self {
         Self {
-            phase: Phase::AstConstruction,
-            kind: ErrorKind::InvalidEscape {
-                message: message.clone(),
-            },
+            kind: ErrorKind::Syntax(SyntaxError {
+                expected: String::new(),
+                found: None,
+                position: 0,
+            }),
             span: None,
             message: format!("Invalid escape sequence: {message}"),
         }
@@ -173,8 +99,7 @@ impl Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Format: [Phase] message
-        write!(f, "[{:?}] {}", self.phase, self.message)?;
+        write!(f, "{}", self.message)?;
 
         // Add span information if available
         if let Some(span) = &self.span {
@@ -203,14 +128,14 @@ impl From<pest::error::Error<Rule>> for Error {
                 positives,
                 negatives,
             } => {
-                let expected: Vec<String> = positives
+                let expected: String = positives
                     .iter()
                     .map(|r| format!("{r:?}"))
                     .chain(negatives.iter().map(|r| format!("not {r:?}")))
-                    .collect();
+                    .collect::<Vec<_>>()
+                    .join(", ");
 
                 Self {
-                    phase: Phase::Parsing,
                     kind: ErrorKind::Syntax(SyntaxError {
                         expected,
                         found: None,
@@ -240,31 +165,18 @@ impl From<pest::error::Error<Rule>> for Error {
                         .unwrap_or(0);
 
                     Self {
-                        phase: Phase::Parsing,
                         kind: ErrorKind::NestingDepthExceeded { depth, max },
                         span: Some(Span::new(position, position)),
                         message: msg,
                     }
                 } else {
                     Self {
-                        phase: Phase::Parsing,
                         kind: ErrorKind::Custom(msg.clone()),
                         span: Some(Span::new(position, position)),
                         message: msg,
                     }
                 }
             }
-        }
-    }
-}
-
-impl fmt::Display for Phase {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Phase::Parsing => write!(f, "Parsing"),
-            Phase::AstConstruction => write!(f, "AST Construction"),
-            Phase::Evaluation => write!(f, "Evaluation"),
-            Phase::TypeChecking => write!(f, "Type Checking"),
         }
     }
 }
@@ -295,37 +207,22 @@ mod tests {
         test_error_display: {
             let err = Error::syntax("unexpected token".to_string(), 5);
             let display = format!("{err}");
-            assert!(display.contains("Parsing"));
             assert!(display.contains("unexpected token"));
             assert!(display.contains("5..5"));
         },
 
         test_nesting_depth_error: {
             let err = Error::nesting_depth(129, 128);
-            assert_eq!(err.phase, Phase::Parsing);
             assert!(matches!(
                 err.kind,
                 ErrorKind::NestingDepthExceeded { depth: 129, max: 128 }
             ));
         },
 
-        test_undefined_variable_error: {
-            let err = Error::undefined_variable("x".to_string(), Span::new(10, 11));
-            assert_eq!(err.phase, Phase::Evaluation);
-            assert!(err.message.contains("Undefined variable: x"));
-        },
-
-        test_type_mismatch_error: {
-            let err = Error::type_mismatch("int".to_string(), "string".to_string(), Span::new(5, 10));
-            assert_eq!(err.phase, Phase::Evaluation);
-            assert!(err.message.contains("expected int, got string"));
-        },
-
         test_error_with_span: {
             let err = Error::new(
-                Phase::Evaluation,
-                ErrorKind::DivisionByZero,
-                "Division by zero".to_string(),
+                ErrorKind::Custom("test error".to_string()),
+                "Test error".to_string(),
             )
             .with_span(Span::new(10, 15));
 

@@ -89,10 +89,9 @@ impl std::fmt::Display for LimitExceeded {
     }
 }
 
-/// Top-level parse error type. This will grow as the implementation
-/// starts enforcing more of `syn.tex`.
+/// Top-level error type for Scheme parsing.
 #[derive(Debug, thiserror::Error, Clone)]
-pub enum ParseError {
+pub enum Error {
     /// The input ends in the middle of a grammatically valid construct
     /// and more characters are required to decide the result.
     ///
@@ -140,11 +139,11 @@ pub enum ParseError {
     LimitExceeded { span: Span, kind: LimitExceeded },
 }
 
-impl ParseError {
+impl Error {
     /// Helper for constructing a lexical error.
     #[must_use]
     pub fn lexical(span: Span, nonterminal: &'static str, message: impl Into<String>) -> Self {
-        ParseError::Lex {
+        Error::Lex {
             span,
             nonterminal,
             message: message.into(),
@@ -154,7 +153,7 @@ impl ParseError {
     /// Helper for constructing a syntax error.
     #[must_use]
     pub fn syntax(span: Span, nonterminal: &'static str, message: impl Into<String>) -> Self {
-        ParseError::Syntax {
+        Error::Syntax {
             span,
             nonterminal,
             message: message.into(),
@@ -164,12 +163,12 @@ impl ParseError {
     /// Helper for constructing an unsupported error.
     #[must_use]
     pub fn unsupported(span: Span, kind: Unsupported) -> Self {
-        ParseError::Unsupported { span, kind }
+        Error::Unsupported { span, kind }
     }
 
     /// Helper for constructing a limit exceeded error.
     #[must_use]
     pub fn limit_exceeded(span: Span, kind: LimitExceeded) -> Self {
-        ParseError::LimitExceeded { span, kind }
+        Error::LimitExceeded { span, kind }
     }
 }

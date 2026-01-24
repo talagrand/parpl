@@ -2,7 +2,7 @@ use super::numbers::{SimpleNumber, SimpleNumberOps};
 use crate::{
     Span, StringPool, StringPoolId, Syntax,
     scheme::{
-        ParseError,
+        Error,
         traits::{DatumInspector, DatumKind, DatumWriter},
     },
 };
@@ -332,7 +332,7 @@ impl<'d> DatumInspector for &Syntax<Datum<'d>> {
     }
 }
 
-pub fn read<'a>(source: &str, arena: &'a Bump) -> Result<Syntax<Datum<'a>>, ParseError> {
+pub fn read<'a>(source: &str, arena: &'a Bump) -> Result<Syntax<Datum<'a>>, Error> {
     read_with_max_depth(source, arena, 64)
 }
 
@@ -340,7 +340,7 @@ pub fn read_with_max_depth<'a>(
     source: &str,
     arena: &'a Bump,
     max_depth: u32,
-) -> Result<Syntax<Datum<'a>>, ParseError> {
+) -> Result<Syntax<Datum<'a>>, Error> {
     let lexer = crate::scheme::lex::lex_with_config(
         source,
         crate::scheme::lex::LexConfig {

@@ -16,7 +16,7 @@ use crate::{
     cel::traits::CelWriter,
     cel::{
         ast::{Literal, RawLiteral},
-        error::{Error, ErrorKind, Phase, Result},
+        error::{Error, ErrorKind, Result},
     },
 };
 
@@ -168,18 +168,19 @@ pub fn parse_int(s: &str) -> Result<i64> {
     // Parse based on prefix
     let abs_value = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         // Hexadecimal
-        i64::from_str_radix(hex, 16).map_err(|_| Error::invalid_number(s.to_string()))?
+        i64::from_str_radix(hex, 16)
+            .map_err(|_| Error::syntax(format!("Invalid integer literal: {s}"), 0))?
     } else {
         // Decimal
         s.parse::<i64>()
-            .map_err(|_| Error::invalid_number(s.to_string()))?
+            .map_err(|_| Error::syntax(format!("Invalid integer literal: {s}"), 0))?
     };
 
     // Apply sign
     if negative {
         abs_value
             .checked_neg()
-            .ok_or_else(|| Error::invalid_number(format!("-{s}")))
+            .ok_or_else(|| Error::syntax(format!("Integer overflow: -{s}"), 0))
     } else {
         Ok(abs_value)
     }
@@ -201,11 +202,12 @@ pub fn parse_uint(s: &str) -> Result<u64> {
     // Parse based on prefix
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         // Hexadecimal
-        u64::from_str_radix(hex, 16).map_err(|_| Error::invalid_number(s.to_string()))
+        u64::from_str_radix(hex, 16)
+            .map_err(|_| Error::syntax(format!("Invalid unsigned integer literal: {s}"), 0))
     } else {
         // Decimal
         s.parse::<u64>()
-            .map_err(|_| Error::invalid_number(s.to_string()))
+            .map_err(|_| Error::syntax(format!("Invalid unsigned integer literal: {s}"), 0))
     }
 }
 
@@ -221,7 +223,7 @@ pub fn parse_uint(s: &str) -> Result<u64> {
 /// CEL spec (line 1101): "The double type follows the IEEE 754 standard"
 pub fn parse_float(s: &str) -> Result<f64> {
     s.parse::<f64>()
-        .map_err(|_| Error::invalid_number(s.to_string()))
+        .map_err(|_| Error::syntax(format!("Invalid floating-point literal: {s}"), 0))
 }
 
 //==============================================================================
@@ -412,7 +414,6 @@ pub fn process_literal<W: CelWriter>(
             .map(|s| s.to_string())
             .ok_or_else(|| {
                 Error::new(
-                    Phase::AstConstruction,
                     ErrorKind::Custom("unresolved interned string id".to_string()),
                     format!("unresolved interned string id: {id:?}"),
                 )
