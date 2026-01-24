@@ -27,10 +27,30 @@ pub struct Error {
 /// The kind of error that occurred
 #[derive(Debug)]
 pub enum ErrorKind {
+    /// The input ends in the middle of a grammatically valid construct
+    /// and more characters are required to complete parsing.
+    ///
+    /// In a REPL, this is the cue to prompt the user for more input
+    /// instead of reporting a hard error.
+    ///
+    /// Examples: `(1 + 2`, `[1, 2,`, `a ? b`
+    Incomplete,
+
+    /// The input ends in the middle of a token.
+    ///
+    /// Note: For CEL, this is is not emitted; incomplete expressions in the middle
+    /// of tokens are reported as `Syntax` errors instead. Scheme supports this
+    /// for streaming scenarions, but CEL operations are single-expressions, minimizing
+    /// the value of streaming. (Internally, CEL combines lexing and parsing in one pass
+    /// using pest, making it difficult to distinguish incomplete tokens from syntax errors.)
+    IncompleteToken,
+
     /// Syntax error from the parser
     Syntax(SyntaxError),
+
     /// Nesting depth exceeded
     NestingDepthExceeded { depth: usize, max: usize },
+
     /// Writer error (from CelWriter implementation)
     WriterError(WriterErrorInner),
 }
@@ -97,6 +117,37 @@ impl Error {
             span: None,
             message: format!("Invalid escape sequence: {message}"),
         }
+    }
+
+    /// Create an incomplete input error.
+    ///
+    /// This indicates the parser consumed all input but expected more tokens.
+    pub fn incomplete() -> Self {
+        Self {
+            kind: ErrorKind::Incomplete,
+            span: None,
+            message: "input is incomplete; more data required".to_string(),
+        }
+    }
+
+    /// Create an error from a pest parsing error, using input length to detect
+    /// incomplete input.
+    ///
+    /// If the error position is at or beyond the input length, the parser
+    /// consumed all input and still expected more, indicating incomplete input.
+    pub fn from_pest_error(err: pest::error::Error<Rule>, input_len: usize) -> Self {
+        let position = match err.location {
+            pest::error::InputLocation::Pos(pos) => pos,
+            pest::error::InputLocation::Span((start, _)) => start,
+        };
+
+        // If error is at end of input, it's incomplete (parser wanted more)
+        if position >= input_len {
+            return Self::incomplete();
+        }
+
+        // Otherwise, convert normally
+        Self::from(err)
     }
 }
 

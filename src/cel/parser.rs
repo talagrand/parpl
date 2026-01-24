@@ -98,7 +98,7 @@ pub fn parse_with_config(input: &str, config: ParseConfig) -> Result<Pairs<'_, R
     // Our heuristic check counts all delimiters, so the limit is set higher than actual depth.
     validate_nesting_depth(input, config.max_parse_depth)?;
 
-    CelParser::parse(Rule::cel, input).map_err(Error::from)
+    CelParser::parse(Rule::cel, input).map_err(|e| Error::from_pest_error(e, input.len()))
 }
 
 /// Validate that input doesn't exceed maximum delimiter count (heuristic depth check)
