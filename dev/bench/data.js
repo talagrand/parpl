@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1768980321130,
+  "lastUpdate": 1769281052564,
   "repoUrl": "https://github.com/talagrand/parpl",
   "entries": {
     "Parpl Benchmark": [
@@ -1151,6 +1151,126 @@ window.BENCHMARK_DATA = {
             "name": "MiniScheme Parsing/1K Sample",
             "value": 7346,
             "range": "± 97",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "git@talagrand.org",
+            "name": "Eugene Talagrand",
+            "username": "talagrand"
+          },
+          "committer": {
+            "email": "git@talagrand.org",
+            "name": "Eugene Talagrand",
+            "username": "talagrand"
+          },
+          "distinct": true,
+          "id": "21f5c07302ad57bffc9ccb68afc88a3d69808c4f",
+          "message": "Scheme/CEL WriterError now carries the original error (boxed).\nCopy method on Scheme writer is also fixed.\nPeek is simplified to not require cloneable errors.",
+          "timestamp": "2026-01-24T10:07:00-08:00",
+          "tree_id": "554963204eb6b74f9cbc1107ebd06a840d675b1c",
+          "url": "https://github.com/talagrand/parpl/commit/21f5c07302ad57bffc9ccb68afc88a3d69808c4f"
+        },
+        "date": 1769281052265,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "CEL Parsing/Simple (1 + 2)",
+            "value": 2282,
+            "range": "± 47",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Arithmetic",
+            "value": 8147,
+            "range": "± 135",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Comparison",
+            "value": 8571,
+            "range": "± 294",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Function Call",
+            "value": 11174,
+            "range": "± 65",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Ternary",
+            "value": 8324,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Complex",
+            "value": 21481,
+            "range": "± 76",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Simple (+ 1 2)",
+            "value": 845,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Nested",
+            "value": 2989,
+            "range": "± 77",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Factorial",
+            "value": 7658,
+            "range": "± 109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Lambda",
+            "value": 3505,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Quote",
+            "value": 3398,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Complex",
+            "value": 7034,
+            "range": "± 99",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/Simple (+ 1 2)",
+            "value": 738,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/Nested",
+            "value": 2672,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/Factorial",
+            "value": 6944,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/1K Sample",
+            "value": 7111,
+            "range": "± 39",
             "unit": "ns/iter"
           }
         ]
