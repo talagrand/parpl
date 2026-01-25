@@ -348,6 +348,6 @@ pub fn read_with_max_depth<'a>(
     let mut stream = crate::scheme::reader::TokenStream::new(lexer);
     let mut writer = ArenaDatumWriter::new(arena);
     stream
-        .parse_datum_with_max_depth(&mut writer, max_depth)
+        .parse_with_max_depth(&mut writer, max_depth)
         .map(|(datum, _span)| datum)
 }

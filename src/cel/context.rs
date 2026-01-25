@@ -45,13 +45,13 @@ pub struct Builder {
     ///
     /// This protects against Pest parser stack overflow (~171 depth on 1MB stack).
     /// Uses a simple heuristic that counts opening delimiters.
-    max_parse_depth: usize,
+    max_parse_depth: u32,
 
     /// Maximum AST nesting depth (default: 24)
     ///
     /// This protects against AST builder stack overflow (~38 depth on 1MB stack).
     /// Must be LOWER than max_parse_depth to prevent crashes during AST construction.
-    max_ast_depth: usize,
+    max_ast_depth: u32,
 
     /// Maximum call limit for pest parser (default: 10 million)
     ///
@@ -96,7 +96,7 @@ impl Builder {
     ///     .build();
     /// ```
     #[must_use]
-    pub fn max_parse_depth(mut self, depth: usize) -> Self {
+    pub fn max_parse_depth(mut self, depth: u32) -> Self {
         self.max_parse_depth = depth;
         self
     }
@@ -116,7 +116,7 @@ impl Builder {
     ///     .build();
     /// ```
     #[must_use]
-    pub fn max_ast_depth(mut self, depth: usize) -> Self {
+    pub fn max_ast_depth(mut self, depth: u32) -> Self {
         self.max_ast_depth = depth;
         self
     }
@@ -135,7 +135,7 @@ impl Builder {
     ///     .build();
     /// ```
     #[must_use]
-    pub fn max_nesting_depth(mut self, depth: usize) -> Self {
+    pub fn max_nesting_depth(mut self, depth: u32) -> Self {
         self.max_parse_depth = depth;
         self.max_ast_depth = depth;
         self

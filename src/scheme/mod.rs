@@ -1,3 +1,10 @@
+// Scheme R7RS datum parser
+//
+// This module provides a lexer and reader for R7RS Scheme external
+// representations (datums). The design separates lexing from parsing
+// and uses trait-based abstractions for AST construction.
+
+pub mod constants;
 pub mod lex;
 mod reader;
 #[cfg(any(test, feature = "reference"))]
@@ -5,7 +12,7 @@ pub mod reference;
 pub mod traits;
 
 // Re-export key types for convenient access (single canonical path)
-pub use reader::{TokenStream, parse_datum, parse_datum_with_max_depth};
+pub use reader::{TokenStream, parse, parse_with_max_depth};
 
 /// Result type alias for parser operations.
 pub type Result<T> = std::result::Result<T, crate::Error>;

@@ -24,13 +24,13 @@ pub struct ParseConfig {
     ///
     /// This protects against Pest parser stack overflow (~171 depth on 1MB stack).
     /// Uses a simple heuristic that counts opening delimiters.
-    pub max_parse_depth: usize,
+    pub max_parse_depth: u32,
 
     /// Maximum AST nesting depth for AST builder (default: 24)
     ///
     /// This protects against AST builder stack overflow (~38 depth on 1MB stack).
     /// Must be LOWER than max_parse_depth to prevent crashes during AST construction.
-    pub max_ast_depth: usize,
+    pub max_ast_depth: u32,
 
     /// Maximum number of rule invocations (pest call limit for DoS protection)
     pub max_call_limit: usize,
@@ -191,9 +191,9 @@ fn from_pest_error(err: pest::error::Error<Rule>, input_len: usize) -> Error {
 /// - This is acceptable: we prefer rejecting extreme inputs over risking crashes
 ///
 /// Default limit: 128 (see `constants::DEFAULT_MAX_PARSE_DEPTH`)
-fn validate_nesting_depth(input: &str, max_depth: usize) -> Result<()> {
-    let mut depth = 0;
-    let mut max_reached = 0;
+fn validate_nesting_depth(input: &str, max_depth: u32) -> Result<()> {
+    let mut depth: u32 = 0;
+    let mut max_reached: u32 = 0;
     let mut pos = 0;
 
     for ch in input.chars() {
@@ -204,7 +204,10 @@ fn validate_nesting_depth(input: &str, max_depth: usize) -> Result<()> {
                 if max_reached > max_depth {
                     // Span from the offending delimiter to end of input
                     let span = crate::Span::new(pos, input.len());
-                    return Err(Error::nesting_depth(span, Some((max_reached, max_depth))));
+                    return Err(Error::nesting_depth(
+                        span,
+                        Some((max_reached as usize, max_depth as usize)),
+                    ));
                 }
             }
             ')' | ']' | '}' => {

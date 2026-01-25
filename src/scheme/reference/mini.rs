@@ -195,7 +195,7 @@ pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<MiniDatum, Er
     let mut stream = crate::scheme::reader::TokenStream::new(lexer);
     let mut writer = MiniDatumWriter::default();
     stream
-        .parse_datum_with_max_depth(&mut writer, max_depth)
+        .parse_with_max_depth(&mut writer, max_depth)
         .map(|(datum, _span)| datum)
 }
 

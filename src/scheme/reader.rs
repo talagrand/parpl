@@ -1,7 +1,7 @@
 use crate::{
     Error, Interner, Span,
     scheme::{
-        Result,
+        Result, constants,
         lex::{self, FiniteRealKind, NumberExactness, SpannedToken, Token},
         traits::{DatumWriter, SchemeNumberOps},
     },
@@ -35,8 +35,6 @@ pub struct TokenStream<'i> {
     /// Peeked token, if any. Avoids `Peekable` wrapper overhead.
     peeked: Option<Result<SpannedToken<'i>>>,
 }
-
-const DEFAULT_MAX_DEPTH: u32 = 64;
 
 impl<'i> TokenStream<'i> {
     /// Create a new token stream from lexed tokens.
@@ -107,7 +105,7 @@ impl<'i> TokenStream<'i> {
     /// comments.
     #[inline]
     pub fn peek(&mut self) -> Result<Option<&SpannedToken<'i>>> {
-        self.peek_with_max_depth(DEFAULT_MAX_DEPTH)
+        self.peek_with_max_depth(constants::DEFAULT_MAX_DEPTH)
     }
 
     /// Peek at the next token's value without consuming it, skipping
@@ -120,7 +118,7 @@ impl<'i> TokenStream<'i> {
     /// Public peek of the token value using the default depth.
     #[inline]
     pub fn peek_token_value(&mut self) -> Result<Option<&Token<'i>>> {
-        self.peek_token_value_with_max_depth(DEFAULT_MAX_DEPTH)
+        self.peek_token_value_with_max_depth(constants::DEFAULT_MAX_DEPTH)
     }
 
     /// Consume and return the next token, skipping intertoken space,
@@ -134,10 +132,11 @@ impl<'i> TokenStream<'i> {
     /// skipping comments.
     #[inline]
     pub fn next_token(&mut self) -> Result<Option<SpannedToken<'i>>> {
-        self.next_token_with_max_depth(DEFAULT_MAX_DEPTH)
+        self.next_token_with_max_depth(constants::DEFAULT_MAX_DEPTH)
     }
 
     /// Check if the stream is exhausted (no more tokens after skipping comments).
+    #[must_use]
     pub fn is_empty(&mut self) -> bool {
         matches!(self.peek(), Ok(None))
     }
@@ -247,7 +246,7 @@ impl<'i> TokenStream<'i> {
 
     #[expect(dead_code)]
     fn skip_one_datum(&mut self) -> Result<()> {
-        self.skip_one_datum_with_max_depth(DEFAULT_MAX_DEPTH)
+        self.skip_one_datum_with_max_depth(constants::DEFAULT_MAX_DEPTH)
     }
 
     /// Skip contents of a list/vector until the closing `)`.
@@ -287,7 +286,7 @@ impl<'i> TokenStream<'i> {
 
     #[expect(dead_code)]
     fn skip_list_contents(&mut self) -> Result<()> {
-        self.skip_list_contents_with_max_depth(DEFAULT_MAX_DEPTH)
+        self.skip_list_contents_with_max_depth(constants::DEFAULT_MAX_DEPTH)
     }
 
     /// Parse a single `<datum>` from the token stream.
@@ -302,11 +301,11 @@ impl<'i> TokenStream<'i> {
     /// This consumes tokens from the stream to form a complete datum,
     /// covering the currently implemented `<simple datum>` and
     /// `<compound datum>` alternatives plus label forms (`#n=` / `#n#`).
-    pub fn parse_datum<W: DatumWriter>(&mut self, writer: &mut W) -> Result<(W::Output, Span)> {
-        self.parse_datum_with_max_depth(writer, DEFAULT_MAX_DEPTH)
+    pub fn parse<W: DatumWriter>(&mut self, writer: &mut W) -> Result<(W::Output, Span)> {
+        self.parse_with_max_depth(writer, constants::DEFAULT_MAX_DEPTH)
     }
 
-    pub fn parse_datum_with_max_depth<W: DatumWriter>(
+    pub fn parse_with_max_depth<W: DatumWriter>(
         &mut self,
         writer: &mut W,
         depth: u32,
@@ -363,7 +362,7 @@ impl<'i> TokenStream<'i> {
             }
 
             Token::LabelDef(n) => {
-                let (datum, datum_span) = self.parse_datum_with_max_depth(writer, depth - 1)?;
+                let (datum, datum_span) = self.parse_with_max_depth(writer, depth - 1)?;
                 let full_span = span.merge(datum_span);
                 writer
                     .labeled(n, datum, full_span)
@@ -431,7 +430,7 @@ impl<'i> TokenStream<'i> {
                         ));
                     }
                     self.next_token_with_max_depth(depth)?; // consume dot
-                    let (tail_datum, _) = self.parse_datum_with_max_depth(writer, depth - 1)?;
+                    let (tail_datum, _) = self.parse_with_max_depth(writer, depth - 1)?;
                     tail = Some(tail_datum);
 
                     // Expect RParen
@@ -452,7 +451,7 @@ impl<'i> TokenStream<'i> {
                 }
                 None => return Err(Error::Incomplete),
                 _ => {
-                    elements.push(self.parse_datum_with_max_depth(writer, depth - 1)?.0);
+                    elements.push(self.parse_with_max_depth(writer, depth - 1)?.0);
                 }
             }
         }
@@ -502,7 +501,7 @@ impl<'i> TokenStream<'i> {
                 }
                 None => return Err(Error::Incomplete),
                 _ => {
-                    elements.push(self.parse_datum_with_max_depth(writer, depth - 1)?.0);
+                    elements.push(self.parse_with_max_depth(writer, depth - 1)?.0);
                 }
             }
         }
@@ -535,7 +534,7 @@ impl<'i> TokenStream<'i> {
             return Err(Error::nesting_depth(start_span, None));
         }
 
-        let (datum, datum_span) = self.parse_datum_with_max_depth(writer, depth - 1)?;
+        let (datum, datum_span) = self.parse_with_max_depth(writer, depth - 1)?;
         let span = start_span.merge(datum_span);
 
         let sym_id = writer.interner().intern(name);
@@ -676,19 +675,19 @@ fn integer_spelling_to_byte(spelling: &str, radix: u32) -> Option<u8> {
 /// <datum> ::= <simple datum> | <compound datum>
 ///           | <label> = <datum> | <label> #
 /// ```
-pub fn parse_datum<W: DatumWriter>(source: &str, writer: &mut W) -> Result<(W::Output, Span)> {
-    parse_datum_with_max_depth(source, writer, DEFAULT_MAX_DEPTH)
+pub fn parse<W: DatumWriter>(source: &str, writer: &mut W) -> Result<(W::Output, Span)> {
+    parse_with_max_depth(source, writer, constants::DEFAULT_MAX_DEPTH)
 }
 
 /// Parse a single `<datum>` from the given source string with an
 /// explicit maximum nesting depth.
-pub fn parse_datum_with_max_depth<W: DatumWriter>(
+pub fn parse_with_max_depth<W: DatumWriter>(
     source: &str,
     writer: &mut W,
     max_depth: u32,
 ) -> Result<(W::Output, Span)> {
     let mut stream = TokenStream::from_source(source);
-    let datum = stream.parse_datum_with_max_depth(writer, max_depth)?;
+    let datum = stream.parse_with_max_depth(writer, max_depth)?;
 
     if !stream.is_empty() {
         // If there are remaining tokens, it's an error for a single datum parse
@@ -771,7 +770,7 @@ mod tests {
         fn run_datum(&self, expected: &Expected<DatumMatcher>) {
             let arena = Bump::new();
             let mut writer = ArenaDatumWriter::new(&arena);
-            let result = parse_datum(self.input, &mut writer);
+            let result = parse(self.input, &mut writer);
             match expected {
                 Expected::Success(matcher) => {
                     let (syntax, _) = result
@@ -925,7 +924,7 @@ mod tests {
 
         let arena = Bump::new();
         let mut writer = ArenaDatumWriter::new(&arena);
-        let result = parse_datum(&input, &mut writer);
+        let result = parse(&input, &mut writer);
         let err = result.expect_err("expected depth-limit error");
         ErrorMatcher::LimitExceeded.check(&err, "depth_limit_enforced_by_default");
     }
@@ -945,7 +944,7 @@ mod tests {
 
         let arena = Bump::new();
         let mut writer = ArenaDatumWriter::new(&arena);
-        let (syntax, _) = parse_datum_with_max_depth(&input, &mut writer, 128)
+        let (syntax, _) = parse_with_max_depth(&input, &mut writer, 128)
             .expect("expected success with increased max depth");
         if let Datum::Pair(_, _) = syntax.value {
             // Shallow sanity check: we at least parsed a non-trivial list.

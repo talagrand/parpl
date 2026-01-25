@@ -12,7 +12,7 @@
 ///   - 12 indexing (`[_]`) operators in a row
 ///   - 12 nested list, map, or message literals
 #[expect(dead_code)]
-const CEL_SPEC_MIN_RECURSION_DEPTH: usize = 12;
+const CEL_SPEC_MIN_RECURSION_DEPTH: u32 = 12;
 
 /// Default maximum nesting depth for pre-parse validation (heuristic)
 ///
@@ -29,7 +29,7 @@ const CEL_SPEC_MIN_RECURSION_DEPTH: usize = 12;
 ///
 /// This limit is enforced in:
 /// - Parser validation (`parser.rs`: `validate_nesting_depth`) - tracks max opening depth
-pub const DEFAULT_MAX_PARSE_DEPTH: usize = 128;
+pub const DEFAULT_MAX_PARSE_DEPTH: u32 = 128;
 
 /// Default maximum AST nesting depth (precise)
 ///
@@ -49,7 +49,7 @@ pub const DEFAULT_MAX_PARSE_DEPTH: usize = 128;
 /// - AST builder (`ast_builder.rs`): depth parameter passed to all build functions
 /// - Each recursive call increments depth, checked against this limit
 /// - By-value parameter means no manual decrement needed (automatic on return)
-pub const DEFAULT_MAX_AST_DEPTH: usize = 24;
+pub const DEFAULT_MAX_AST_DEPTH: u32 = 24;
 
 /// CEL spec-mandated minimum repetitions for repeating rules (langdef.md line 97)
 ///
@@ -59,4 +59,4 @@ pub const DEFAULT_MAX_AST_DEPTH: usize = 24;
 /// - List/map literal elements
 /// - Binary operators of the same precedence
 #[expect(dead_code)]
-const CEL_SPEC_MIN_REPETITIONS: usize = 24;
+const CEL_SPEC_MIN_REPETITIONS: u32 = 24;

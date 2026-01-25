@@ -33,7 +33,7 @@ fn map_writer_error<E: std::error::Error + Send + Sync + 'static>(e: E, span: Sp
 /// This is called at the entry of each recursive function.
 /// Since depth_left is passed by value, it automatically "resets" on return.
 #[inline(always)]
-fn check_depth(depth_left: usize) -> Result<usize> {
+fn check_depth(depth_left: u32) -> Result<u32> {
     if depth_left == 0 {
         // Use zero-span since we don't have position context here
         Err(Error::nesting_depth(crate::Span::new(0, 0), None))
@@ -82,7 +82,7 @@ fn check_depth(depth_left: usize) -> Result<usize> {
 /// This extracts the expression from the top-level rule and builds the AST.
 pub fn build_ast_from_pairs<W: CelWriter>(
     pairs: pest::iterators::Pairs<'_, Rule>,
-    max_ast_depth: usize,
+    max_ast_depth: u32,
     writer: &mut W,
 ) -> Result<W::Expr> {
     // The parse tree has structure: SOI ~ expr ~ EOI
@@ -111,7 +111,7 @@ pub fn build_ast_from_pairs<W: CelWriter>(
 ///
 /// All other cases call precedence-level functions directly.
 pub fn build_expr<W: CelWriter>(
-    depth_left: usize,
+    depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
     writer: &mut W,
 ) -> Result<W::Expr> {
@@ -149,7 +149,7 @@ pub fn build_expr<W: CelWriter>(
 /// Build ternary conditional expression (top of precedence chain)
 /// CEL Spec: expr = { conditional_or ~ ("?" ~ conditional_or ~ ":" ~ expr)? }
 fn build_expr_ternary<W: CelWriter>(
-    depth_left: usize,
+    depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
     writer: &mut W,
 ) -> Result<W::Expr> {
@@ -186,7 +186,7 @@ fn build_expr_ternary<W: CelWriter>(
 /// Build logical OR expression
 /// CEL Spec: conditional_or = { conditional_and ~ ("||" ~ conditional_and)* }
 fn build_conditional_or<W: CelWriter>(
-    depth_left: usize,
+    depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
     writer: &mut W,
 ) -> Result<W::Expr> {
@@ -215,7 +215,7 @@ fn build_conditional_or<W: CelWriter>(
 /// Build logical AND expression
 /// CEL Spec: conditional_and = { relation ~ ("&&" ~ relation)* }
 fn build_conditional_and<W: CelWriter>(
-    depth_left: usize,
+    depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
     writer: &mut W,
 ) -> Result<W::Expr> {
@@ -244,7 +244,7 @@ fn build_conditional_and<W: CelWriter>(
 /// Build relational expression
 /// CEL Spec: relation = { addition ~ (relop ~ addition)* }
 fn build_relation<W: CelWriter>(
-    depth_left: usize,
+    depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
     writer: &mut W,
 ) -> Result<W::Expr> {
@@ -289,7 +289,7 @@ fn build_relation<W: CelWriter>(
 /// Build addition/subtraction expression
 /// CEL Spec: addition = { multiplication ~ (("+" | "-") ~ multiplication)* }
 fn build_addition<W: CelWriter>(
-    depth_left: usize,
+    depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
     writer: &mut W,
 ) -> Result<W::Expr> {
@@ -336,7 +336,7 @@ fn build_addition<W: CelWriter>(
 /// Build multiplication/division/modulo expression
 /// CEL Spec: multiplication = { unary ~ (("*" | "/" | "%") ~ unary)* }
 fn build_multiplication<W: CelWriter>(
-    depth_left: usize,
+    depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
     writer: &mut W,
 ) -> Result<W::Expr> {
@@ -384,7 +384,7 @@ fn build_multiplication<W: CelWriter>(
 /// Build unary expression
 /// CEL Spec: unary = { member | "!"+ ~ member | "-"+ ~ member }
 fn build_unary<W: CelWriter>(
-    depth_left: usize,
+    depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
     writer: &mut W,
 ) -> Result<W::Expr> {
@@ -427,7 +427,7 @@ fn build_unary<W: CelWriter>(
 /// Build member access/indexing expression
 /// CEL Spec: member = { primary ~ ("." ~ selector ~ ("(" ~ expr_list? ~ ")")? | "[" ~ expr ~ "]")* }
 fn build_member<W: CelWriter>(
-    depth_left: usize,
+    depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
     writer: &mut W,
 ) -> Result<W::Expr> {
@@ -514,7 +514,7 @@ fn build_member<W: CelWriter>(
 /// Build primary expression (bottom of precedence chain)
 /// CEL Spec: primary = { literal | "."? ~ ident ~ ("(" ~ expr_list? ~ ")")? | ... }
 fn build_primary<W: CelWriter>(
-    depth_left: usize,
+    depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
     writer: &mut W,
 ) -> Result<W::Expr> {
@@ -738,7 +738,7 @@ fn parse_string_literal(s: &str) -> (&str, bool, QuoteStyle) {
 
 /// Build an expression list
 fn build_expr_list<W: CelWriter>(
-    depth_left: usize,
+    depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
     writer: &mut W,
 ) -> Result<Vec<W::Expr>> {
@@ -749,7 +749,7 @@ fn build_expr_list<W: CelWriter>(
 
 /// Build map initializers
 fn build_map_inits<W: CelWriter>(
-    depth_left: usize,
+    depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
     writer: &mut W,
 ) -> Result<Vec<(W::Expr, W::Expr)>> {
