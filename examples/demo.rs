@@ -3,17 +3,14 @@
 // This example demonstrates the key features of the CEL parser:
 // 1. A scoped parsing helper (closure-based) that keeps lifetimes safe
 // 2. Builder pattern configuration and config inspection
-// 3. Pretty-printing ASTs (with and without spans)
+// 3. Viewing AST structure using Debug formatting
 // 4. Error handling
 // 5. Reuse patterns (driver reuse + arena reuse)
 
 use bumpalo::Bump;
 use parpl::{
     StringPool,
-    cel::{
-        Builder, CelParser, Expr, PrettyConfig, Result, pretty_print, pretty_print_with_config,
-        reference::arena::ArenaCelWriter, traits::CelWriter,
-    },
+    cel::{Builder, CelParser, Expr, Result, reference::arena::ArenaCelWriter, traits::CelWriter},
 };
 
 fn parse_scoped<R>(
@@ -45,7 +42,7 @@ impl DemoContext {
         self.bump.reset();
         let mut writer = ArenaCelWriter::new(&self.bump, &mut self.pool);
         let ast = parser.parse(input, &mut writer)?;
-        println!("{}", pretty_print(ast, writer.interner_ref()));
+        println!("{ast:?}");
         Ok(())
     }
 }
@@ -61,29 +58,20 @@ fn main() -> Result<()> {
     // Create the parser driver (reusable across parses).
     let parser = Builder::default().build();
 
-    parse_scoped(&parser, "1 + 2 * 3", |ast, interner| {
+    parse_scoped(&parser, "1 + 2 * 3", |ast, _interner| {
         println!("   Expression: 1 + 2 * 3");
-        println!("{}", pretty_print(ast, interner));
+        println!("{ast:?}");
         Ok(())
     })?;
 
     // ========================================================================
-    // 2. PRETTY-PRINTING - Visualize AST structure
+    // 2. AST INSPECTION - View AST structure
     // ========================================================================
-    println!("\n2. Pretty-printing AST:");
+    println!("\n2. AST structure:");
 
-    parse_scoped(&parser, "x > 0 ? x : -x", |ast, interner| {
+    parse_scoped(&parser, "x > 0 ? x : -x", |ast, _interner| {
         println!("   Expression: x > 0 ? x : -x");
-        println!("{}", pretty_print(ast, interner));
-        Ok(())
-    })?;
-
-    // With span information
-    println!("\n   With source locations:");
-    parse_scoped(&parser, "true && false", |ast, interner| {
-        let config = PrettyConfig::default().with_spans();
-        println!("   Expression: true && false");
-        println!("{}", pretty_print_with_config(ast, &config, interner));
+        println!("{ast:?}");
         Ok(())
     })?;
 

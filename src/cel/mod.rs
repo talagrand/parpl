@@ -6,7 +6,6 @@ mod constants;
 mod context;
 mod literal;
 mod parser;
-mod pretty;
 #[cfg(any(test, feature = "reference"))]
 pub mod reference;
 pub mod traits;
@@ -22,4 +21,3 @@ pub type Result<T> = std::result::Result<T, crate::Error>;
 pub use ast::{BinaryOp, Expr, ExprKind, Literal, QuoteStyle, UnaryOp};
 pub use context::{Builder, CelParser};
 pub use parser::{ParseConfig, parse, parse_with_config};
-pub use pretty::{PrettyConfig, pretty_print, pretty_print_with_config};

@@ -11,7 +11,6 @@ use crate::{
         ast::{BinaryOp, Expr, ExprKind, Literal},
         context::Builder,
         parser::ParseConfig,
-        pretty::pretty_print,
         reference::arena::ArenaCelWriter,
     },
 };
@@ -222,12 +221,10 @@ pub fn assert_ast_kind<F>(input: &str, predicate: F)
 where
     F: for<'a> FnOnce(&ExprKind<'a>) -> bool,
 {
-    parse(input, |ctx, ast| {
+    parse(input, |_ctx, ast| {
         assert!(
             predicate(&ast.kind),
-            "AST kind predicate failed for '{}':\n{}",
-            input,
-            pretty_print(ast, ctx)
+            "AST kind predicate failed for '{input}':\n{ast:?}"
         );
     });
 }
@@ -246,18 +243,14 @@ pub fn assert_literal<F>(input: &str, predicate: F)
 where
     F: FnOnce(&Literal<StringPoolId, &[u8]>) -> bool,
 {
-    parse(input, |ctx, ast| match &ast.kind {
+    parse(input, |_ctx, ast| match &ast.kind {
         ExprKind::Literal(lit) => {
             assert!(
                 predicate(lit),
                 "Literal predicate failed for '{input}':\n{lit:?}"
             );
         }
-        _ => panic!(
-            "Expected literal for '{}', got:\n{}",
-            input,
-            pretty_print(ast, ctx)
-        ),
+        _ => panic!("Expected literal for '{input}', got:\n{ast:?}"),
     });
 }
 
@@ -279,11 +272,7 @@ pub fn assert_ident(input: &str, expected_name: &str) {
                 "Expected identifier '{expected_name}' for '{input}', got '{actual}'"
             )
         }
-        _ => panic!(
-            "Expected identifier for '{}', got:\n{}",
-            input,
-            pretty_print(ast, ctx)
-        ),
+        _ => panic!("Expected identifier for '{input}', got:\n{ast:?}"),
     });
 }
 
@@ -298,18 +287,14 @@ pub fn assert_ident(input: &str, expected_name: &str) {
 /// ```
 #[track_caller]
 pub fn assert_binary(input: &str, expected_op: BinaryOp) {
-    parse(input, |ctx, ast| match &ast.kind {
+    parse(input, |_ctx, ast| match &ast.kind {
         ExprKind::Binary(op, _, _) => {
             assert!(
                 !(*op != expected_op),
                 "Expected binary op {expected_op:?} for '{input}', got {op:?}"
             );
         }
-        _ => panic!(
-            "Expected binary operation for '{}', got:\n{}",
-            input,
-            pretty_print(ast, ctx)
-        ),
+        _ => panic!("Expected binary operation for '{input}', got:\n{ast:?}"),
     });
 }
 
@@ -322,13 +307,9 @@ pub fn assert_binary(input: &str, expected_op: BinaryOp) {
 /// ```
 #[track_caller]
 pub fn assert_ternary(input: &str) {
-    parse(input, |ctx, ast| match &ast.kind {
+    parse(input, |_ctx, ast| match &ast.kind {
         ExprKind::Ternary(_, _, _) => {}
-        _ => panic!(
-            "Expected ternary operation for '{}', got:\n{}",
-            input,
-            pretty_print(ast, ctx)
-        ),
+        _ => panic!("Expected ternary operation for '{input}', got:\n{ast:?}"),
     });
 }
 
@@ -341,21 +322,15 @@ pub fn assert_ternary(input: &str) {
 /// ```
 #[track_caller]
 pub fn assert_list(input: &str, expected_len: usize) {
-    parse(input, |ctx, ast| match &ast.kind {
+    parse(input, |_ctx, ast| match &ast.kind {
         ExprKind::List(elements) => {
             assert!(
                 (elements.len() == expected_len),
-                "Expected list of length {} for '{}', got {}",
-                expected_len,
-                input,
+                "Expected list of length {expected_len} for '{input}', got {}",
                 elements.len()
             );
         }
-        _ => panic!(
-            "Expected list for '{}', got:\n{}",
-            input,
-            pretty_print(ast, ctx)
-        ),
+        _ => panic!("Expected list for '{input}', got:\n{ast:?}"),
     });
 }
 
@@ -368,21 +343,15 @@ pub fn assert_list(input: &str, expected_len: usize) {
 /// ```
 #[track_caller]
 pub fn assert_map(input: &str, expected_len: usize) {
-    parse(input, |ctx, ast| match &ast.kind {
+    parse(input, |_ctx, ast| match &ast.kind {
         ExprKind::Map(entries) => {
             assert!(
                 (entries.len() == expected_len),
-                "Expected map with {} entries for '{}', got {}",
-                expected_len,
-                input,
+                "Expected map with {expected_len} entries for '{input}', got {}",
                 entries.len()
             );
         }
-        _ => panic!(
-            "Expected map for '{}', got:\n{}",
-            input,
-            pretty_print(ast, ctx)
-        ),
+        _ => panic!("Expected map for '{input}', got:\n{ast:?}"),
     });
 }
 
@@ -397,7 +366,7 @@ pub fn assert_map(input: &str, expected_len: usize) {
 pub fn parse_and_pretty(input: &str) -> String {
     let mut ctx = TestContext::new(ParseConfig::default());
     match ctx.parse(input) {
-        Ok(_) => pretty_print(ctx.ast().unwrap(), &ctx),
+        Ok(_) => format!("{:?}", ctx.ast().unwrap()),
         Err(e) => format!("Parse error: {e}"),
     }
 }
