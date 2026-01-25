@@ -1,7 +1,6 @@
 use crate::{
-    Span,
+    Error, Span,
     scheme::{
-        Error,
         lex::{self, FiniteRealKind, NumberExactness, Sign},
         traits::SchemeNumberOps,
         unsupported,

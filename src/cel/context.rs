@@ -8,8 +8,7 @@
 // a concrete `CelWriter` implementation to construct the AST.
 
 use crate::cel::{
-    ast_builder, constants,
-    error::Result,
+    Result, ast_builder, constants,
     parser::{self, ParseConfig},
     traits::CelWriter,
 };

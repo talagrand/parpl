@@ -1,7 +1,7 @@
 use crate::{
-    Interner, Span,
+    Error, Interner, Span,
     scheme::{
-        Error, Result,
+        Result,
         lex::{self, FiniteRealKind, NumberExactness, SpannedToken, Token},
         traits::{DatumWriter, SchemeNumberOps},
     },

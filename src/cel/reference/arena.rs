@@ -1,9 +1,9 @@
 use crate::{
     Span, StringPool, StringPoolId,
     cel::{
+        Result,
         ast::{BinaryOp, Expr, ExprKind, Literal, UnaryOp},
         ast_builder::build_ast_from_pairs,
-        error::Result,
         parser::{ParseConfig, parse_with_config},
         traits::CelWriter,
     },

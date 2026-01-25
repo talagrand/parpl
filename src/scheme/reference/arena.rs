@@ -1,10 +1,7 @@
 use super::numbers::{SimpleNumber, SimpleNumberOps};
 use crate::{
-    Span, StringPool, StringPoolId, Syntax,
-    scheme::{
-        Error,
-        traits::{DatumInspector, DatumKind, DatumWriter},
-    },
+    Error, Span, StringPool, StringPoolId, Syntax,
+    scheme::traits::{DatumInspector, DatumKind, DatumWriter},
 };
 use bumpalo::Bump;
 use std::convert::Infallible;

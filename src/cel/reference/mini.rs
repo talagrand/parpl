@@ -1,9 +1,9 @@
 use crate::{
     NoOpInterner, Span,
     cel::{
+        Result,
         ast::{BinaryOp, Literal, UnaryOp},
         ast_builder::build_expr,
-        error::Result,
         parser::{ParseConfig, parse_with_config},
         traits::CelWriter,
     },

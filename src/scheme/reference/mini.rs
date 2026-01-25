@@ -1,7 +1,6 @@
 use crate::{
-    NoOpInterner, Span,
+    Error, NoOpInterner, Span,
     scheme::{
-        Error,
         lex::{self, FiniteRealKind, NumberExactness, Sign},
         traits::{DatumWriter, SchemeNumberOps},
         unsupported,
@@ -203,7 +202,7 @@ pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<MiniDatum, Er
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scheme::{Error, unsupported};
+    use crate::{Error, scheme::unsupported};
 
     struct TestCase {
         name: &'static str,

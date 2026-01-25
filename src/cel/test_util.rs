@@ -5,12 +5,11 @@
 // the boilerplate of creating arenas, interners, and writers.
 
 use crate::{
-    Interner, StringPool, StringPoolId,
+    Error, Interner, StringPool, StringPoolId,
     cel::{
-        CelParser,
+        CelParser, Result,
         ast::{BinaryOp, Expr, ExprKind, Literal},
         context::Builder,
-        error::{Error, Result},
         parser::ParseConfig,
         pretty::pretty_print,
         reference::arena::ArenaCelWriter,
@@ -81,11 +80,10 @@ impl TestContext {
     }
 
     pub fn ast(&self) -> Result<&'static Expr<'static>> {
-        self.ast
-            .ok_or_else(|| crate::cel::error::Error::WriterError {
-                span: crate::Span::new(0, 0),
-                source: Box::new(TestError("No AST".into())),
-            })
+        self.ast.ok_or_else(|| crate::Error::WriterError {
+            span: crate::Span::new(0, 0),
+            source: Box::new(TestError("No AST".into())),
+        })
     }
 
     pub fn resolve<'a>(&'a self, id: &'a StringPoolId) -> Option<&'a str> {
@@ -191,7 +189,7 @@ pub fn assert_parse_fails(input: &str) {
 /// # Examples
 /// ```ignore
 /// # use parpl::cel::test_util::*;
-/// # use parpl::cel::Error;
+/// # use parpl::Error;
 /// assert_parse_fails_with("1 +", |e| matches!(e, Error::Syntax { .. }));
 /// ```
 #[track_caller]

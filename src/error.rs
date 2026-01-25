@@ -1,18 +1,42 @@
-// Error types for the CEL parser
-//
-// This module defines error types for CEL parsing:
-// - Parsing errors (syntax errors from pest)
-// - AST construction errors (literal parsing, etc.)
-//
-// By centralizing error handling, we avoid exposing pest's error types
-// throughout the codebase and provide consistent error reporting.
+// Error types for parpl parsers.
 
 use crate::Span;
+
+// ============================================================================
+// Safety Limits
+// ============================================================================
+
+/// Safety limits exceeded during parsing.
+///
+/// This enum captures various resource limits that parsers enforce to prevent
+/// denial-of-service attacks or stack overflow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LimitExceeded {
+    /// Maximum nesting depth was exceeded.
+    /// Deep nesting in expressions can cause stack overflow during parsing
+    /// or evaluation. Both CEL and Scheme parsers enforce configurable limits.
+    ///
+    /// The `message` field contains a human-readable description. CEL populates
+    /// this with specific depth/limit values; Scheme uses a fixed message.
+    NestingDepth { message: String },
+}
+
+impl std::fmt::Display for LimitExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LimitExceeded::NestingDepth { message } => f.write_str(message),
+        }
+    }
+}
+
+// ============================================================================
+// Error Types
+// ============================================================================
 
 /// Type alias for a boxed writer error.
 pub type WriterErrorInner = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// Top-level error type for CEL parsing.
+/// Top-level error type for parsing.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The input ends in the middle of a grammatically valid construct
@@ -54,13 +78,25 @@ pub enum Error {
         message: String,
     },
 
+    /// A feature or format is not supported.
+    ///
+    /// The `kind` field is a string describing the unsupported feature.
+    /// See [`crate::scheme::unsupported`] module for documented constant values.
+    #[error("unsupported at {span:?}: {kind}")]
+    Unsupported {
+        /// Source location of the unsupported construct.
+        span: Span,
+        /// The unsupported feature identifier.
+        kind: &'static str,
+    },
+
     /// A safety limit was exceeded.
     #[error("limit exceeded at {span:?}: {kind}")]
     LimitExceeded {
         /// Source location where the limit was exceeded.
         span: Span,
         /// The specific limit that was exceeded.
-        kind: crate::LimitExceeded,
+        kind: LimitExceeded,
     },
 
     /// An error from the writer implementation.
@@ -84,6 +120,14 @@ impl Error {
         }
     }
 
+    /// Construct an unsupported error.
+    ///
+    /// Use constants from the [`crate::scheme::unsupported`] module for the `kind` parameter.
+    #[must_use]
+    pub fn unsupported(span: Span, kind: &'static str) -> Self {
+        Error::Unsupported { span, kind }
+    }
+
     /// Construct a nesting depth exceeded error.
     ///
     /// If `details` is `Some((depth, max))`, the message includes specific values.
@@ -98,7 +142,7 @@ impl Error {
         };
         Error::LimitExceeded {
             span,
-            kind: crate::LimitExceeded::NestingDepth { message },
+            kind: LimitExceeded::NestingDepth { message },
         }
     }
 
@@ -113,9 +157,6 @@ impl Error {
         }
     }
 }
-
-/// Result type alias for parser operations.
-pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
@@ -148,7 +189,7 @@ mod tests {
             let err = Error::nesting_depth(Span::new(0, 10), Some((129, 128)));
             assert!(matches!(
                 err,
-                Error::LimitExceeded { kind: crate::LimitExceeded::NestingDepth { .. }, .. }
+                Error::LimitExceeded { kind: LimitExceeded::NestingDepth { .. }, .. }
             ));
         },
 

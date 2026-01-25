@@ -12,12 +12,9 @@
 // **CEL Spec Reference**: langdef.md lines 270-360 (string/bytes semantics)
 
 use crate::{
-    Interner, Span,
-    cel::traits::CelWriter,
-    cel::{
-        ast::{Literal, RawLiteral},
-        error::{Error, Result},
-    },
+    Error, Interner, Span,
+    cel::ast::{Literal, RawLiteral},
+    cel::{Result, traits::CelWriter},
 };
 
 //==============================================================================

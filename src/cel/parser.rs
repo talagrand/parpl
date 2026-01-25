@@ -4,11 +4,8 @@
 // It includes complexity protection against stack overflow and timeout attacks.
 
 use crate::{
-    Span,
-    cel::{
-        constants,
-        error::{Error, Result},
-    },
+    Error, Span,
+    cel::{Result, constants},
 };
 use pest::Parser;
 use pest_derive::Parser;
@@ -62,7 +59,7 @@ impl Default for ParseConfig {
 /// use parpl::cel::parse;
 ///
 /// let pairs = parse("1 + 2")?;
-/// # Ok::<(), parpl::cel::Error>(())
+/// # Ok::<(), parpl::Error>(())
 /// ```
 pub fn parse(input: &str) -> Result<Pairs<'_, Rule>> {
     parse_with_config(input, ParseConfig::default())

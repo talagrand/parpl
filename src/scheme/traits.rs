@@ -1,7 +1,4 @@
-use crate::{
-    Interner, Span, StringId,
-    scheme::{Error, lex},
-};
+use crate::{Error, Interner, Span, StringId, scheme::lex};
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

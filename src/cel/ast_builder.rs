@@ -10,10 +10,10 @@
 // - Identifier resolution: handled during evaluation
 
 use crate::{
-    Interner, Span,
+    Error, Interner, Span,
     cel::{
+        Result,
         ast::{BinaryOp, Literal, QuoteStyle, RawLiteral, UnaryOp},
-        error::{Error, Result},
         literal::process_literal,
         parser::Rule,
         traits::CelWriter,

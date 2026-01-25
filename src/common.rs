@@ -103,26 +103,3 @@ impl Interner for StringPool {
         self.0.resolve(*id)
     }
 }
-
-/// Safety limits exceeded during parsing.
-///
-/// This enum captures various resource limits that parsers enforce to prevent
-/// denial-of-service attacks or stack overflow.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LimitExceeded {
-    /// Maximum nesting depth was exceeded.
-    /// Deep nesting in expressions can cause stack overflow during parsing
-    /// or evaluation. Both CEL and Scheme parsers enforce configurable limits.
-    ///
-    /// The `message` field contains a human-readable description. CEL populates
-    /// this with specific depth/limit values; Scheme uses a fixed message.
-    NestingDepth { message: String },
-}
-
-impl std::fmt::Display for LimitExceeded {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LimitExceeded::NestingDepth { message } => f.write_str(message),
-        }
-    }
-}

@@ -1,7 +1,7 @@
 use crate::{
-    Span, Syntax,
+    Error, Span, Syntax,
     scheme::{
-        Error, Result,
+        Result,
         lex::{
             boolean::lex_boolean,
             identifiers::lex_identifier,
