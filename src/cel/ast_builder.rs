@@ -23,10 +23,12 @@ use pest::iterators::Pair;
 
 fn map_writer_error<E: std::error::Error + Send + Sync + 'static>(e: E, span: Span) -> Error {
     Error::new(
-        crate::cel::error::ErrorKind::WriterError(Box::new(e)),
+        crate::cel::error::ErrorKind::WriterError {
+            span,
+            source: Box::new(e),
+        },
         "Error constructing AST node".to_string(),
     )
-    .with_span(span)
 }
 
 /// Check recursion depth remaining and return error if exhausted
@@ -36,7 +38,8 @@ fn map_writer_error<E: std::error::Error + Send + Sync + 'static>(e: E, span: Sp
 #[inline(always)]
 fn check_depth(depth_left: usize) -> Result<usize> {
     if depth_left == 0 {
-        Err(Error::nesting_depth(0, 0)) // Will be improved to show actual limit
+        // Use zero-span since we don't have position context here
+        Err(Error::nesting_depth(crate::Span::new(0, 0), 0, 0))
     } else {
         Ok(depth_left - 1)
     }
@@ -647,7 +650,6 @@ fn process_literal_pair<W: CelWriter>(
     pair: pest::iterators::Pair<'_, Rule>,
     writer: &mut W,
 ) -> Result<Literal<W::StringId, W::Bytes>> {
-    let span = span_from_pair(&pair);
     // Check if pair is already one of the inner rules (if called with inner pair)
     // But build_primary calls it with `literal` rule pair.
     // build_expr calls it with `literal` rule pair.
@@ -691,7 +693,7 @@ fn process_literal_pair<W: CelWriter>(
         _ => unreachable!("unexpected literal rule: {:?}", inner.as_rule()),
     };
 
-    process_literal(&raw_literal, writer).map_err(|e| e.with_span(span))
+    process_literal(&raw_literal, writer)
 }
 
 /// Parse a string literal, extracting content, raw flag, and quote style

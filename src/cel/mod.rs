@@ -19,6 +19,6 @@ pub mod test_util;
 // Re-export key types for convenient access (single canonical path)
 pub use ast::{BinaryOp, Expr, ExprKind, Literal, QuoteStyle, UnaryOp};
 pub use context::{Builder, CelParser};
-pub use error::{Error, ErrorKind, Result, SyntaxError};
+pub use error::{Error, ErrorKind, Result};
 pub use parser::{ParseConfig, parse, parse_with_config};
 pub use pretty::{PrettyConfig, pretty_print, pretty_print_with_config};

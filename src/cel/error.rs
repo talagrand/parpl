@@ -18,8 +18,6 @@ pub type WriterErrorInner = Box<dyn std::error::Error + Send + Sync + 'static>;
 pub struct Error {
     /// The kind of error
     pub kind: ErrorKind,
-    /// Source location (if available)
-    pub span: Option<Span>,
     /// Human-readable error message
     pub message: String,
 }
@@ -45,50 +43,44 @@ pub enum ErrorKind {
     /// using pest, making it difficult to distinguish incomplete tokens from syntax errors.)
     IncompleteToken,
 
-    /// Syntax error from the parser
-    Syntax(SyntaxError),
+    /// A syntax error detected while lexing or parsing a particular
+    /// nonterminal (for example, `<primary>`, `<expr>`, or `<literal>`).
+    Syntax {
+        /// Source location of the error.
+        ///
+        /// For CEL (pest-based parser), this spans from the error position
+        /// to the end of input, since pest reports cursor positions rather
+        /// than token spans.
+        span: Span,
+        /// The grammar nonterminal being parsed when the error occurred.
+        ///
+        /// For CEL, this is derived from pest's expected rules (e.g., `<primary>`).
+        nonterminal: String,
+        /// Human-readable description of the error.
+        message: String,
+    },
 
     /// A safety limit was exceeded.
-    LimitExceeded(crate::LimitExceeded),
+    LimitExceeded {
+        /// Source location where the limit was exceeded.
+        span: Span,
+        /// The specific limit that was exceeded.
+        kind: crate::LimitExceeded,
+    },
 
-    /// Writer error (from CelWriter implementation)
-    WriterError(WriterErrorInner),
-}
-
-/// Syntax error details.
-///
-/// This structure matches the Scheme parser's `Error::Syntax` variant
-/// for API consistency across parsers.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SyntaxError {
-    /// Source location of the error.
-    ///
-    /// For CEL (pest-based parser), this spans from the error position
-    /// to the end of input, since pest reports cursor positions rather
-    /// than token spans.
-    pub span: Span,
-    /// The grammar nonterminal being parsed when the error occurred.
-    ///
-    /// For CEL, this is derived from pest's expected rules (e.g., "primary").
-    pub nonterminal: String,
-    /// Human-readable description of the error.
-    pub message: String,
+    /// Writer error (from CelWriter implementation).
+    WriterError {
+        /// Source location where the writer error occurred.
+        span: Span,
+        /// The underlying writer error.
+        source: WriterErrorInner,
+    },
 }
 
 impl Error {
     /// Create a new error
     pub fn new(kind: ErrorKind, message: String) -> Self {
-        Self {
-            kind,
-            span: None,
-            message,
-        }
-    }
-
-    /// Add span information to the error
-    pub fn with_span(mut self, span: Span) -> Self {
-        self.span = Some(span);
-        self
+        Self { kind, message }
     }
 
     /// Create a syntax error.
@@ -98,24 +90,28 @@ impl Error {
     pub fn syntax(message: String, position: usize, input_len: usize) -> Self {
         let span = Span::new(position, input_len);
         Self {
-            kind: ErrorKind::Syntax(SyntaxError {
+            kind: ErrorKind::Syntax {
                 span,
                 nonterminal: String::new(),
                 message: message.clone(),
-            }),
-            span: Some(span),
+            },
             message,
         }
     }
 
     /// Create a nesting depth error
-    pub fn nesting_depth(depth: usize, max: usize) -> Self {
+    pub fn nesting_depth(span: Span, depth: usize, max: usize) -> Self {
+        let message = format!(
+            "Nesting depth {depth} exceeds maximum of {max} (CEL spec requires 12, we support {max})"
+        );
         Self {
-            kind: ErrorKind::LimitExceeded(crate::LimitExceeded::NestingDepth),
-            span: None,
-            message: format!(
-                "Nesting depth {depth} exceeds maximum of {max} (CEL spec requires 12, we support {max})"
-            ),
+            kind: ErrorKind::LimitExceeded {
+                span,
+                kind: crate::LimitExceeded::NestingDepth {
+                    message: message.clone(),
+                },
+            },
+            message,
         }
     }
 
@@ -126,12 +122,11 @@ impl Error {
     pub fn invalid_escape(message: String) -> Self {
         let msg = format!("Invalid escape sequence: {message}");
         Self {
-            kind: ErrorKind::Syntax(SyntaxError {
+            kind: ErrorKind::Syntax {
                 span: Span::new(0, 0),
                 nonterminal: "<escape-sequence>".to_string(),
                 message: msg.clone(),
-            }),
-            span: None,
+            },
             message: msg,
         }
     }
@@ -142,7 +137,6 @@ impl Error {
     pub fn incomplete() -> Self {
         Self {
             kind: ErrorKind::Incomplete,
-            span: None,
             message: "input is incomplete; more data required".to_string(),
         }
     }
@@ -192,12 +186,11 @@ impl Error {
                     .join(", ");
 
                 Self {
-                    kind: ErrorKind::Syntax(SyntaxError {
+                    kind: ErrorKind::Syntax {
                         span,
                         nonterminal,
                         message: message.clone(),
-                    }),
-                    span: Some(span),
+                    },
                     message,
                 }
             }
@@ -205,19 +198,22 @@ impl Error {
                 // Check if this is our nesting depth error
                 if msg.contains("Nesting depth") && msg.contains("exceeds maximum") {
                     Self {
-                        kind: ErrorKind::LimitExceeded(crate::LimitExceeded::NestingDepth),
-                        span: Some(span),
+                        kind: ErrorKind::LimitExceeded {
+                            span,
+                            kind: crate::LimitExceeded::NestingDepth {
+                                message: msg.clone(),
+                            },
+                        },
                         message: msg,
                     }
                 } else {
                     // Defensive fallback for unexpected custom errors
                     Self {
-                        kind: ErrorKind::Syntax(SyntaxError {
+                        kind: ErrorKind::Syntax {
                             span,
                             nonterminal: String::new(),
                             message: msg.clone(),
-                        }),
-                        span: Some(span),
+                        },
                         message: msg,
                     }
                 }
@@ -230,8 +226,14 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.message)?;
 
-        // Add span information if available
-        if let Some(span) = &self.span {
+        // Add span information if available from the error kind
+        let span = match &self.kind {
+            ErrorKind::Syntax { span, .. } => Some(span),
+            ErrorKind::LimitExceeded { span, .. } => Some(span),
+            ErrorKind::Incomplete | ErrorKind::IncompleteToken => None,
+            ErrorKind::WriterError { span, .. } => Some(span),
+        };
+        if let Some(span) = span {
             write!(f, " at {}..{}", span.start, span.end)?;
         }
 
@@ -263,12 +265,11 @@ mod tests {
                 Ok(_) => panic!("expected error for {input:?}"),
                 Err(e) => {
                     let err = Error::from_pest_error(e, input.len());
-                    if let ErrorKind::Syntax(syn) = &err.kind {
+                    if let ErrorKind::Syntax { nonterminal, .. } = &err.kind {
                         assert!(
-                            syn.nonterminal.contains(expected_contains)
-                                || syn.nonterminal == expected_contains,
-                            "for {input:?}: expected nonterminal containing {expected_contains:?}, got {:?}",
-                            syn.nonterminal
+                            nonterminal.contains(expected_contains)
+                                || nonterminal == expected_contains,
+                            "for {input:?}: expected nonterminal containing {expected_contains:?}, got {nonterminal:?}"
                         );
                     } else {
                         panic!("expected syntax error");
@@ -302,21 +303,15 @@ mod tests {
         },
 
         test_nesting_depth_error: {
-            let err = Error::nesting_depth(129, 128);
+            let err = Error::nesting_depth(Span::new(0, 10), 129, 128);
             assert!(matches!(
                 err.kind,
-                ErrorKind::LimitExceeded(crate::LimitExceeded::NestingDepth)
+                ErrorKind::LimitExceeded { kind: crate::LimitExceeded::NestingDepth { .. }, .. }
             ));
         },
 
-        test_error_with_span: {
-            let err = Error::new(
-                ErrorKind::LimitExceeded(crate::LimitExceeded::NestingDepth),
-                "Test error".to_string(),
-            )
-            .with_span(Span::new(10, 15));
-
-            assert_eq!(err.span, Some(Span::new(10, 15)));
+        test_limit_exceeded_span: {
+            let err = Error::nesting_depth(Span::new(10, 15), 129, 128);
             let display = format!("{err}");
             assert!(display.contains("10..15"));
         },

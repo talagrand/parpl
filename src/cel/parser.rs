@@ -125,6 +125,7 @@ pub fn parse_with_config(input: &str, config: ParseConfig) -> Result<Pairs<'_, R
 fn validate_nesting_depth(input: &str, max_depth: usize) -> Result<()> {
     let mut depth = 0;
     let mut max_reached = 0;
+    let mut pos = 0;
 
     for ch in input.chars() {
         match ch {
@@ -132,7 +133,9 @@ fn validate_nesting_depth(input: &str, max_depth: usize) -> Result<()> {
                 depth += 1;
                 max_reached = max_reached.max(depth);
                 if max_reached > max_depth {
-                    return Err(Error::nesting_depth(max_reached, max_depth));
+                    // Span from the offending delimiter to end of input
+                    let span = crate::Span::new(pos, input.len());
+                    return Err(Error::nesting_depth(span, max_reached, max_depth));
                 }
             }
             ')' | ']' | '}' => {
@@ -140,6 +143,7 @@ fn validate_nesting_depth(input: &str, max_depth: usize) -> Result<()> {
             }
             _ => {}
         }
+        pos += ch.len_utf8();
     }
 
     Ok(())

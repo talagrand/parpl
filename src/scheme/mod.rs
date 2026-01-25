@@ -64,8 +64,11 @@ pub enum Error {
     Incomplete,
 
     /// An error from the [`DatumWriter`](traits::DatumWriter) implementation.
-    #[error("writer error: {0}")]
-    WriterError(WriterErrorInner),
+    #[error("writer error at {span:?}: {source}")]
+    WriterError {
+        span: Span,
+        source: WriterErrorInner,
+    },
 
     /// The input ends in the middle of a token (e.g., `#\`, `1e+`, `3/`).
     ///
@@ -120,5 +123,16 @@ impl Error {
     #[must_use]
     pub fn limit_exceeded(span: Span, kind: LimitExceeded) -> Self {
         Error::LimitExceeded { span, kind }
+    }
+
+    /// Helper for constructing a nesting depth exceeded error.
+    #[must_use]
+    pub fn nesting_depth(span: Span) -> Self {
+        Error::LimitExceeded {
+            span,
+            kind: LimitExceeded::NestingDepth {
+                message: "maximum nesting depth exceeded".to_string(),
+            },
+        }
     }
 }

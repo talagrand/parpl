@@ -1,5 +1,5 @@
 use crate::{
-    Interner, LimitExceeded, Span,
+    Interner, Span,
     scheme::{
         Error,
         lex::{self, FiniteRealKind, NumberExactness, SpannedToken, Token},
@@ -9,8 +9,11 @@ use crate::{
 
 /// Convert a writer error to a parse error.
 #[inline]
-fn writer_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> Error {
-    Error::WriterError(Box::new(e))
+fn writer_error<E: std::error::Error + Send + Sync + 'static>(span: Span, e: E) -> Error {
+    Error::WriterError {
+        span,
+        source: Box::new(e),
+    }
 }
 
 // Datum enum removed. Use generic DatumWriter.
@@ -151,7 +154,7 @@ impl<'i> TokenStream<'i> {
             };
 
             if depth == 0 {
-                return Err(Error::limit_exceeded(span, LimitExceeded::NestingDepth));
+                return Err(Error::nesting_depth(span));
             }
             let _ = self.raw_next(); // consume #;
             // Skip the commented datum at one level deeper.
@@ -181,7 +184,7 @@ impl<'i> TokenStream<'i> {
         };
 
         if depth == 0 {
-            return Err(Error::limit_exceeded(span, LimitExceeded::NestingDepth));
+            return Err(Error::nesting_depth(span));
         }
 
         match token_type {
@@ -317,38 +320,38 @@ impl<'i> TokenStream<'i> {
         let span = token.span;
 
         if depth == 0 {
-            return Err(Error::limit_exceeded(span, LimitExceeded::NestingDepth));
+            return Err(Error::nesting_depth(span));
         }
 
         match token.value {
             Token::Boolean(b) => writer
                 .bool(b, span)
                 .map(|d| (d, span))
-                .map_err(writer_error),
+                .map_err(|e| writer_error(span, e)),
             Token::Number(n) => {
                 let num = W::N::from_literal(&n, span)?;
                 writer
                     .number(num, span)
                     .map(|d| (d, span))
-                    .map_err(writer_error)
+                    .map_err(|e| writer_error(span, e))
             }
             Token::Character(c) => writer
                 .char(c, span)
                 .map(|d| (d, span))
-                .map_err(writer_error),
+                .map_err(|e| writer_error(span, e)),
             Token::String(s) => {
                 let id = writer.interner().intern(&s);
                 writer
                     .string(id, span)
                     .map(|d| (d, span))
-                    .map_err(writer_error)
+                    .map_err(|e| writer_error(span, e))
             }
             Token::Identifier(s) => {
                 let id = writer.interner().intern(&s);
                 writer
                     .symbol(id, span)
                     .map(|d| (d, span))
-                    .map_err(writer_error)
+                    .map_err(|e| writer_error(span, e))
             }
             Token::LParen => self.parse_list_with_max_depth(writer, span, depth),
             Token::VectorStart => self.parse_vector_with_max_depth(writer, span, depth),
@@ -368,12 +371,12 @@ impl<'i> TokenStream<'i> {
                 writer
                     .labeled(n, datum, full_span)
                     .map(|d| (d, full_span))
-                    .map_err(writer_error)
+                    .map_err(|e| writer_error(full_span, e))
             }
             Token::LabelRef(n) => writer
                 .label_ref(n, span)
                 .map(|d| (d, span))
-                .map_err(writer_error),
+                .map_err(|e| writer_error(span, e)),
 
             // Invalid start of datum
             Token::RParen | Token::Dot => Err(Error::syntax(
@@ -401,10 +404,7 @@ impl<'i> TokenStream<'i> {
         depth: u32,
     ) -> Result<(W::Output, Span), Error> {
         if depth == 0 {
-            return Err(Error::limit_exceeded(
-                start_span,
-                LimitExceeded::NestingDepth,
-            ));
+            return Err(Error::nesting_depth(start_span));
         }
 
         let mut elements = Vec::new();
@@ -465,12 +465,12 @@ impl<'i> TokenStream<'i> {
             writer
                 .improper_list(elements, tail, span)
                 .map(|d| (d, span))
-                .map_err(writer_error)
+                .map_err(|e| writer_error(span, e))
         } else {
             writer
                 .list(elements, span)
                 .map(|d| (d, span))
-                .map_err(writer_error)
+                .map_err(|e| writer_error(span, e))
         }
     }
 
@@ -488,10 +488,7 @@ impl<'i> TokenStream<'i> {
         depth: u32,
     ) -> Result<(W::Output, Span), Error> {
         if depth == 0 {
-            return Err(Error::limit_exceeded(
-                start_span,
-                LimitExceeded::NestingDepth,
-            ));
+            return Err(Error::nesting_depth(start_span));
         }
 
         let mut elements = Vec::new();
@@ -517,7 +514,7 @@ impl<'i> TokenStream<'i> {
         writer
             .vector(elements, span)
             .map(|d| (d, span))
-            .map_err(writer_error)
+            .map_err(|e| writer_error(span, e))
     }
 
     /// Parse an `<abbreviation>` (quote, quasiquote, unquote variants).
@@ -538,23 +535,22 @@ impl<'i> TokenStream<'i> {
         depth: u32,
     ) -> Result<(W::Output, Span), Error> {
         if depth == 0 {
-            return Err(Error::limit_exceeded(
-                start_span,
-                LimitExceeded::NestingDepth,
-            ));
+            return Err(Error::nesting_depth(start_span));
         }
 
         let (datum, datum_span) = self.parse_datum_with_max_depth(writer, depth - 1)?;
         let span = start_span.merge(datum_span);
 
         let sym_id = writer.interner().intern(name);
-        let sym = writer.symbol(sym_id, start_span).map_err(writer_error)?;
+        let sym = writer
+            .symbol(sym_id, start_span)
+            .map_err(|e| writer_error(start_span, e))?;
 
         // Build (name datum)
         writer
             .list([sym, datum], span)
             .map(|d| (d, span))
-            .map_err(writer_error)
+            .map_err(|e| writer_error(span, e))
     }
 
     /// Parse a `<bytevector>` datum once the `#u8(` prefix has been consumed.
@@ -572,10 +568,7 @@ impl<'i> TokenStream<'i> {
         depth: u32,
     ) -> Result<(W::Output, Span), Error> {
         if depth == 0 {
-            return Err(Error::limit_exceeded(
-                start_span,
-                LimitExceeded::NestingDepth,
-            ));
+            return Err(Error::nesting_depth(start_span));
         }
 
         let mut elements = Vec::new();
@@ -621,7 +614,7 @@ impl<'i> TokenStream<'i> {
         writer
             .bytevector(&elements, span)
             .map(|d| (d, span))
-            .map_err(writer_error)
+            .map_err(|e| writer_error(span, e))
     }
 }
 
@@ -720,7 +713,7 @@ pub fn parse_datum_with_max_depth<W: DatumWriter>(
 mod tests {
     use super::*;
     use crate::{
-        Interner,
+        Interner, LimitExceeded,
         scheme::{
             lex::Token,
             reference::arena::{ArenaDatumWriter, Datum},
@@ -914,7 +907,7 @@ mod tests {
                 (
                     ErrorMatcher::LimitExceeded,
                     Error::LimitExceeded {
-                        kind: LimitExceeded::NestingDepth,
+                        kind: LimitExceeded::NestingDepth { .. },
                         ..
                     },
                 ) => {}

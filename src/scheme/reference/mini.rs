@@ -295,11 +295,11 @@ mod tests {
                 (ErrorMatcher::Unsupported(expected_kind), Error::Unsupported { kind, .. }) => {
                     assert_eq!(expected_kind, kind, "{test_name}: unsupported mismatch")
                 }
-                (ErrorMatcher::Unsupported(expected_kind), Error::WriterError(inner)) => {
+                (ErrorMatcher::Unsupported(expected_kind), Error::WriterError { source, .. }) => {
                     // The generic reader wraps writer errors in WriterError.
                     // Check if the feature name is present in the message.
-                    let kind_str = format!("{expected_kind}");
-                    let msg = inner.to_string();
+                    let kind_str = expected_kind.to_string();
+                    let msg = source.to_string();
                     assert!(
                         msg.contains(&kind_str),
                         "{test_name}: expected WriterError containing {kind_str:?}, got {msg:?}"
