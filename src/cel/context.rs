@@ -8,7 +8,7 @@
 // a concrete `CelWriter` implementation to construct the AST.
 
 use crate::cel::{
-    Result, ast_builder, constants,
+    Result, builder, constants,
     parser::{self, ParseConfig},
     traits::CelWriter,
 };
@@ -246,7 +246,7 @@ impl CelParser {
         let pairs = parser::parse_with_config(input, self.config)?;
 
         // 2. Build AST using the writer
-        ast_builder::build_ast_from_pairs(pairs, self.config.max_ast_depth, writer)
+        builder::build_ast_from_pairs(pairs, self.config.max_ast_depth, writer)
     }
 
     /// Get the underlying parse configuration

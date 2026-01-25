@@ -1,10 +1,9 @@
-// AST builder - converts pest parse tree to AST
+// Builder - converts pest parse tree to user's representation
 //
-// This module transforms pest's `Pairs` into our typed AST.
-// All allocations are done in a bumpalo arena, and strings are interned
-// for deduplication.
+// This module transforms pest's `Pairs` into the user's representation
+// by calling `CelWriter` trait methods. Users control what gets built.
 //
-// Processing during AST construction:
+// Processing during construction:
 // - Escape sequences: processed immediately via literal::process_literal
 // - Numeric parsing: validated and parsed immediately
 // - Identifier resolution: handled during evaluation
@@ -13,10 +12,9 @@ use crate::{
     Error, Interner, Span,
     cel::{
         Result,
-        ast::{BinaryOp, Literal, QuoteStyle, RawLiteral, UnaryOp},
-        literal::process_literal,
+        literal::{RawLiteral, process_literal},
         parser::Rule,
-        traits::CelWriter,
+        traits::{BinaryOp, CelWriter, Literal, QuoteStyle, UnaryOp},
     },
 };
 use pest::iterators::Pair;
@@ -794,8 +792,8 @@ fn apply_unary_repeated<W: CelWriter>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cel::ast::ExprKind;
     use crate::cel::parser::ParseConfig;
+    use crate::cel::reference::arena::ExprKind;
     use crate::cel::test_util::TestContext;
 
     // Test helper that uses TestContext

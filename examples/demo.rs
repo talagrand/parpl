@@ -10,7 +10,11 @@
 use bumpalo::Bump;
 use parpl::{
     StringPool,
-    cel::{Builder, CelParser, Expr, Result, reference::arena::ArenaCelWriter, traits::CelWriter},
+    cel::{
+        Builder, CelParser, Result,
+        reference::arena::{ArenaCelWriter, Expr},
+        traits::CelWriter,
+    },
 };
 
 fn parse_scoped<R>(

@@ -46,7 +46,7 @@ pub const DEFAULT_MAX_PARSE_DEPTH: u32 = 128;
 /// - ~158 on 8MB stack
 ///
 /// This limit is enforced in:
-/// - AST builder (`ast_builder.rs`): depth parameter passed to all build functions
+/// - Builder (`builder.rs`): depth parameter passed to all build functions
 /// - Each recursive call increments depth, checked against this limit
 /// - By-value parameter means no manual decrement needed (automatic on return)
 pub const DEFAULT_MAX_AST_DEPTH: u32 = 24;

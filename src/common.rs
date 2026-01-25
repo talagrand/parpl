@@ -6,7 +6,9 @@ use string_interner::{DefaultSymbol, StringInterner, backend::DefaultBackend};
 /// A byte-offset span into the original source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
+    /// Starting byte offset (inclusive).
     pub start: usize,
+    /// Ending byte offset (exclusive).
     pub end: usize,
 }
 
@@ -26,7 +28,9 @@ impl Span {
 /// A syntax object: a value paired with its source span.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Syntax<T> {
+    /// The source location of this syntax object.
     pub span: Span,
+    /// The wrapped value.
     pub value: T,
 }
 
@@ -50,8 +54,17 @@ impl<T: Clone + Eq + Hash + Debug> StringId for T {}
 /// This is typically passed to the top-level Reader or Expander,
 /// not stored in the Datum itself.
 pub trait Interner {
+    /// The handle type returned by [`intern`](Interner::intern).
     type Id: StringId;
+
+    /// Intern a string, returning a handle.
+    ///
+    /// If the string was previously interned, returns the existing handle.
     fn intern(&mut self, text: &str) -> Self::Id;
+
+    /// Resolve a handle back to the original string.
+    ///
+    /// Returns `None` if the ID is invalid (should not happen with well-formed IDs).
     fn resolve<'a>(&'a self, id: &'a Self::Id) -> Option<&'a str>;
 }
 

@@ -8,10 +8,10 @@ use crate::{
     Error, Interner, StringPool, StringPoolId,
     cel::{
         CelParser, Result,
-        ast::{BinaryOp, Expr, ExprKind, Literal},
         context::Builder,
         parser::ParseConfig,
-        reference::arena::ArenaCelWriter,
+        reference::arena::{ArenaCelWriter, Expr, ExprKind},
+        traits::{BinaryOp, Literal},
     },
 };
 use bumpalo::Bump;
@@ -355,7 +355,7 @@ pub fn assert_map(input: &str, expected_len: usize) {
     });
 }
 
-/// Parse and pretty-print for debugging
+/// Parse and format AST for debugging
 ///
 /// # Examples
 /// ```

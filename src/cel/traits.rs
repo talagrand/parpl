@@ -1,8 +1,190 @@
-use crate::{
-    Interner, Span,
-    cel::ast::{BinaryOp, Literal, UnaryOp},
-};
+//! Traits and shared types for CEL AST construction.
+//!
+//! This module defines:
+//!
+//! - [`CelWriter`]: The core trait for AST construction
+//! - [`BinaryOp`], [`UnaryOp`]: Operator enums used by the trait
+//! - [`Literal`]: Generic literal type used by the trait
+//! - [`QuoteStyle`]: Quote delimiter classification for strings/bytes
+
+use crate::{Interner, Span};
+use std::fmt;
 use std::fmt::Debug;
+
+// ============================================================================
+// Operator Types
+// ============================================================================
+
+/// Binary operators for CEL expressions.
+///
+/// CEL supports the standard set of binary operators for logical operations,
+/// comparisons, and arithmetic. Operators are listed in precedence order
+/// (lowest to highest).
+///
+/// # Precedence (lowest to highest)
+///
+/// 1. `||` (logical or)
+/// 2. `&&` (logical and)
+/// 3. `<`, `<=`, `>`, `>=`, `==`, `!=`, `in` (relational)
+/// 4. `+`, `-` (additive)
+/// 5. `*`, `/`, `%` (multiplicative)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOp {
+    // Logical (lowest precedence)
+    /// Logical OR: ||
+    LogicalOr,
+    /// Logical AND: &&
+    LogicalAnd,
+
+    // Relational
+    /// Less than: <
+    Less,
+    /// Less than or equal: <=
+    LessEq,
+    /// Greater than: >
+    Greater,
+    /// Greater than or equal: >=
+    GreaterEq,
+    /// Equal: ==
+    Equals,
+    /// Not equal: !=
+    NotEquals,
+    /// In: in
+    In,
+
+    // Arithmetic
+    /// Addition: +
+    Add,
+    /// Subtraction: -
+    Subtract,
+    /// Multiplication: *
+    Multiply,
+    /// Division: /
+    Divide,
+    /// Modulo: %
+    Modulo,
+}
+
+impl fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            BinaryOp::LogicalOr => "||",
+            BinaryOp::LogicalAnd => "&&",
+            BinaryOp::Less => "<",
+            BinaryOp::LessEq => "<=",
+            BinaryOp::Greater => ">",
+            BinaryOp::GreaterEq => ">=",
+            BinaryOp::Equals => "==",
+            BinaryOp::NotEquals => "!=",
+            BinaryOp::In => "in",
+            BinaryOp::Add => "+",
+            BinaryOp::Subtract => "-",
+            BinaryOp::Multiply => "*",
+            BinaryOp::Divide => "/",
+            BinaryOp::Modulo => "%",
+        };
+        write!(f, "{s}")
+    }
+}
+
+/// Unary operators for CEL expressions.
+///
+/// CEL supports logical negation (`!`) and arithmetic negation (`-`).
+/// Both operators can be repeated (e.g., `!!x` = `x`, `--x` = `x`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp {
+    /// Logical NOT: !
+    /// Can be repeated: !! expr = expr
+    Not,
+    /// Arithmetic negation: -
+    /// Can be repeated: -- expr = expr
+    Negate,
+}
+
+impl fmt::Display for UnaryOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            UnaryOp::Not => "!",
+            UnaryOp::Negate => "-",
+        };
+        write!(f, "{s}")
+    }
+}
+
+// ============================================================================
+// Literal Types
+// ============================================================================
+
+/// Processed literal values (validated and ready for evaluation).
+///
+/// All numeric values are parsed, all escape sequences are processed.
+/// The type parameters allow different string/bytes representations:
+///
+/// - `S`: String identifier type (e.g., `StringPoolId` for interned, `String` for owned)
+/// - `B`: Bytes type (e.g., `&'arena [u8]` for arena, `Vec<u8>` for owned)
+#[derive(Debug, Clone, PartialEq)]
+pub enum Literal<S, B> {
+    /// Integer literal: parsed i64 value
+    /// CEL Spec (line 143): INT_LIT = -? DIGIT+ | -? 0x HEXDIGIT+
+    /// Range: i64::MIN to i64::MAX
+    Int(i64),
+
+    /// Unsigned integer literal: parsed u64 value
+    /// CEL Spec (line 144): UINT_LIT = INT_LIT \[uU\]
+    /// Range: 0 to u64::MAX
+    UInt(u64),
+
+    /// Floating-point literal: parsed f64 value
+    /// CEL Spec (line 145): FLOAT_LIT
+    /// IEEE 754 double-precision
+    Float(f64),
+
+    /// String literal: processed with escape sequences resolved
+    /// CEL Spec (lines 149-153): STRING_LIT
+    /// All escape sequences (\n, \t, \xHH, \uHHHH, \UHHHHHHHH, octal) are processed
+    String(S),
+
+    /// Bytes literal: processed with escape sequences resolved
+    /// CEL Spec (line 154): BYTES_LIT = \[bB\] STRING_LIT
+    /// Octal and \xHH escapes represent byte values, Unicode escapes produce UTF-8
+    /// **IMPORTANT**: Bytes are arbitrary octet sequences, may not be valid UTF-8!
+    Bytes(B),
+
+    /// Boolean literal: true, false
+    /// CEL Spec (line 160): BOOL_LIT
+    Bool(bool),
+
+    /// Null literal: null
+    /// CEL Spec (line 161): NULL_LIT
+    Null,
+}
+
+/// Quote style for CEL string and bytes literals.
+///
+/// CEL supports four quote styles, allowing strings with embedded quotes
+/// or multi-line content:
+///
+/// | Style | Syntax | Multi-line | Escape `'` | Escape `"` |
+/// |-------|--------|------------|------------|------------|
+/// | Single | `'text'` | No | Required | Optional |
+/// | Double | `"text"` | No | Optional | Required |
+/// | Triple Single | `'''text'''` | Yes | Optional | Optional |
+/// | Triple Double | `"""text"""` | Yes | Optional | Optional |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuoteStyle {
+    /// Single quotes: `'text'`
+    SingleQuote,
+    /// Double quotes: `"text"`
+    DoubleQuote,
+    /// Triple single quotes: `'''text'''` (multi-line)
+    TripleSingleQuote,
+    /// Triple double quotes: `"""text"""` (multi-line)
+    TripleDoubleQuote,
+}
+
+// ============================================================================
+// CelWriter Trait
+// ============================================================================
 
 /// Trait for constructing CEL AST nodes.
 ///

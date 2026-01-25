@@ -2,14 +2,109 @@ use crate::{
     Span, StringPool, StringPoolId,
     cel::{
         Result,
-        ast::{BinaryOp, Expr, ExprKind, Literal, UnaryOp},
-        ast_builder::build_ast_from_pairs,
+        builder::build_ast_from_pairs,
         parser::{ParseConfig, parse_with_config},
-        traits::CelWriter,
+        traits::{BinaryOp, CelWriter, Literal, UnaryOp},
     },
 };
 use bumpalo::Bump;
 
+// ============================================================================
+// AST Types
+// ============================================================================
+
+/// A complete CEL expression (the root of the AST).
+///
+/// **Arena-allocated**: All `Expr` nodes are allocated in a `bumpalo::Bump` arena.
+/// The lifetime `'arena` ties the expression to the arena that owns it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expr<'arena> {
+    /// The kind of expression
+    pub kind: ExprKind<'arena>,
+    /// Source location
+    pub span: Span,
+}
+
+impl<'arena> Expr<'arena> {
+    /// Create a new expression with the given kind and span.
+    pub fn new(kind: ExprKind<'arena>, span: Span) -> Self {
+        Self { kind, span }
+    }
+}
+
+/// The kind of expression (CEL spec lines 68-94).
+///
+/// **Arena-allocated**: Uses `&'arena Expr<'arena>` instead of `Box<Expr>`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExprKind<'arena> {
+    /// Ternary conditional: `condition ? true_expr : false_expr`
+    /// CEL Spec (line 68): Expr = ConditionalOr ["?" ConditionalOr ":" Expr]
+    Ternary(
+        &'arena Expr<'arena>,
+        &'arena Expr<'arena>,
+        &'arena Expr<'arena>,
+    ),
+
+    /// Binary operation: left op right
+    /// Covers: ||, &&, <, <=, >=, >, ==, !=, in, +, -, *, /, %
+    Binary(BinaryOp, &'arena Expr<'arena>, &'arena Expr<'arena>),
+
+    /// Unary operation: op expr
+    /// Covers: !, - (with repetition like !! or --)
+    Unary(UnaryOp, &'arena Expr<'arena>),
+
+    /// Member access: expr.field or expr.method(args)
+    /// CEL Spec (line 79): Member "." SELECTOR \["(" \[ExprList\] ")"\]
+    Member(
+        &'arena Expr<'arena>,
+        StringPoolId,
+        Option<&'arena [Expr<'arena>]>,
+    ),
+
+    /// Index access: expr\[index\]
+    /// CEL Spec (line 79): Member "\[" Expr "\]"
+    Index(&'arena Expr<'arena>, &'arena Expr<'arena>),
+
+    /// Function call: func(args) or .func(args)
+    /// CEL Spec (line 83): \["."\] IDENT "(" \[ExprList\] ")"
+    Call(
+        Option<&'arena Expr<'arena>>,
+        StringPoolId,
+        &'arena [Expr<'arena>],
+    ),
+
+    /// Identifier reference
+    /// CEL Spec (line 83): IDENT
+    Ident(StringPoolId),
+
+    /// List literal: \[expr, ...\]
+    /// CEL Spec (line 86): "\[" \[ExprList\] "\]"
+    List(&'arena [Expr<'arena>]),
+
+    /// Map literal: {key: value, ...}
+    /// CEL Spec (line 87): "{" \[MapInits\] "}"
+    Map(&'arena [(Expr<'arena>, Expr<'arena>)]),
+
+    /// Message/struct literal: Type{field: value, ...} or .Type{...}
+    /// CEL Spec (line 88): \["."\] SELECTOR {"." SELECTOR} "{" \[FieldInits\] "}"
+    Struct(
+        Option<&'arena Expr<'arena>>,
+        &'arena [StringPoolId],
+        &'arena [(StringPoolId, Expr<'arena>)],
+    ),
+
+    /// Literal value (processed and validated)
+    Literal(Literal<StringPoolId, &'arena [u8]>),
+}
+
+// ============================================================================
+// CelWriter Implementation
+// ============================================================================
+
+/// Arena-based `CelWriter` implementation.
+///
+/// Allocates all AST nodes in a bumpalo arena for efficient memory management.
+/// Strings are interned in a `StringPool`.
 pub struct ArenaCelWriter<'a, 'arena> {
     arena: &'arena Bump,
     interner: &'a mut StringPool,

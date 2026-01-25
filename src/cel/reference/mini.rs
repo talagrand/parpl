@@ -2,10 +2,9 @@ use crate::{
     NoOpInterner, Span,
     cel::{
         Result,
-        ast::{BinaryOp, Literal, UnaryOp},
-        ast_builder::build_expr,
+        builder::build_expr,
         parser::{ParseConfig, parse_with_config},
-        traits::CelWriter,
+        traits::{BinaryOp, CelWriter, Literal, UnaryOp},
     },
 };
 

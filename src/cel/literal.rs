@@ -13,9 +13,61 @@
 
 use crate::{
     Error, Interner, Span,
-    cel::ast::{Literal, RawLiteral},
-    cel::{Result, traits::CelWriter},
+    cel::{
+        Result,
+        traits::{CelWriter, Literal, QuoteStyle},
+    },
 };
+
+//==============================================================================
+// Raw Literal Type
+//==============================================================================
+
+/// Raw literal from the parser (unparsed strings).
+///
+/// This represents the literal as it appears in the source code, before any
+/// processing or validation. The builder converts these to `Literal` nodes
+/// via the `CelWriter` trait.
+///
+/// The lifetime `'a` borrows from the input source text, avoiding interning
+/// until after literal processing (escape sequences, number parsing, etc.).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum RawLiteral<'a> {
+    /// Integer literal: "123", "0xFF", "-456"
+    /// CEL Spec (line 145): INT_LIT ::= -? DIGIT+ | -? 0x HEXDIGIT+
+    Int(&'a str),
+
+    /// Unsigned integer literal: "123", "0xFF" (without 'u' suffix)
+    /// CEL Spec (line 146): UINT_LIT ::= INT_LIT [uU]
+    UInt(&'a str),
+
+    /// Floating-point literal: "3.14", "1e10", ".5"
+    /// CEL Spec (line 147): FLOAT_LIT
+    Float(&'a str),
+
+    /// String literal: raw content between quotes
+    /// CEL Spec (lines 149-153): STRING_LIT
+    /// Stores: (content, is_raw, quote_style)
+    /// - content: the text between quotes (without the quotes themselves)
+    /// - is_raw: true if prefixed with r/R (no escape processing needed)
+    /// - quote_style: which quote delimiters were used
+    String(&'a str, bool, QuoteStyle),
+
+    /// Bytes literal: raw content between quotes
+    /// CEL Spec (line 154): BYTES_LIT = [bB] STRING_LIT
+    /// Stores: (content, is_raw, quote_style)
+    Bytes(&'a str, bool, QuoteStyle),
+
+    /// Boolean literal: true, false
+    /// CEL Spec (line 160): BOOL_LIT
+    /// Already processed by parser
+    Bool(bool),
+
+    /// Null literal: null
+    /// CEL Spec (line 161): NULL_LIT
+    /// Already processed by parser
+    Null,
+}
 
 //==============================================================================
 // Common Escape Processing
@@ -482,7 +534,7 @@ pub fn process_literal<W: CelWriter>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cel::ast::QuoteStyle;
+    use crate::cel::traits::QuoteStyle;
     use crate::{Interner, Span, StringPool, StringPoolId};
     use bumpalo::Bump;
 
@@ -537,7 +589,7 @@ mod tests {
         }
         fn unary(
             &mut self,
-            _op: crate::cel::ast::UnaryOp,
+            _op: crate::cel::traits::UnaryOp,
             _operand: Self::Expr,
             _span: Span,
         ) -> std::result::Result<Self::Expr, Self::Error> {
@@ -545,7 +597,7 @@ mod tests {
         }
         fn binary(
             &mut self,
-            _op: crate::cel::ast::BinaryOp,
+            _op: crate::cel::traits::BinaryOp,
             _left: Self::Expr,
             _right: Self::Expr,
             _span: Span,
