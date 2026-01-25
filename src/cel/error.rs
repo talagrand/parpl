@@ -55,15 +55,24 @@ pub enum ErrorKind {
     WriterError(WriterErrorInner),
 }
 
-/// Syntax error details
+/// Syntax error details.
+///
+/// This structure matches the Scheme parser's `Error::Syntax` variant
+/// for API consistency across parsers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SyntaxError {
-    /// What was expected
-    pub expected: String,
-    /// What was found (if available)
-    pub found: Option<String>,
-    /// Position in the input
-    pub position: usize,
+    /// Source location of the error.
+    ///
+    /// For CEL (pest-based parser), this spans from the error position
+    /// to the end of input, since pest reports cursor positions rather
+    /// than token spans.
+    pub span: Span,
+    /// The grammar nonterminal being parsed when the error occurred.
+    ///
+    /// For CEL, this is derived from pest's expected rules (e.g., "primary").
+    pub nonterminal: String,
+    /// Human-readable description of the error.
+    pub message: String,
 }
 
 impl Error {
@@ -82,15 +91,19 @@ impl Error {
         self
     }
 
-    /// Create a syntax error
-    pub fn syntax(message: String, position: usize) -> Self {
+    /// Create a syntax error.
+    ///
+    /// The span extends from `position` to `input_len` since we don't know
+    /// the problematic token's width.
+    pub fn syntax(message: String, position: usize, input_len: usize) -> Self {
+        let span = Span::new(position, input_len);
         Self {
             kind: ErrorKind::Syntax(SyntaxError {
-                expected: String::new(),
-                found: None,
-                position,
+                span,
+                nonterminal: String::new(),
+                message: message.clone(),
             }),
-            span: Some(Span::new(position, position)),
+            span: Some(span),
             message,
         }
     }
@@ -106,16 +119,20 @@ impl Error {
         }
     }
 
-    /// Create an invalid escape sequence error
+    /// Create an invalid escape sequence error.
+    ///
+    /// Position information is not available for escape sequence errors
+    /// since they occur during literal parsing after the main parse.
     pub fn invalid_escape(message: String) -> Self {
+        let msg = format!("Invalid escape sequence: {message}");
         Self {
             kind: ErrorKind::Syntax(SyntaxError {
-                expected: String::new(),
-                found: None,
-                position: 0,
+                span: Span::new(0, 0),
+                nonterminal: "<escape-sequence>".to_string(),
+                message: msg.clone(),
             }),
             span: None,
-            message: format!("Invalid escape sequence: {message}"),
+            message: msg,
         }
     }
 
@@ -136,6 +153,8 @@ impl Error {
     /// If the error position is at or beyond the input length, the parser
     /// consumed all input and still expected more, indicating incomplete input.
     pub fn from_pest_error(err: pest::error::Error<Rule>, input_len: usize) -> Self {
+        use pest::error::ErrorVariant;
+
         let position = match err.location {
             pest::error::InputLocation::Pos(pos) => pos,
             pest::error::InputLocation::Span((start, _)) => start,
@@ -146,8 +165,64 @@ impl Error {
             return Self::incomplete();
         }
 
-        // Otherwise, convert normally
-        Self::from(err)
+        // Span extends from error position to end of input
+        let span = Span::new(position, input_len);
+        let message = format!("{err}");
+
+        match err.variant {
+            ErrorVariant::ParsingError {
+                positives,
+                negatives,
+            } => {
+                // Format rules with angle brackets, converting pest built-ins to friendly names
+                let format_rule = |r: &Rule| -> String {
+                    let name = format!("{r:?}");
+                    match name.as_str() {
+                        "EOI" => "<end-of-input>".to_string(),
+                        "SOI" => "<start-of-input>".to_string(),
+                        _ => format!("<{name}>"),
+                    }
+                };
+
+                let nonterminal: String = positives
+                    .iter()
+                    .map(format_rule)
+                    .chain(negatives.iter().map(|r| format!("not {}", format_rule(r))))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                Self {
+                    kind: ErrorKind::Syntax(SyntaxError {
+                        span,
+                        nonterminal,
+                        message: message.clone(),
+                    }),
+                    span: Some(span),
+                    message,
+                }
+            }
+            ErrorVariant::CustomError { message: msg } => {
+                // Check if this is our nesting depth error
+                if msg.contains("Nesting depth") && msg.contains("exceeds maximum") {
+                    Self {
+                        kind: ErrorKind::LimitExceeded(crate::LimitExceeded::NestingDepth),
+                        span: Some(span),
+                        message: msg,
+                    }
+                } else {
+                    // Defensive fallback for unexpected custom errors
+                    Self {
+                        kind: ErrorKind::Syntax(SyntaxError {
+                            span,
+                            nonterminal: String::new(),
+                            message: msg.clone(),
+                        }),
+                        span: Some(span),
+                        message: msg,
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -166,72 +241,42 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Convert from pest parsing errors
-impl From<pest::error::Error<Rule>> for Error {
-    fn from(err: pest::error::Error<Rule>) -> Self {
-        use pest::error::ErrorVariant;
-
-        let message = format!("{err}");
-        let position = match err.location {
-            pest::error::InputLocation::Pos(pos) => pos,
-            pest::error::InputLocation::Span((start, _)) => start,
-        };
-
-        match err.variant {
-            ErrorVariant::ParsingError {
-                positives,
-                negatives,
-            } => {
-                let expected: String = positives
-                    .iter()
-                    .map(|r| format!("{r:?}"))
-                    .chain(negatives.iter().map(|r| format!("not {r:?}")))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                Self {
-                    kind: ErrorKind::Syntax(SyntaxError {
-                        expected,
-                        found: None,
-                        position,
-                    }),
-                    span: Some(Span::new(position, position)),
-                    message,
-                }
-            }
-            ErrorVariant::CustomError { message: msg } => {
-                // Check if this is our nesting depth error
-                if msg.contains("Nesting depth") && msg.contains("exceeds maximum") {
-                    Self {
-                        kind: ErrorKind::LimitExceeded(crate::LimitExceeded::NestingDepth),
-                        span: Some(Span::new(position, position)),
-                        message: msg,
-                    }
-                } else {
-                    // We only emit LimitExceeded as custom errors during parsing,
-                    // so this branch should never be reached. We handle it defensively
-                    // as a syntax error since it occurs during parsing, not writing.
-                    Self {
-                        kind: ErrorKind::Syntax(SyntaxError {
-                            expected: String::new(),
-                            found: None,
-                            position,
-                        }),
-                        span: Some(Span::new(position, position)),
-                        message: msg,
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Result type alias for CEL parser operations
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cel::parser::{CelParser, Rule};
+    use pest::Parser;
+
+    #[test]
+    fn test_nonterminal_format() {
+        // Test that nonterminals use angle bracket format
+        let bad_inputs = vec![
+            (")", "<primary>"),                     // single rule
+            ("foo bar", "<end-of-input>, <relop>"), // EOI converted + multiple rules
+        ];
+
+        for (input, expected_contains) in bad_inputs {
+            match CelParser::parse(Rule::cel, input) {
+                Ok(_) => panic!("expected error for {input:?}"),
+                Err(e) => {
+                    let err = Error::from_pest_error(e, input.len());
+                    if let ErrorKind::Syntax(syn) = &err.kind {
+                        assert!(
+                            syn.nonterminal.contains(expected_contains)
+                                || syn.nonterminal == expected_contains,
+                            "for {input:?}: expected nonterminal containing {expected_contains:?}, got {:?}",
+                            syn.nonterminal
+                        );
+                    } else {
+                        panic!("expected syntax error");
+                    }
+                }
+            }
+        }
+    }
 
     macro_rules! test_cases {
         ($($name:ident: $test:expr),* $(,)?) => {
@@ -250,10 +295,10 @@ mod tests {
 
     test_cases! {
         test_error_display: {
-            let err = Error::syntax("unexpected token".to_string(), 5);
+            let err = Error::syntax("unexpected token".to_string(), 5, 10);
             let display = format!("{err}");
             assert!(display.contains("unexpected token"));
-            assert!(display.contains("5..5"));
+            assert!(display.contains("5..10"));  // span extends to input_len
         },
 
         test_nesting_depth_error: {

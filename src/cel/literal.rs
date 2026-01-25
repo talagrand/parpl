@@ -169,18 +169,18 @@ pub fn parse_int(s: &str) -> Result<i64> {
     let abs_value = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         // Hexadecimal
         i64::from_str_radix(hex, 16)
-            .map_err(|_| Error::syntax(format!("Invalid integer literal: {s}"), 0))?
+            .map_err(|_| Error::syntax(format!("Invalid integer literal: {s}"), 0, s.len()))?
     } else {
         // Decimal
         s.parse::<i64>()
-            .map_err(|_| Error::syntax(format!("Invalid integer literal: {s}"), 0))?
+            .map_err(|_| Error::syntax(format!("Invalid integer literal: {s}"), 0, s.len()))?
     };
 
     // Apply sign
     if negative {
         abs_value
             .checked_neg()
-            .ok_or_else(|| Error::syntax(format!("Integer overflow: -{s}"), 0))
+            .ok_or_else(|| Error::syntax(format!("Integer overflow: -{s}"), 0, s.len()))
     } else {
         Ok(abs_value)
     }
@@ -202,12 +202,14 @@ pub fn parse_uint(s: &str) -> Result<u64> {
     // Parse based on prefix
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         // Hexadecimal
-        u64::from_str_radix(hex, 16)
-            .map_err(|_| Error::syntax(format!("Invalid unsigned integer literal: {s}"), 0))
+        u64::from_str_radix(hex, 16).map_err(|_| {
+            Error::syntax(format!("Invalid unsigned integer literal: {s}"), 0, s.len())
+        })
     } else {
         // Decimal
-        s.parse::<u64>()
-            .map_err(|_| Error::syntax(format!("Invalid unsigned integer literal: {s}"), 0))
+        s.parse::<u64>().map_err(|_| {
+            Error::syntax(format!("Invalid unsigned integer literal: {s}"), 0, s.len())
+        })
     }
 }
 
@@ -223,7 +225,7 @@ pub fn parse_uint(s: &str) -> Result<u64> {
 /// CEL spec (line 1101): "The double type follows the IEEE 754 standard"
 pub fn parse_float(s: &str) -> Result<f64> {
     s.parse::<f64>()
-        .map_err(|_| Error::syntax(format!("Invalid floating-point literal: {s}"), 0))
+        .map_err(|_| Error::syntax(format!("Invalid floating-point literal: {s}"), 0, s.len()))
 }
 
 //==============================================================================

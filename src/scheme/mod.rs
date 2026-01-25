@@ -81,7 +81,7 @@ pub enum Error {
     #[error("syntax error in {nonterminal} at {span:?}: {message}")]
     Syntax {
         span: Span,
-        nonterminal: &'static str,
+        nonterminal: String,
         message: String,
     },
 
@@ -100,10 +100,10 @@ pub enum Error {
 impl Error {
     /// Helper for constructing a syntax error.
     #[must_use]
-    pub fn syntax(span: Span, nonterminal: &'static str, message: impl Into<String>) -> Self {
+    pub fn syntax(span: Span, nonterminal: impl Into<String>, message: impl Into<String>) -> Self {
         Error::Syntax {
             span,
-            nonterminal,
+            nonterminal: nonterminal.into(),
             message: message.into(),
         }
     }
