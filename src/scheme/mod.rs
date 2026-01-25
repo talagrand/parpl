@@ -7,6 +7,7 @@ pub mod traits;
 use crate::Span;
 
 // Re-export key types for convenient access (single canonical path)
+pub use crate::LimitExceeded;
 pub use reader::{TokenStream, parse_datum, parse_datum_with_max_depth};
 
 // ============================================================================
@@ -71,22 +72,6 @@ impl std::fmt::Display for Unsupported {
             // Number conversion
             Unsupported::NumericOverflow => "numeric overflow",
             Unsupported::NumericRepresentation => "unsupported numeric representation",
-        };
-        f.write_str(s)
-    }
-}
-
-/// Safety limits exceeded during parsing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LimitExceeded {
-    /// Maximum nesting depth was exceeded.
-    NestingDepth,
-}
-
-impl std::fmt::Display for LimitExceeded {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            LimitExceeded::NestingDepth => "maximum nesting depth exceeded",
         };
         f.write_str(s)
     }

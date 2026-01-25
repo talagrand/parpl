@@ -5,7 +5,9 @@
 mod common;
 
 // Re-export common types at crate root
-pub use common::{Interner, NoOpInterner, Span, StringId, StringPool, StringPoolId, Syntax};
+pub use common::{
+    Interner, LimitExceeded, NoOpInterner, Span, StringId, StringPool, StringPoolId, Syntax,
+};
 
 #[cfg(feature = "cel")]
 pub mod cel;
