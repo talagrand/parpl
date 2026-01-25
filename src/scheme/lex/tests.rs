@@ -155,17 +155,16 @@ fn assert_infnan(
 
 impl TestCase {
     fn run(&self) {
-        let result: Result<Vec<SpannedToken>, Error> = lex(self.input).collect();
+        let result: Result<Vec<SpannedToken>> = lex(self.input).collect();
         self.run_with_result(result);
     }
 
     fn run_with_config(&self, config: LexConfig) {
-        let result: Result<Vec<SpannedToken>, Error> =
-            lex_with_config(self.input, config).collect();
+        let result: Result<Vec<SpannedToken>> = lex_with_config(self.input, config).collect();
         self.run_with_result(result);
     }
 
-    fn run_with_result(&self, result: Result<Vec<SpannedToken>, Error>) {
+    fn run_with_result(&self, result: Result<Vec<SpannedToken>>) {
         match &self.expected {
             Expected::Tokens(expected_tokens) => {
                 let tokens = result.unwrap_or_else(|e| {

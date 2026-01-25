@@ -22,13 +22,10 @@ use crate::{
 use pest::iterators::Pair;
 
 fn map_writer_error<E: std::error::Error + Send + Sync + 'static>(e: E, span: Span) -> Error {
-    Error::new(
-        crate::cel::error::ErrorKind::WriterError {
-            span,
-            source: Box::new(e),
-        },
-        "Error constructing AST node".to_string(),
-    )
+    Error::WriterError {
+        span,
+        source: Box::new(e),
+    }
 }
 
 /// Check recursion depth remaining and return error if exhausted
@@ -39,7 +36,7 @@ fn map_writer_error<E: std::error::Error + Send + Sync + 'static>(e: E, span: Sp
 fn check_depth(depth_left: usize) -> Result<usize> {
     if depth_left == 0 {
         // Use zero-span since we don't have position context here
-        Err(Error::nesting_depth(crate::Span::new(0, 0), 0, 0))
+        Err(Error::nesting_depth(crate::Span::new(0, 0), None))
     } else {
         Ok(depth_left - 1)
     }
@@ -663,6 +660,9 @@ fn process_literal_pair<W: CelWriter>(
         pair
     };
 
+    // Extract span before match borrows inner
+    let span = span_from_pair(&inner);
+
     let raw_literal = match inner.as_rule() {
         Rule::int_lit => RawLiteral::Int(inner.as_str()),
         Rule::uint_lit => {
@@ -693,7 +693,7 @@ fn process_literal_pair<W: CelWriter>(
         _ => unreachable!("unexpected literal rule: {:?}", inner.as_rule()),
     };
 
-    process_literal(&raw_literal, writer)
+    process_literal(&raw_literal, span, writer)
 }
 
 /// Parse a string literal, extracting content, raw flag, and quote style

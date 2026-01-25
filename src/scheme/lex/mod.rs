@@ -1,7 +1,7 @@
 use crate::{
     Span, Syntax,
     scheme::{
-        Error,
+        Error, Result,
         lex::{
             boolean::lex_boolean,
             identifiers::lex_identifier,
@@ -32,7 +32,7 @@ pub mod utils;
 
 // Internal input and result types used by the lexer implementation.
 pub type Input<'i> = winnow::stream::LocatingSlice<winnow::stream::Str<'i>>;
-pub type PResult<O> = Result<O, ErrMode<ContextError>>;
+pub type PResult<O> = std::result::Result<O, ErrMode<ContextError>>;
 
 /// Radix of a Scheme number literal as specified by `<radix R>`.
 ///
@@ -307,7 +307,7 @@ impl<'i> Lexer<'i> {
 
     /// Run a lexing parser starting at `start`, mapping backtrack to
     /// `Ok(None)` and other errors into `Error`.
-    fn run_lex<O, F>(&mut self, start: usize, parser: F) -> Result<Option<O>, Error>
+    fn run_lex<O, F>(&mut self, start: usize, parser: F) -> Result<Option<O>>
     where
         F: FnOnce(&mut Input<'i>) -> PResult<O>,
     {
@@ -340,7 +340,7 @@ impl<'i> Lexer<'i> {
 
     /// Lex a single token from the input stream, returning `Ok(None)` at EOF.
     /// This driver uses first-character dispatch for efficiency, then delegates to the canonical lex_* parsers.
-    fn token_with_span(&mut self) -> Result<Option<SpannedToken<'i>>, Error> {
+    fn token_with_span(&mut self) -> Result<Option<SpannedToken<'i>>> {
         // Skip `<intertoken space>` before each token.
         let start_before = self.input.current_token_start();
 
@@ -527,7 +527,7 @@ impl<'i> Lexer<'i> {
 }
 
 impl<'i> Iterator for Lexer<'i> {
-    type Item = Result<SpannedToken<'i>, Error>;
+    type Item = Result<SpannedToken<'i>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.token_with_span() {

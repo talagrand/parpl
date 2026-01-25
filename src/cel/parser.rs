@@ -3,9 +3,12 @@
 // This module handles parsing CEL expressions using the pest PEG parser.
 // It includes complexity protection against stack overflow and timeout attacks.
 
-use crate::cel::{
-    constants,
-    error::{Error, Result},
+use crate::{
+    Span,
+    cel::{
+        constants,
+        error::{Error, Result},
+    },
 };
 use pest::Parser;
 use pest_derive::Parser;
@@ -98,7 +101,76 @@ pub fn parse_with_config(input: &str, config: ParseConfig) -> Result<Pairs<'_, R
     // Our heuristic check counts all delimiters, so the limit is set higher than actual depth.
     validate_nesting_depth(input, config.max_parse_depth)?;
 
-    CelParser::parse(Rule::cel, input).map_err(|e| Error::from_pest_error(e, input.len()))
+    CelParser::parse(Rule::cel, input).map_err(|e| from_pest_error(e, input.len()))
+}
+
+/// Create an error from a pest parsing error, using input length to detect
+/// incomplete input.
+///
+/// If the error position is at or beyond the input length, the parser
+/// consumed all input and still expected more, indicating incomplete input.
+fn from_pest_error(err: pest::error::Error<Rule>, input_len: usize) -> Error {
+    use pest::error::ErrorVariant;
+
+    let position = match err.location {
+        pest::error::InputLocation::Pos(pos) => pos,
+        pest::error::InputLocation::Span((start, _)) => start,
+    };
+
+    // If error is at end of input, it's incomplete (parser wanted more)
+    if position >= input_len {
+        return Error::Incomplete;
+    }
+
+    // Span extends from error position to end of input
+    let span = Span::new(position, input_len);
+    let message = format!("{err}");
+
+    match err.variant {
+        ErrorVariant::ParsingError {
+            positives,
+            negatives,
+        } => {
+            // Format rules with angle brackets, converting pest built-ins to friendly names
+            let format_rule = |r: &Rule| -> String {
+                let name = format!("{r:?}");
+                match name.as_str() {
+                    "EOI" => "<end-of-input>".to_string(),
+                    "SOI" => "<start-of-input>".to_string(),
+                    _ => format!("<{name}>"),
+                }
+            };
+
+            let nonterminal: String = positives
+                .iter()
+                .map(format_rule)
+                .chain(negatives.iter().map(|r| format!("not {}", format_rule(r))))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            Error::Syntax {
+                span,
+                nonterminal,
+                message,
+            }
+        }
+        ErrorVariant::CustomError { message: msg } => {
+            // Check if this is our nesting depth error
+            if msg.contains("Nesting depth") && msg.contains("exceeds maximum") {
+                Error::LimitExceeded {
+                    span,
+                    kind: crate::LimitExceeded::NestingDepth { message: msg },
+                }
+            } else {
+                // Defensive fallback for unexpected custom errors
+                Error::Syntax {
+                    span,
+                    nonterminal: String::new(),
+                    message: msg,
+                }
+            }
+        }
+    }
 }
 
 /// Validate that input doesn't exceed maximum delimiter count (heuristic depth check)
@@ -135,7 +207,7 @@ fn validate_nesting_depth(input: &str, max_depth: usize) -> Result<()> {
                 if max_reached > max_depth {
                     // Span from the offending delimiter to end of input
                     let span = crate::Span::new(pos, input.len());
-                    return Err(Error::nesting_depth(span, max_reached, max_depth));
+                    return Err(Error::nesting_depth(span, Some((max_reached, max_depth))));
                 }
             }
             ')' | ']' | '}' => {
@@ -177,6 +249,33 @@ mod tests {
                     );
                 }
                 Ok(_) => panic!("Expected '{input}' to fail, but it parsed successfully"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_nonterminal_format() {
+        // Test that nonterminals use angle bracket format
+        let bad_inputs = vec![
+            (")", "<primary>"),                     // single rule
+            ("foo bar", "<end-of-input>, <relop>"), // EOI converted + multiple rules
+        ];
+
+        for (input, expected_contains) in bad_inputs {
+            match CelParser::parse(Rule::cel, input) {
+                Ok(_) => panic!("expected error for {input:?}"),
+                Err(e) => {
+                    let err = from_pest_error(e, input.len());
+                    if let Error::Syntax { nonterminal, .. } = &err {
+                        assert!(
+                            nonterminal.contains(expected_contains)
+                                || nonterminal == expected_contains,
+                            "for {input:?}: expected nonterminal containing {expected_contains:?}, got {nonterminal:?}"
+                        );
+                    } else {
+                        panic!("expected syntax error");
+                    }
+                }
             }
         }
     }

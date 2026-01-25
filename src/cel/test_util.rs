@@ -10,7 +10,7 @@ use crate::{
         CelParser,
         ast::{BinaryOp, Expr, ExprKind, Literal},
         context::Builder,
-        error::{ErrorKind, Result},
+        error::{Error, Result},
         parser::ParseConfig,
         pretty::pretty_print,
         reference::arena::ArenaCelWriter,
@@ -81,15 +81,11 @@ impl TestContext {
     }
 
     pub fn ast(&self) -> Result<&'static Expr<'static>> {
-        self.ast.ok_or_else(|| {
-            crate::cel::error::Error::new(
-                crate::cel::error::ErrorKind::WriterError {
-                    span: crate::Span::new(0, 0),
-                    source: Box::new(TestError("No AST".into())),
-                },
-                "No AST parsed".into(),
-            )
-        })
+        self.ast
+            .ok_or_else(|| crate::cel::error::Error::WriterError {
+                span: crate::Span::new(0, 0),
+                source: Box::new(TestError("No AST".into())),
+            })
     }
 
     pub fn resolve<'a>(&'a self, id: &'a StringPoolId) -> Option<&'a str> {
@@ -195,24 +191,21 @@ pub fn assert_parse_fails(input: &str) {
 /// # Examples
 /// ```ignore
 /// # use parpl::cel::test_util::*;
-/// # use parpl::cel::ErrorKind;
-/// assert_parse_fails_with("1 +", |k| matches!(k, ErrorKind::Syntax(_)));
+/// # use parpl::cel::Error;
+/// assert_parse_fails_with("1 +", |e| matches!(e, Error::Syntax { .. }));
 /// ```
 #[track_caller]
 pub fn assert_parse_fails_with<F>(input: &str, matcher: F)
 where
-    F: FnOnce(&ErrorKind) -> bool,
+    F: FnOnce(&Error) -> bool,
 {
     let mut ctx = TestContext::new(ParseConfig::default());
     match ctx.parse(input) {
         Ok(()) => panic!("Expected '{input}' to fail, but it succeeded"),
         Err(e) => {
             assert!(
-                matcher(&e.kind),
-                "Error kind did not match for '{}', got {:?}: {}",
-                input,
-                e.kind,
-                e
+                matcher(&e),
+                "Error did not match for '{input}', got {e:?}: {e}"
             );
         }
     }
