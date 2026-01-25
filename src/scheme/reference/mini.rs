@@ -1,9 +1,10 @@
 use crate::{
     NoOpInterner, Span,
     scheme::{
-        Error, Unsupported,
+        Error,
         lex::{self, FiniteRealKind, NumberExactness, Sign},
         traits::{DatumWriter, SchemeNumberOps},
+        unsupported,
     },
 };
 
@@ -34,7 +35,10 @@ impl SchemeNumberOps for MiniNumberOps {
         match lit.kind.exactness {
             NumberExactness::Unspecified => {}
             NumberExactness::Exact | NumberExactness::Inexact => {
-                return Err(Error::unsupported(span, Unsupported::NumericRepresentation));
+                return Err(Error::unsupported(
+                    span,
+                    unsupported::NUMERIC_REPRESENTATION,
+                ));
             }
         }
 
@@ -48,9 +52,9 @@ impl SchemeNumberOps for MiniNumberOps {
                             let kind = match e.kind() {
                                 std::num::IntErrorKind::PosOverflow
                                 | std::num::IntErrorKind::NegOverflow => {
-                                    Unsupported::NumericOverflow
+                                    unsupported::NUMERIC_OVERFLOW
                                 }
-                                _ => Unsupported::NumericRepresentation,
+                                _ => unsupported::NUMERIC_REPRESENTATION,
                             };
                             return Err(Error::unsupported(span, kind));
                         }
@@ -58,10 +62,13 @@ impl SchemeNumberOps for MiniNumberOps {
 
                     let result = match real.effective_sign() {
                         Sign::Positive => i64::try_from(val)
-                            .map_err(|_| Error::unsupported(span, Unsupported::NumericOverflow))?,
+                            .map_err(|_| Error::unsupported(span, unsupported::NUMERIC_OVERFLOW))?,
                         Sign::Negative => {
                             if val > i64::MIN.unsigned_abs() {
-                                return Err(Error::unsupported(span, Unsupported::NumericOverflow));
+                                return Err(Error::unsupported(
+                                    span,
+                                    unsupported::NUMERIC_OVERFLOW,
+                                ));
                             }
                             (val as i64).wrapping_neg()
                         }
@@ -69,9 +76,15 @@ impl SchemeNumberOps for MiniNumberOps {
 
                     Ok(result)
                 }
-                _ => Err(Error::unsupported(span, Unsupported::NumericRepresentation)),
+                _ => Err(Error::unsupported(
+                    span,
+                    unsupported::NUMERIC_REPRESENTATION,
+                )),
             },
-            _ => Err(Error::unsupported(span, Unsupported::NumericRepresentation)),
+            _ => Err(Error::unsupported(
+                span,
+                unsupported::NUMERIC_REPRESENTATION,
+            )),
         }
     }
 
@@ -105,7 +118,7 @@ impl DatumWriter for MiniDatumWriter {
     }
 
     fn char(&mut self, _v: char, s: Span) -> Result<Self::Output, Self::Error> {
-        Err(Error::unsupported(s, Unsupported::Characters))
+        Err(Error::unsupported(s, unsupported::CHARACTER))
     }
 
     fn string(&mut self, v: Self::StringId, _s: Span) -> Result<Self::Output, Self::Error> {
@@ -117,7 +130,7 @@ impl DatumWriter for MiniDatumWriter {
     }
 
     fn bytevector(&mut self, _v: &[u8], s: Span) -> Result<Self::Output, Self::Error> {
-        Err(Error::unsupported(s, Unsupported::Bytevectors))
+        Err(Error::unsupported(s, unsupported::BYTEVECTOR))
     }
 
     fn list<I>(&mut self, iter: I, _s: Span) -> Result<Self::Output, Self::Error>
@@ -139,7 +152,7 @@ impl DatumWriter for MiniDatumWriter {
         I: IntoIterator<Item = Self::Output>,
         I::IntoIter: ExactSizeIterator,
     {
-        Err(Error::unsupported(s, Unsupported::ImproperLists))
+        Err(Error::unsupported(s, unsupported::IMPROPER_LIST))
     }
 
     fn vector<I>(&mut self, _iter: I, s: Span) -> Result<Self::Output, Self::Error>
@@ -147,7 +160,7 @@ impl DatumWriter for MiniDatumWriter {
         I: IntoIterator<Item = Self::Output>,
         I::IntoIter: ExactSizeIterator,
     {
-        Err(Error::unsupported(s, Unsupported::Vectors))
+        Err(Error::unsupported(s, unsupported::VECTOR))
     }
 
     fn labeled(
@@ -156,11 +169,11 @@ impl DatumWriter for MiniDatumWriter {
         _inner: Self::Output,
         s: Span,
     ) -> Result<Self::Output, Self::Error> {
-        Err(Error::unsupported(s, Unsupported::Labels))
+        Err(Error::unsupported(s, unsupported::LABEL))
     }
 
     fn label_ref(&mut self, _id: u64, s: Span) -> Result<Self::Output, Self::Error> {
-        Err(Error::unsupported(s, Unsupported::Labels))
+        Err(Error::unsupported(s, unsupported::LABEL))
     }
 
     fn copy(&mut self, source: &Self::Output) -> Result<Self::Output, Self::Error> {
@@ -190,7 +203,7 @@ pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<MiniDatum, Er
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scheme::{Error, Unsupported};
+    use crate::scheme::{Error, unsupported};
 
     struct TestCase {
         name: &'static str,
@@ -216,7 +229,7 @@ mod tests {
     enum ErrorMatcher {
         Incomplete,
         Syntax(&'static str),
-        Unsupported(Unsupported),
+        Unsupported(&'static str),
     }
 
     impl TestCase {
@@ -352,12 +365,12 @@ mod tests {
             TestCase {
                 name: "datum_comment_prefix",
                 input: "#; 1 2",
-                expected: Error(ErrorMatcher::Unsupported(Unsupported::Comments)),
+                expected: Error(ErrorMatcher::Unsupported(unsupported::COMMENT)),
             },
             TestCase {
                 name: "datum_comment_in_list",
                 input: "(1 #; 2 3)",
-                expected: Error(ErrorMatcher::Unsupported(Unsupported::Comments)),
+                expected: Error(ErrorMatcher::Unsupported(unsupported::COMMENT)),
             },
             // Quote expansion
             TestCase {
@@ -368,31 +381,32 @@ mod tests {
                     ValueMatcher::Symbol("foo"),
                 ])),
             },
+            // Quasiquote/unquote forms are not supported
             // Unsupported features
             TestCase {
                 name: "unsupported_vector",
                 input: "#(1 2)",
-                expected: Error(ErrorMatcher::Unsupported(Unsupported::Vectors)),
+                expected: Error(ErrorMatcher::Unsupported(unsupported::VECTOR)),
             },
             TestCase {
                 name: "unsupported_float",
                 input: "1.5",
                 expected: Error(ErrorMatcher::Unsupported(
-                    Unsupported::NumericRepresentation,
+                    unsupported::NUMERIC_REPRESENTATION,
                 )),
             },
             TestCase {
                 name: "unsupported_exact_number",
                 input: "#e42",
                 expected: Error(ErrorMatcher::Unsupported(
-                    Unsupported::NumericRepresentation,
+                    unsupported::NUMERIC_REPRESENTATION,
                 )),
             },
             TestCase {
                 name: "unsupported_inexact_number",
                 input: "#i42",
                 expected: Error(ErrorMatcher::Unsupported(
-                    Unsupported::NumericRepresentation,
+                    unsupported::NUMERIC_REPRESENTATION,
                 )),
             },
             // Syntax errors
@@ -420,12 +434,12 @@ mod tests {
             TestCase {
                 name: "number_overflow_max_plus_one",
                 input: "9223372036854775808",
-                expected: Error(ErrorMatcher::Unsupported(Unsupported::NumericOverflow)),
+                expected: Error(ErrorMatcher::Unsupported(unsupported::NUMERIC_OVERFLOW)),
             },
             TestCase {
                 name: "number_overflow_min_minus_one",
                 input: "-9223372036854775809",
-                expected: Error(ErrorMatcher::Unsupported(Unsupported::NumericOverflow)),
+                expected: Error(ErrorMatcher::Unsupported(unsupported::NUMERIC_OVERFLOW)),
             },
             // Fold-case directives are not supported in MiniReader; they
             // should be reported as unsupported features rather than
@@ -433,12 +447,12 @@ mod tests {
             TestCase {
                 name: "unsupported_fold_case_directive_on",
                 input: "#!fold-case 1",
-                expected: Error(ErrorMatcher::Unsupported(Unsupported::FoldCaseDirectives)),
+                expected: Error(ErrorMatcher::Unsupported(unsupported::FOLD_CASE_DIRECTIVE)),
             },
             TestCase {
                 name: "unsupported_fold_case_directive_off",
                 input: "#!no-fold-case 1",
-                expected: Error(ErrorMatcher::Unsupported(Unsupported::FoldCaseDirectives)),
+                expected: Error(ErrorMatcher::Unsupported(unsupported::FOLD_CASE_DIRECTIVE)),
             },
         ];
 

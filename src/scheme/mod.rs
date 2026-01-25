@@ -17,64 +17,39 @@ pub use reader::{TokenStream, parse_datum, parse_datum_with_max_depth};
 /// Type alias for a boxed writer error.
 pub type WriterErrorInner = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// Features or formats that a [`DatumWriter`](traits::DatumWriter) or
+/// Documented string constants for unsupported features.
+///
+/// These are used with [`Error::Unsupported`] to indicate features or formats
+/// that a [`DatumWriter`](traits::DatumWriter) or
 /// [`SchemeNumberOps`](traits::SchemeNumberOps) implementation may reject.
 ///
-/// These variants represent errors that implementations *can* raise when
-/// they encounter constructs they don't handle. For example:
-/// - A minimal writer might reject vectors or characters
-/// - A lexer configuration might reject comments
-/// - A number implementation might reject floats or bignums
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Unsupported {
+/// Using `&'static str` instead of an enum allows language-specific extensions
+/// without modifying the core error type.
+pub mod unsupported {
     // --- Datum types (rejected by DatumWriter) ---
     /// Vector literals `#(...)`.
-    Vectors,
+    pub const VECTOR: &str = "vector";
     /// Bytevector literals `#u8(...)`.
-    Bytevectors,
-    /// Quasiquote/unquote forms.
-    Quasiquote,
+    pub const BYTEVECTOR: &str = "bytevector";
     /// Labeled data `#n=` / `#n#`.
-    Labels,
+    pub const LABEL: &str = "label";
     /// Character literals `#\x`.
-    Characters,
+    pub const CHARACTER: &str = "character";
     /// Improper (dotted) lists.
-    ImproperLists,
+    pub const IMPROPER_LIST: &str = "improper-list";
 
     // --- Lexer restrictions (rejected by LexConfig) ---
     /// Comments (`;`, `#|...|#`, `#;`) rejected by configuration.
-    Comments,
+    pub const COMMENT: &str = "comment";
     /// Fold-case directives (`#!fold-case`, `#!no-fold-case`) rejected.
-    FoldCaseDirectives,
+    pub const FOLD_CASE_DIRECTIVE: &str = "fold-case-directive";
 
     // --- Number conversion (rejected by SchemeNumberOps) ---
     /// Integer literal exceeds the target type's range.
-    /// (R7RS recommends arbitrary precision, but implementations may use fixed-width types.)
-    NumericOverflow,
+    pub const NUMERIC_OVERFLOW: &str = "numeric-overflow";
     /// Number representation not handled by the implementation
     /// (e.g., floats, rationals, complex numbers, exactness prefixes).
-    NumericRepresentation,
-}
-
-impl std::fmt::Display for Unsupported {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            // Datum types
-            Unsupported::Vectors => "vectors",
-            Unsupported::Bytevectors => "bytevectors",
-            Unsupported::Quasiquote => "quasiquote/unquote",
-            Unsupported::Labels => "labels",
-            Unsupported::Characters => "characters",
-            Unsupported::ImproperLists => "improper lists",
-            // Lexer restrictions
-            Unsupported::Comments => "comments",
-            Unsupported::FoldCaseDirectives => "fold-case directives",
-            // Number conversion
-            Unsupported::NumericOverflow => "numeric overflow",
-            Unsupported::NumericRepresentation => "unsupported numeric representation",
-        };
-        f.write_str(s)
-    }
+    pub const NUMERIC_REPRESENTATION: &str = "numeric-representation";
 }
 
 /// Top-level error type for Scheme parsing.
@@ -111,8 +86,11 @@ pub enum Error {
     },
 
     /// A feature or format is not supported.
+    ///
+    /// The `kind` field is a string describing the unsupported feature.
+    /// See [`unsupported`] module for documented constant values.
     #[error("unsupported at {span:?}: {kind}")]
-    Unsupported { span: Span, kind: Unsupported },
+    Unsupported { span: Span, kind: &'static str },
 
     /// A safety limit was exceeded.
     #[error("limit exceeded at {span:?}: {kind}")]
@@ -131,8 +109,10 @@ impl Error {
     }
 
     /// Helper for constructing an unsupported error.
+    ///
+    /// Use constants from the [`unsupported`] module for the `kind` parameter.
     #[must_use]
-    pub fn unsupported(span: Span, kind: Unsupported) -> Self {
+    pub fn unsupported(span: Span, kind: &'static str) -> Self {
         Error::Unsupported { span, kind }
     }
 

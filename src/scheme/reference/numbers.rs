@@ -1,9 +1,10 @@
 use crate::{
     Span,
     scheme::{
-        Error, Unsupported,
+        Error,
         lex::{self, FiniteRealKind, NumberExactness, Sign},
         traits::SchemeNumberOps,
+        unsupported,
     },
 };
 
@@ -74,7 +75,7 @@ impl SchemeNumberOps for SimpleNumberOps {
                         if kind.exactness == NumberExactness::Exact {
                             return Err(Error::unsupported(
                                 span,
-                                Unsupported::NumericRepresentation,
+                                unsupported::NUMERIC_REPRESENTATION,
                             ));
                         }
 
@@ -108,7 +109,10 @@ impl SchemeNumberOps for SimpleNumberOps {
         }
 
         // Fallback
-        Err(Error::unsupported(span, Unsupported::NumericRepresentation))
+        Err(Error::unsupported(
+            span,
+            unsupported::NUMERIC_REPRESENTATION,
+        ))
     }
 
     fn eqv(a: &Self::Number, b: &Self::Number) -> bool {

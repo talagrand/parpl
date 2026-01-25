@@ -1,4 +1,4 @@
-use crate::scheme::{Unsupported, lex::*};
+use crate::scheme::{lex::*, unsupported};
 
 // --- Test Infrastructure ---
 
@@ -20,8 +20,8 @@ enum ErrorMatcher {
     /// Syntax error with expected span.
     /// Parameters: (nonterminal, start, end).
     SyntaxSpan(&'static str, usize, usize),
-    /// Unsupported feature with expected enum value.
-    Unsupported(Unsupported),
+    /// Unsupported feature with expected string value.
+    Unsupported(&'static str),
 }
 
 enum TokenMatcher {
@@ -1352,17 +1352,17 @@ fn run_reject_feature_tests() {
         TestCase {
             name: "directives_unsupported_when_reject_fold_case_enabled",
             input: "#!fold-case",
-            expected: Expected::Error(ErrorMatcher::Unsupported(Unsupported::FoldCaseDirectives)),
+            expected: Expected::Error(ErrorMatcher::Unsupported(unsupported::FOLD_CASE_DIRECTIVE)),
         },
         TestCase {
             name: "comments_unsupported_when_reject_comments_enabled_intertoken",
             input: "; comment here\n42",
-            expected: Expected::Error(ErrorMatcher::Unsupported(Unsupported::Comments)),
+            expected: Expected::Error(ErrorMatcher::Unsupported(unsupported::COMMENT)),
         },
         TestCase {
             name: "datum_comments_unsupported_when_reject_comments_enabled",
             input: "#; 1 2",
-            expected: Expected::Error(ErrorMatcher::Unsupported(Unsupported::Comments)),
+            expected: Expected::Error(ErrorMatcher::Unsupported(unsupported::COMMENT)),
         },
     ];
 

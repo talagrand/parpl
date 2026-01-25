@@ -1,7 +1,7 @@
 use crate::{
     Span, Syntax,
     scheme::{
-        Error, Unsupported,
+        Error,
         lex::{
             boolean::lex_boolean,
             identifiers::lex_identifier,
@@ -11,6 +11,7 @@ use crate::{
             strings::{lex_character, lex_string},
             utils::{INCOMPLETE_TOKEN_LABEL, InputExt},
         },
+        unsupported,
     },
 };
 use std::borrow::Cow;
@@ -238,7 +239,7 @@ pub enum FoldCaseMode {
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
 pub struct LexConfig {
     /// If true, fold-case directives are rejected as
-    /// [`Unsupported::FoldCaseDirectives`] and identifiers and character
+    /// [`unsupported::FOLD_CASE_DIRECTIVE`] and identifiers and character
     /// names are always case-sensitive.
     ///
     /// When false (the default), `#!fold-case` / `#!no-fold-case`
@@ -248,7 +249,7 @@ pub struct LexConfig {
     pub reject_fold_case: bool,
 
     /// If true, any comment (line comment `;`, nested comment `#| |#`, or
-    /// datum comment `#;`) is rejected with [`Unsupported::Comments`].
+    /// datum comment `#;`) is rejected with [`unsupported::COMMENT`].
     ///
     /// When false (the default), comments are treated according to the
     /// normal R7RS rules: line and nested comments are part of
@@ -353,7 +354,7 @@ impl<'i> Lexer<'i> {
                 start: start_before,
                 end,
             };
-            return Err(Error::unsupported(span, Unsupported::Comments));
+            return Err(Error::unsupported(span, unsupported::COMMENT));
         }
 
         let start = self.input.current_token_start();
@@ -426,7 +427,7 @@ impl<'i> Lexer<'i> {
                 // Hash punctuation: #(, #u8(, #;, #n=, #n#
                 if let Some(spanned) = self.run_lex(start, lex_hash_punctuation)? {
                     if self.config.reject_comments && spanned.value == Token::DatumComment {
-                        return Err(Error::unsupported(spanned.span, Unsupported::Comments));
+                        return Err(Error::unsupported(spanned.span, unsupported::COMMENT));
                     }
                     return Ok(Some(spanned));
                 }
@@ -437,7 +438,7 @@ impl<'i> Lexer<'i> {
                     let span = Span { start, end };
 
                     if self.config.reject_fold_case {
-                        return Err(Error::unsupported(span, Unsupported::FoldCaseDirectives));
+                        return Err(Error::unsupported(span, unsupported::FOLD_CASE_DIRECTIVE));
                     }
 
                     self.fold_case_mode = mode;
