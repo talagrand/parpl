@@ -1,12 +1,5 @@
-use crate::{
-    Span, StringPool, StringPoolId,
-    cel::{
-        Result,
-        builder::build_ast_from_pairs,
-        parser::{ParseConfig, parse_with_config},
-        traits::{BinaryOp, CelWriter, Literal, UnaryOp},
-    },
-};
+use crate::cel::{BinaryOp, CelWriter, Literal, UnaryOp};
+use crate::{Span, StringPool, StringPoolId};
 use bumpalo::Bump;
 
 // ============================================================================
@@ -267,27 +260,4 @@ impl<'a, 'arena> CelWriter for ArenaCelWriter<'a, 'arena> {
             .arena
             .alloc(Expr::new(ExprKind::Struct(type_name, fields, values), span)))
     }
-}
-
-/// Build an AST using a provided arena and interner
-///
-/// This is the core AST building function used by `Context`.
-/// All AST nodes and strings are allocated in the provided arena.
-///
-/// # Safety
-///
-/// The returned `Expr` has lifetime `'arena` tied to the arena parameter.
-/// The caller must ensure the arena outlives all references to the AST.
-pub fn build_ast_with_arena<'arena>(
-    input: &str,
-    config: ParseConfig,
-    arena: &'arena Bump,
-    interner: &mut StringPool,
-) -> Result<&'arena Expr<'arena>> {
-    // First parse with pest
-    let pairs = parse_with_config(input, config)?;
-
-    // Start with max depth remaining
-    let mut writer = ArenaCelWriter { arena, interner };
-    build_ast_from_pairs(pairs, config.max_ast_depth, &mut writer)
 }

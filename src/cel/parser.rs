@@ -7,15 +7,13 @@ use crate::{
     Error, Span,
     cel::{Result, constants},
 };
-use pest::Parser;
+use pest::{Parser, iterators::Pairs};
 use pest_derive::Parser;
 use std::num::NonZeroUsize;
 
 #[derive(Parser)]
 #[grammar = "cel/grammar.pest"]
-pub struct CelParser;
-
-pub use pest::iterators::Pairs;
+struct CelParser;
 
 /// Configuration for parsing CEL expressions.
 #[derive(Debug, Clone, Copy)]
@@ -46,25 +44,6 @@ impl Default for ParseConfig {
     }
 }
 
-/// Parse a CEL expression from a string with default configuration
-///
-/// Uses default limits:
-/// - `max_nesting_depth`: 128 (see `constants::DEFAULT_MAX_PARSE_DEPTH`)
-/// - `max_call_limit`: 10,000,000
-///
-/// For custom limits, use [`parse_with_config`].
-///
-/// # Example
-/// ```
-/// use parpl::cel::parse;
-///
-/// let pairs = parse("1 + 2")?;
-/// # Ok::<(), parpl::Error>(())
-/// ```
-pub fn parse(input: &str) -> Result<Pairs<'_, Rule>> {
-    parse_with_config(input, ParseConfig::default())
-}
-
 /// Parse a CEL expression with custom configuration
 ///
 /// Allows configuring:
@@ -73,8 +52,8 @@ pub fn parse(input: &str) -> Result<Pairs<'_, Rule>> {
 /// - `max_call_limit`: Maximum Pest rule invocations (default: 10M)
 ///
 /// # Example
-/// ```
-/// use parpl::cel::{parse_with_config, ParseConfig};
+/// ```ignore
+/// use parpl::cel::parser::{parse_with_config, ParseConfig};
 ///
 /// let config = ParseConfig {
 ///     max_parse_depth: 128,
@@ -84,7 +63,7 @@ pub fn parse(input: &str) -> Result<Pairs<'_, Rule>> {
 /// let result = parse_with_config("1 + 2", config);
 /// assert!(result.is_ok());
 /// ```
-pub fn parse_with_config(input: &str, config: ParseConfig) -> Result<Pairs<'_, Rule>> {
+pub(crate) fn parse_with_config(input: &str, config: ParseConfig) -> Result<Pairs<'_, Rule>> {
     // Set Pest's call limit to prevent DoS attacks
     // This limits TOTAL rule invocations across the entire parse, not recursion depth
     pest::set_call_limit(Some(
@@ -225,9 +204,12 @@ fn validate_nesting_depth(input: &str, max_depth: u32) -> Result<()> {
 mod tests {
     use super::*;
 
-    #[cfg(test)]
+    fn parse(input: &str) -> Result<Pairs<'_, Rule>> {
+        parse_with_config(input, ParseConfig::default())
+    }
+
     mod test_util {
-        use super::super::*;
+        use super::parse;
 
         pub fn assert_parses(input: &str) {
             let result = parse(input);

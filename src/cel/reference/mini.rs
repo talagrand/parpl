@@ -1,12 +1,5 @@
-use crate::{
-    NoOpInterner, Span,
-    cel::{
-        Result,
-        builder::build_expr,
-        parser::{ParseConfig, parse_with_config},
-        traits::{BinaryOp, CelWriter, Literal, UnaryOp},
-    },
-};
+use crate::cel::{BinaryOp, Builder, CelWriter, Literal, UnaryOp};
+use crate::{NoOpInterner, Span};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MiniExpr {
@@ -220,33 +213,18 @@ impl CelWriter for MiniCelWriter {
     }
 }
 
-pub fn build_ast_mini(input: &str) -> Result<Box<MiniExpr>> {
-    let mut writer = MiniCelWriter {
-        interner: NoOpInterner,
-    };
-    let config = ParseConfig::default();
-    let mut pairs = parse_with_config(input, config)?;
-    let root_pair = pairs
-        .next()
-        .expect("Parser guarantees at least one pair (EOI included)");
-
-    // The root rule is usually `cel` which contains `expr` and `EOI`.
-    // We need to find the `expr` pair.
-    let expr_pair = if root_pair.as_rule() == crate::cel::parser::Rule::cel {
-        root_pair
-            .into_inner()
-            .next()
-            .expect("cel rule always contains expr")
-    } else {
-        root_pair
-    };
-
-    build_expr(config.max_ast_depth, expr_pair, &mut writer)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Parse a CEL expression into a MiniExpr AST
+    pub fn build_ast_mini(input: &str) -> crate::cel::Result<Box<MiniExpr>> {
+        let mut writer = MiniCelWriter {
+            interner: NoOpInterner,
+        };
+        let parser = Builder::default().build();
+        parser.parse(input, &mut writer)
+    }
 
     #[test]
     fn test_mini_simple() {
