@@ -14,13 +14,15 @@ jobs:
     name: Test Suite
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         rust-version: ['1.90', 'stable']
-        features:
-          - ''
-          - 'cel'
-          - 'scheme'
-          - 'cel,scheme'
+        cargo-args:
+          - '--no-default-features'
+          - '--no-default-features --features cel'
+          - '--no-default-features --features scheme'
+          - '--no-default-features --features cel,scheme'
+          - '--no-default-features --features reference'
 
     steps:
     - name: Checkout code
@@ -31,11 +33,19 @@ jobs:
       with:
         toolchain: ${{ matrix.rust-version }}
 
+    - name: Install clippy (stable only)
+      if: matrix.rust-version == 'stable'
+      run: rustup component add clippy
+
     - name: Cache dependencies
       uses: Swatinem/rust-cache@v2
 
     - name: Run tests
-      run: cargo test --features="${{ matrix.features }}" --verbose
+      run: cargo test --all-targets ${{ matrix.cargo-args }} --verbose
+
+    - name: Run clippy
+      if: matrix.rust-version == 'stable'
+      run: cargo clippy --all-targets ${{ matrix.cargo-args }} -- -D warnings
 
     - name: Run doc tests (all features)
       run: cargo test --doc --all-features
@@ -69,8 +79,8 @@ jobs:
         path: coverage-html/
         retention-days: 30
 
-  lint:
-    name: Linting
+  fmt:
+    name: Formatting
     runs-on: ubuntu-latest
 
     steps:
@@ -80,16 +90,13 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
-        components: rustfmt, clippy
+        components: rustfmt
 
     - name: Cache dependencies
       uses: Swatinem/rust-cache@v2
 
     - name: Check formatting
       run: cargo fmt --all -- --check
-
-    - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
 
   docs:
     name: Documentation

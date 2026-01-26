@@ -100,6 +100,16 @@ mod reader;
 pub mod reference;
 pub mod traits;
 
+// Public re-exports for the number-literal IR.
+//
+// These types are produced by the Scheme lexer and are intentionally exposed so
+// downstream crates can implement `SchemeNumberOps` without depending on the
+// internal `scheme::lex` module.
+pub use lex::{
+    FiniteRealKind, FiniteRealMagnitude, NumberExactness, NumberLiteral, NumberLiteralKind,
+    NumberRadix, NumberValue, RealMagnitude, RealRepr, Sign,
+};
+
 // Re-export key types for convenient access (single canonical path)
 pub use context::{Builder, SchemeParser};
 pub use reader::TokenStream;

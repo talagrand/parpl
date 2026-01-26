@@ -1,4 +1,4 @@
-use crate::{Error, Interner, Span, StringId, scheme::lex};
+use crate::{Error, Interner, Span, StringId};
 use std::{fmt::Debug, ops::Deref};
 
 /// Classification of Scheme datum types.
@@ -69,7 +69,10 @@ pub trait SchemeNumberOps: Debug + Sized {
 
     /// The single lowering hook.
     /// The Reader calls this once per number token.
-    fn from_literal(lit: &lex::NumberLiteral<'_>, span: Span) -> Result<Self::Number, Error>;
+    fn from_literal(
+        lit: &crate::scheme::NumberLiteral<'_>,
+        span: Span,
+    ) -> Result<Self::Number, Error>;
 
     /// The semantic equality hook.
     /// Required for `syntax-rules` pattern matching (e.g. matching `1` against `1.0`).

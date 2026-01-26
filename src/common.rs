@@ -85,16 +85,56 @@ impl<T> Syntax<T> {
 
 /// A handle to a string (symbol or string literal).
 ///
-/// Common implementations:
-/// - `u64` or `u32` (for interned strings)
-/// - `String` (for non-interned strings)
+/// `StringId` is a marker trait for types that can serve as string handles.
+/// The trait bounds (`Clone + Eq + Hash + Debug`) ensure handles can be
+/// compared, hashed (for use in maps), and debugged.
+///
+/// # Common Implementations
+///
+/// - [`StringPoolId`]: Default interned symbol (from `string_interner`)
+/// - `String`: For non-interned implementations (see [`NoOpInterner`])
+/// - `u64` or `u32`: For custom interning schemes
+///
+/// # Example
+///
+/// ```
+/// use parpl::{StringPool, Interner};
+///
+/// let mut pool = StringPool::new();
+/// let id1 = pool.intern("hello");
+/// let id2 = pool.intern("hello");
+///
+/// // Same string => same ID
+/// assert_eq!(id1, id2);
+/// ```
 pub trait StringId: Clone + Eq + Hash + Debug {}
 impl<T: Clone + Eq + Hash + Debug> StringId for T {}
 
-/// The source of truth that converts between `&str` and `StringId`.
+/// An interner that converts between `&str` and opaque string handles.
 ///
-/// This is typically passed to the top-level Reader or Expander,
-/// not stored in the Datum itself.
+/// Interning ensures that identical strings share the same handle, reducing
+/// memory usage and enabling O(1) equality comparisons. This is essential
+/// for languages with many repeated identifiers (like Scheme symbols).
+///
+/// # Provided Implementations
+///
+/// - [`StringPool`]: Production interner using `string_interner` crate
+/// - [`NoOpInterner`]: Simple implementation using `String` as the ID
+///
+/// You are free to implement your own interner by implementing this trait.
+///
+/// # Usage Pattern
+///
+/// The interner is passed to the parser/writer, which calls [`intern`](Interner::intern)
+/// for each string. Later, [`resolve`](Interner::resolve) converts IDs back to strings.
+///
+/// ```
+/// use parpl::{StringPool, Interner};
+///
+/// let mut pool = StringPool::new();
+/// let id = pool.intern("hello");
+/// assert_eq!(pool.resolve(&id), Some("hello"));
+/// ```
 pub trait Interner {
     /// The handle type returned by [`intern`](Interner::intern).
     type Id: StringId;
@@ -128,8 +168,39 @@ impl Interner for NoOpInterner {
 }
 
 /// The default string ID type used by [`StringPool`].
+///
+/// This is an opaque handle from the `string_interner` crate. It is
+/// `Copy`, `Eq`, `Hash`, and very compact (typically 4 bytes).
+///
+/// To convert back to a string, use [`Interner::resolve`].
 pub type StringPoolId = DefaultSymbol;
-/// A general-purpose interner backed by `string_interner`.
+
+/// A production-ready string interner backed by `string_interner`.
+///
+/// `StringPool` provides efficient string interning with O(1) amortized
+/// insertion and lookup. It is the recommended [`Interner`] implementation
+/// for production use.
+///
+/// # Example
+///
+/// ```
+/// use parpl::{StringPool, Interner};
+///
+/// let mut pool = StringPool::new();
+///
+/// // Intern strings
+/// let hello = pool.intern("hello");
+/// let world = pool.intern("world");
+/// let hello2 = pool.intern("hello");
+///
+/// // Same content => same ID
+/// assert_eq!(hello, hello2);
+/// assert_ne!(hello, world);
+///
+/// // Resolve back to strings
+/// assert_eq!(pool.resolve(&hello), Some("hello"));
+/// assert_eq!(pool.resolve(&world), Some("world"));
+/// ```
 #[derive(Default, Debug, Clone)]
 pub struct StringPool(StringInterner<DefaultBackend>);
 
@@ -139,11 +210,6 @@ impl StringPool {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    #[inline]
-    pub fn resolve_id(&self, id: StringPoolId) -> Option<&str> {
-        self.0.resolve(id)
     }
 }
 

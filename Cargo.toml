@@ -11,15 +11,15 @@ repository = "https://github.com/talagrand/parpl"
 categories = ["parsing", "compilers"]
 
 [features]
-default = ["cel", "scheme"]
+default = []
 cel = ["dep:pest", "dep:pest_derive"]
-scheme = ["dep:winnow", "dep:unicase", "dep:thiserror"]
+scheme = ["dep:winnow", "dep:unicase"]
 reference = ["cel", "scheme"]
 
 [dependencies]
 winnow = { version = "0.7.14", optional = true }
 unicase = { version = "2", optional = true }
-thiserror = { version = "2", optional = true }
+thiserror = "2"
 pest = { version = "2.8", optional = true }
 pest_derive = { version = "2.8", optional = true }
 bumpalo = "3.19"
