@@ -102,7 +102,7 @@ impl DatumWriter for MiniDatumWriter {
     type Error = Error;
     type Interner = NoOpInterner;
     type StringId = String;
-    type N = MiniNumberOps;
+    type NumberOps = MiniNumberOps;
 
     fn interner(&mut self) -> &mut Self::Interner {
         &mut self.interner

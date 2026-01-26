@@ -1,22 +1,36 @@
 use crate::{Error, Interner, Span, StringId, scheme::lex};
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Deref};
 
+/// Classification of Scheme datum types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatumKind {
+    /// Boolean: `#t` or `#f`
     Bool,
+    /// Integer number
     Integer,
+    /// Floating-point number
     Float,
+    /// Generic number (includes rationals, complex)
     Number,
+    /// Character: `#\x`, `#\newline`, etc.
     Character,
+    /// String: `"hello"`
     String,
+    /// Symbol: `foo`, `+`, `lambda`
     Symbol,
+    /// Bytevector: `#u8(1 2 3)`
     ByteVector,
+    /// Pair (cons cell): `(a . b)`
     Pair,
+    /// Empty list: `()`
     Null,
+    /// Vector: `#(1 2 3)`
     Vector,
+    /// Labeled datum: `#0=...`
     Labeled,
+    /// Label reference: `#0#`
     LabelRef,
-    // For opaque host objects or other extensions
+    /// Extension point for custom datum types
     Other,
 }
 
@@ -42,10 +56,27 @@ pub trait DatumInspector: Sized {
 
     /// Access the source span, if this implementation tracks it.
     fn span(&self) -> Option<Span>;
-    type N: SchemeNumberOps;
+
+    /// The number operations type used by this inspector.
+    type NumberOps: SchemeNumberOps;
+
+    /// The type returned by [`as_number`](Self::as_number).
+    ///
+    /// This associated type allows implementations to choose their return strategy:
+    /// - **Unified storage** (e.g., `Datum::Number(SimpleNumber)`): Use `&'a Number` for zero-cost borrowing
+    /// - **Split storage** (e.g., `Datum::Integer(i64)` + `Datum::Float(f64)`): Return `Number` by value
+    ///   if it implements `Copy`, or use `Cow<'a, Number>` to reconstruct on demand
+    ///
+    /// The `Deref` bound ensures callers can always obtain `&Number` via `&*num_ref`.
+    type NumberRef<'a>: Deref<Target = <Self::NumberOps as SchemeNumberOps>::Number>
+    where
+        Self: 'a;
 
     /// Returns the number if this datum is a number.
-    fn as_number(&self) -> Option<&<Self::N as SchemeNumberOps>::Number>;
+    ///
+    /// The returned value dereferences to `&Number`, allowing uniform access
+    /// regardless of the underlying storage strategy.
+    fn as_number<'a>(&'a self) -> Option<Self::NumberRef<'a>>;
 
     fn as_char(&self) -> Option<char>;
 
@@ -126,13 +157,14 @@ pub trait DatumWriter {
     /// Mutable access to the writer's interner.
     fn interner(&mut self) -> &mut Self::Interner;
 
-    type N: SchemeNumberOps;
+    /// The number operations type used by this writer.
+    type NumberOps: SchemeNumberOps;
 
     // --- Atoms ---
     fn bool(&mut self, v: bool, s: Span) -> Result<Self::Output, Self::Error>;
     fn number(
         &mut self,
-        v: <Self::N as SchemeNumberOps>::Number,
+        v: <Self::NumberOps as SchemeNumberOps>::Number,
         s: Span,
     ) -> Result<Self::Output, Self::Error>;
     fn char(&mut self, v: char, s: Span) -> Result<Self::Output, Self::Error>;

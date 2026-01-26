@@ -325,7 +325,7 @@ impl<'i> TokenStream<'i> {
                 .map(|d| (d, span))
                 .map_err(|e| writer_error(span, e)),
             Token::Number(n) => {
-                let num = W::N::from_literal(&n, span)?;
+                let num = W::NumberOps::from_literal(&n, span)?;
                 writer
                     .number(num, span)
                     .map(|d| (d, span))
@@ -710,7 +710,6 @@ mod tests {
         scheme::{
             lex::Token,
             reference::arena::{ArenaDatumWriter, Datum},
-            reference::numbers::SimpleNumber,
         },
     };
     use bumpalo::Bump;
@@ -827,10 +826,10 @@ mod tests {
                 (DatumMatcher::Bool(e), Datum::Boolean(a)) => {
                     assert_eq!(e, a, "{test_name}: boolean mismatch")
                 }
-                (DatumMatcher::Int(e), Datum::Number(SimpleNumber::Integer(a))) => {
+                (DatumMatcher::Int(e), Datum::Integer(a)) => {
                     assert_eq!(e, a, "{test_name}: integer mismatch")
                 }
-                (DatumMatcher::Float(e), Datum::Number(SimpleNumber::Float(a))) => {
+                (DatumMatcher::Float(e), Datum::Float(a)) => {
                     assert!((e - a).abs() < f64::EPSILON, "{test_name}: float mismatch")
                 }
                 (DatumMatcher::Char(e), Datum::Character(a)) => {

@@ -1,9 +1,34 @@
-use std::fmt::Debug;
-use std::hash::Hash;
+//! Common types shared across all parsers.
+//!
+//! This module provides foundational types used by both CEL and Scheme parsers:
+//!
+//! - [`Span`]: Source location tracking (byte offsets)
+//! - [`Syntax`]: A value paired with its source span
+//! - [`Interner`] / [`StringPool`]: String interning for memory-efficient symbol storage
+//! - [`StringId`]: Trait for interned string handles
 
+use std::{fmt::Debug, hash::Hash};
 use string_interner::{DefaultSymbol, StringInterner, backend::DefaultBackend};
 
 /// A byte-offset span into the original source.
+///
+/// Spans track the start and end positions (as byte offsets) of parsed elements.
+/// They are used for error reporting, source mapping, and debugging.
+///
+/// # Example
+///
+/// ```
+/// use parpl::Span;
+///
+/// let span = Span::new(0, 5);
+/// assert_eq!(span.start, 0);
+/// assert_eq!(span.end, 5);
+///
+/// // Merge two spans to get their union
+/// let span2 = Span::new(3, 10);
+/// let merged = span.merge(span2);
+/// assert_eq!(merged, Span::new(0, 10));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
     /// Starting byte offset (inclusive).
@@ -26,6 +51,22 @@ impl Span {
 }
 
 /// A syntax object: a value paired with its source span.
+///
+/// `Syntax<T>` wraps any value with source location information, enabling
+/// precise error messages and source mapping. It is used extensively in
+/// the Scheme parser for tokens and AST nodes.
+///
+/// # Example
+///
+/// ```
+/// use parpl::{Span, Syntax};
+///
+/// let span = Span::new(0, 5);
+/// let syntax = Syntax::new(span, "hello");
+///
+/// assert_eq!(syntax.value, "hello");
+/// assert_eq!(syntax.span.start, 0);
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Syntax<T> {
     /// The source location of this syntax object.
@@ -35,6 +76,7 @@ pub struct Syntax<T> {
 }
 
 impl<T> Syntax<T> {
+    /// Create a new syntax object with the given span and value.
     #[inline]
     pub fn new(span: Span, value: T) -> Self {
         Self { span, value }
@@ -85,14 +127,16 @@ impl Interner for NoOpInterner {
     }
 }
 
-/// The default string ID used by `StringPool`.
+/// The default string ID type used by [`StringPool`].
 pub type StringPoolId = DefaultSymbol;
 /// A general-purpose interner backed by `string_interner`.
 #[derive(Default, Debug, Clone)]
 pub struct StringPool(StringInterner<DefaultBackend>);
 
 impl StringPool {
+    /// Create a new, empty string pool.
     #[inline]
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

@@ -8,8 +8,7 @@
 //! - [`QuoteStyle`]: Quote delimiter classification for strings/bytes
 
 use crate::{Interner, Span};
-use std::fmt;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 
 // ============================================================================
 // Operator Types

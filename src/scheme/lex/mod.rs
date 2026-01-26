@@ -258,10 +258,32 @@ pub struct LexConfig {
     pub reject_comments: bool,
 }
 
-/// A single token paired with its source span.
+/// A token paired with its source location.
+///
+/// This is the primary output type of the lexer. Use the `value` field to
+/// access the [`Token`] and `span` field for source location.
 pub type SpannedToken<'a> = Syntax<Token<'a>>;
 
-/// An iterator over tokens in the source string.
+/// An iterator that produces tokens from Scheme source code.
+///
+/// The lexer handles all R7RS lexical syntax including:
+/// - Intertoken space (whitespace, comments)
+/// - Fold-case directives (`#!fold-case`, `#!no-fold-case`)
+/// - All token types defined in the R7RS formal syntax
+///
+/// # Usage
+///
+/// ```
+/// use parpl::scheme::lex::lex;
+///
+/// let mut lexer = lex("(+ 1 2)");
+/// while let Some(result) = lexer.next() {
+///     match result {
+///         Ok(token) => println!("{:?}", token.value),
+///         Err(e) => eprintln!("Error: {}", e),
+///     }
+/// }
+/// ```
 pub struct Lexer<'i> {
     input: Input<'i>,
     source: &'i str,

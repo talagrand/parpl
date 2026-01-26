@@ -17,7 +17,7 @@ pub struct CelParser;
 
 pub use pest::iterators::Pairs;
 
-/// Configuration for parsing CEL expressions
+/// Configuration for parsing CEL expressions.
 #[derive(Debug, Clone, Copy)]
 pub struct ParseConfig {
     /// Maximum nesting depth for pre-parse heuristic validation (default: 128)

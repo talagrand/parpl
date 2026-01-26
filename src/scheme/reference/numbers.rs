@@ -6,12 +6,26 @@ use crate::{
         unsupported,
     },
 };
+use std::ops::Deref;
 
 /// A simple number representation that can hold integers and floats and nothing else.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SimpleNumber {
     Integer(i64),
     Float(f64),
+}
+
+/// Identity `Deref` implementation for `SimpleNumber`.
+///
+/// This allows `SimpleNumber` to be used as a `NumberRef` in [`DatumInspector`](crate::scheme::traits::DatumInspector)
+/// implementations with split storage (separate `Integer` and `Float` datum variants).
+/// The number is returned by value (it's `Copy`), and `Deref` provides uniform access.
+impl Deref for SimpleNumber {
+    type Target = SimpleNumber;
+
+    fn deref(&self) -> &SimpleNumber {
+        self
+    }
 }
 
 /// Default implementation using `SimpleNumber`.

@@ -11,7 +11,10 @@ use std::convert::Infallible;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Datum<'a> {
     Boolean(bool),
-    Number(SimpleNumber),
+    /// Integer number (exact)
+    Integer(i64),
+    /// Floating-point number (inexact)
+    Float(f64),
     Character(char),
     String(StringPoolId),
     Symbol(StringPoolId),
@@ -51,7 +54,7 @@ impl<'a> DatumWriter for ArenaDatumWriter<'a> {
     type Error = Infallible;
     type Interner = StringPool;
     type StringId = StringPoolId;
-    type N = SimpleNumberOps;
+    type NumberOps = SimpleNumberOps;
 
     fn interner(&mut self) -> &mut Self::Interner {
         &mut self.interner
@@ -62,7 +65,12 @@ impl<'a> DatumWriter for ArenaDatumWriter<'a> {
     }
 
     fn number(&mut self, v: SimpleNumber, s: Span) -> Result<Self::Output, Self::Error> {
-        Ok(Syntax::new(s, Datum::Number(v)))
+        // Destructure the intermediate SimpleNumber into our AST's separate variants
+        let datum = match v {
+            SimpleNumber::Integer(i) => Datum::Integer(i),
+            SimpleNumber::Float(f) => Datum::Float(f),
+        };
+        Ok(Syntax::new(s, datum))
     }
 
     fn char(&mut self, v: char, s: Span) -> Result<Self::Output, Self::Error> {
@@ -202,7 +210,11 @@ impl<'a, 'd> SampleListIter<'a, 'd> {
 }
 
 impl<'d> DatumInspector for &Syntax<Datum<'d>> {
-    type N = SimpleNumberOps;
+    type NumberOps = SimpleNumberOps;
+    type NumberRef<'b>
+        = SimpleNumber
+    where
+        Self: 'b;
     type StringId<'b>
         = StringPoolId
     where
@@ -223,8 +235,8 @@ impl<'d> DatumInspector for &Syntax<Datum<'d>> {
     fn kind(&self) -> DatumKind {
         match &self.value {
             Datum::Boolean(_) => DatumKind::Bool,
-            Datum::Number(SimpleNumber::Integer(_)) => DatumKind::Integer,
-            Datum::Number(SimpleNumber::Float(_)) => DatumKind::Float,
+            Datum::Integer(_) => DatumKind::Integer,
+            Datum::Float(_) => DatumKind::Float,
             Datum::Character(_) => DatumKind::Character,
             Datum::String(_) => DatumKind::String,
             Datum::Symbol(_) => DatumKind::Symbol,
@@ -241,11 +253,11 @@ impl<'d> DatumInspector for &Syntax<Datum<'d>> {
         Some(self.span)
     }
 
-    fn as_number(&self) -> Option<&SimpleNumber> {
-        if let Datum::Number(n) = &self.value {
-            Some(n)
-        } else {
-            None
+    fn as_number(&self) -> Option<SimpleNumber> {
+        match &self.value {
+            Datum::Integer(i) => Some(SimpleNumber::Integer(*i)),
+            Datum::Float(f) => Some(SimpleNumber::Float(*f)),
+            _ => None,
         }
     }
 
