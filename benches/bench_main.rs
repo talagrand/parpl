@@ -2,6 +2,8 @@
 
 use bumpalo::Bump;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use parpl::StringPool;
+use parpl::cel::{CelParser, reference::arena::ArenaCelWriter};
 use std::hint::black_box;
 
 // CEL expressions of varying complexity
@@ -98,29 +100,72 @@ const SCHEME_COMPLEX: &str = r#"
 
 fn bench_cel_parsing(c: &mut Criterion) {
     let mut group = c.benchmark_group("CEL Parsing");
+    let parser = CelParser::default();
 
     group.bench_function("Simple (1 + 2)", |b| {
-        b.iter(|| parpl::cel::parse(black_box(CEL_SIMPLE)))
+        b.iter_batched_ref(
+            || (Bump::new(), StringPool::default()),
+            |(arena, interner)| {
+                let mut writer = ArenaCelWriter::new(arena, interner);
+                let _ = parser.parse(black_box(CEL_SIMPLE), &mut writer);
+            },
+            BatchSize::SmallInput,
+        )
     });
 
     group.bench_function("Arithmetic", |b| {
-        b.iter(|| parpl::cel::parse(black_box(CEL_ARITHMETIC)))
+        b.iter_batched_ref(
+            || (Bump::new(), StringPool::default()),
+            |(arena, interner)| {
+                let mut writer = ArenaCelWriter::new(arena, interner);
+                let _ = parser.parse(black_box(CEL_ARITHMETIC), &mut writer);
+            },
+            BatchSize::SmallInput,
+        )
     });
 
     group.bench_function("Comparison", |b| {
-        b.iter(|| parpl::cel::parse(black_box(CEL_COMPARISON)))
+        b.iter_batched_ref(
+            || (Bump::new(), StringPool::default()),
+            |(arena, interner)| {
+                let mut writer = ArenaCelWriter::new(arena, interner);
+                let _ = parser.parse(black_box(CEL_COMPARISON), &mut writer);
+            },
+            BatchSize::SmallInput,
+        )
     });
 
     group.bench_function("Function Call", |b| {
-        b.iter(|| parpl::cel::parse(black_box(CEL_FUNCTION_CALL)))
+        b.iter_batched_ref(
+            || (Bump::new(), StringPool::default()),
+            |(arena, interner)| {
+                let mut writer = ArenaCelWriter::new(arena, interner);
+                let _ = parser.parse(black_box(CEL_FUNCTION_CALL), &mut writer);
+            },
+            BatchSize::SmallInput,
+        )
     });
 
     group.bench_function("Ternary", |b| {
-        b.iter(|| parpl::cel::parse(black_box(CEL_TERNARY)))
+        b.iter_batched_ref(
+            || (Bump::new(), StringPool::default()),
+            |(arena, interner)| {
+                let mut writer = ArenaCelWriter::new(arena, interner);
+                let _ = parser.parse(black_box(CEL_TERNARY), &mut writer);
+            },
+            BatchSize::SmallInput,
+        )
     });
 
     group.bench_function("Complex", |b| {
-        b.iter(|| parpl::cel::parse(black_box(CEL_COMPLEX)))
+        b.iter_batched_ref(
+            || (Bump::new(), StringPool::default()),
+            |(arena, interner)| {
+                let mut writer = ArenaCelWriter::new(arena, interner);
+                let _ = parser.parse(black_box(CEL_COMPLEX), &mut writer);
+            },
+            BatchSize::SmallInput,
+        )
     });
 
     group.finish();

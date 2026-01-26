@@ -5,6 +5,7 @@
 // and uses trait-based abstractions for AST construction.
 
 pub mod constants;
+mod context;
 pub mod lex;
 mod reader;
 #[cfg(any(test, feature = "reference"))]
@@ -12,7 +13,8 @@ pub mod reference;
 pub mod traits;
 
 // Re-export key types for convenient access (single canonical path)
-pub use reader::{TokenStream, parse, parse_with_max_depth};
+pub use context::{Builder, SchemeParser};
+pub use reader::TokenStream;
 
 /// Result type alias for parser operations.
 pub type Result<T> = std::result::Result<T, crate::Error>;

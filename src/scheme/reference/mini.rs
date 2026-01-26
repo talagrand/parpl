@@ -185,17 +185,14 @@ pub fn read(source: &str) -> Result<MiniDatum, Error> {
 }
 
 pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<MiniDatum, Error> {
-    let lexer = crate::scheme::lex::lex_with_config(
-        source,
-        crate::scheme::lex::LexConfig {
-            reject_fold_case: true,
-            reject_comments: true,
-        },
-    );
-    let mut stream = crate::scheme::reader::TokenStream::new(lexer);
+    let parser = crate::scheme::Builder::default()
+        .max_depth(max_depth)
+        .reject_fold_case(true)
+        .reject_comments(true)
+        .build();
     let mut writer = MiniDatumWriter::default();
-    stream
-        .parse_with_max_depth(&mut writer, max_depth)
+    parser
+        .parse(source, &mut writer)
         .map(|(datum, _span)| datum)
 }
 

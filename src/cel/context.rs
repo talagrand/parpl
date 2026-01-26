@@ -36,7 +36,6 @@ use crate::cel::{
 ///     .max_parse_depth(128)
 ///     .max_ast_depth(24)
 ///     .max_call_limit(50_000_000)
-///     .strict_mode(true)
 ///     .build();
 /// ```
 #[derive(Debug, Clone)]
@@ -58,9 +57,6 @@ pub struct Builder {
     /// This provides protection against Denial of Service (DoS) attacks that
     /// exploit parser complexity (e.g. deep recursion or backtracking).
     max_call_limit: usize,
-
-    /// Enable strict mode (default: false)
-    strict_mode: bool,
 }
 
 impl Default for Builder {
@@ -70,13 +66,11 @@ impl Default for Builder {
     /// - `max_parse_depth`: 128 (heuristic pre-validation, protects Pest parser)
     /// - `max_ast_depth`: 24 (precise AST recursion limit, 2x CEL spec minimum)
     /// - `max_call_limit`: 10,000,000
-    /// - `strict_mode`: false
     fn default() -> Self {
         Self {
             max_parse_depth: constants::DEFAULT_MAX_PARSE_DEPTH,
             max_ast_depth: constants::DEFAULT_MAX_AST_DEPTH,
             max_call_limit: 10_000_000,
-            strict_mode: false,
         }
     }
 }
@@ -160,25 +154,6 @@ impl Builder {
         self
     }
 
-    /// Enable strict mode
-    ///
-    /// In strict mode, we may reject programs that the CEL specification
-    /// would accept. This is useful for enforcing coding standards.
-    ///
-    /// # Examples
-    /// ```
-    /// use parpl::cel::Builder;
-    ///
-    /// let parser = Builder::default()
-    ///     .strict_mode(true)
-    ///     .build();
-    /// ```
-    #[must_use]
-    pub fn strict_mode(mut self, enabled: bool) -> Self {
-        self.strict_mode = enabled;
-        self
-    }
-
     /// Build a CEL parser driver with this configuration
     ///
     /// The driver can be reused for parsing multiple expressions.
@@ -197,7 +172,6 @@ impl Builder {
                 max_ast_depth: self.max_ast_depth,
                 max_call_limit: self.max_call_limit,
             },
-            strict_mode: self.strict_mode,
         }
     }
 }
@@ -217,7 +191,6 @@ impl Builder {
 /// - **Reusable**: Can be reused to parse multiple expressions with the same configuration.
 pub struct CelParser {
     config: ParseConfig,
-    strict_mode: bool,
 }
 
 impl Default for CelParser {
@@ -247,15 +220,5 @@ impl CelParser {
 
         // 2. Build AST using the writer
         builder::build_ast_from_pairs(pairs, self.config.max_ast_depth, writer)
-    }
-
-    /// Get the underlying parse configuration
-    pub fn config(&self) -> &ParseConfig {
-        &self.config
-    }
-
-    /// Check if strict mode is enabled
-    pub fn is_strict_mode(&self) -> bool {
-        self.strict_mode
     }
 }

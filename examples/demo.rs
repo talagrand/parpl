@@ -88,14 +88,7 @@ fn main() -> Result<()> {
         .max_parse_depth(64)
         .max_ast_depth(20)
         .max_call_limit(1_000_000)
-        .strict_mode(true)
         .build();
-
-    let cfg = parser_config.config();
-    println!("   max_parse_depth: {}", cfg.max_parse_depth);
-    println!("   max_ast_depth:   {}", cfg.max_ast_depth);
-    println!("   max_call_limit:  {}", cfg.max_call_limit);
-    println!("   strict_mode:     {}", parser_config.is_strict_mode());
 
     parse_scoped(&parser_config, "42", |_, _| {
         println!("   ✓ Configuration applied");

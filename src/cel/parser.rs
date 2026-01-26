@@ -15,9 +15,12 @@ use std::num::NonZeroUsize;
 #[grammar = "cel/grammar.pest"]
 struct CelParser;
 
-/// Configuration for parsing CEL expressions.
+/// Internal configuration for CEL parsing limits.
+///
+/// Controls safety limits to prevent stack overflow and DoS attacks.
+/// Use [`Builder`](crate::cel::Builder) for a more ergonomic configuration API.
 #[derive(Debug, Clone, Copy)]
-pub struct ParseConfig {
+pub(crate) struct ParseConfig {
     /// Maximum nesting depth for pre-parse heuristic validation (default: 128)
     ///
     /// This protects against Pest parser stack overflow (~171 depth on 1MB stack).
@@ -44,25 +47,7 @@ impl Default for ParseConfig {
     }
 }
 
-/// Parse a CEL expression with custom configuration
-///
-/// Allows configuring:
-/// - `max_parse_depth`: Maximum depth for heuristic pre-validation (default: 128)
-/// - `max_ast_depth`: Maximum AST recursion depth (default: 24)
-/// - `max_call_limit`: Maximum Pest rule invocations (default: 10M)
-///
-/// # Example
-/// ```ignore
-/// use parpl::cel::parser::{parse_with_config, ParseConfig};
-///
-/// let config = ParseConfig {
-///     max_parse_depth: 128,
-///     max_ast_depth: 24,
-///     max_call_limit: 50_000_000,
-/// };
-/// let result = parse_with_config("1 + 2", config);
-/// assert!(result.is_ok());
-/// ```
+/// Parse a CEL expression with custom configuration.
 pub(crate) fn parse_with_config(input: &str, config: ParseConfig) -> Result<Pairs<'_, Rule>> {
     // Set Pest's call limit to prevent DoS attacks
     // This limits TOTAL rule invocations across the entire parse, not recursion depth

@@ -1,4 +1,4 @@
-use crate::cel::{BinaryOp, Builder, CelWriter, Literal, UnaryOp};
+use crate::cel::{BinaryOp, CelWriter, Literal, UnaryOp};
 use crate::{NoOpInterner, Span};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -216,6 +216,7 @@ impl CelWriter for MiniCelWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cel::Builder;
 
     /// Parse a CEL expression into a MiniExpr AST
     pub fn build_ast_mini(input: &str) -> crate::cel::Result<Box<MiniExpr>> {

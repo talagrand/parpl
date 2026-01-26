@@ -3,6 +3,7 @@
 // This module provides helper functions to make testing cleaner and more concise.
 // Since our API is arena-based and requires scoped access, these utilities handle
 // the boilerplate of creating arenas, interners, and writers.
+#![expect(dead_code)]
 
 use crate::{
     Error, Interner, StringPool, StringPoolId,
@@ -16,7 +17,7 @@ use crate::{
 };
 use bumpalo::Bump;
 
-/// A simple string-based error for test utilities.
+/// Simple error type for test failures.
 #[derive(Debug)]
 struct TestError(String);
 
@@ -102,18 +103,11 @@ impl Interner for TestContext {
     }
 }
 
-/// Parse an expression and run assertions on the AST within a scoped callback
-///
-/// This is the main test helper. The callback receives a reference to the AST.
-///
-/// # Examples
-/// ```
-/// # use parpl::cel::test_util::*;
-/// # use parpl::cel::ExprKind;
-/// parse("1 + 2", |_, ast| {
-///     assert!(matches!(ast.kind, ExprKind::Binary(..)));
-/// });
-/// ```
+// ============================================================================
+// Convenience Functions
+// ============================================================================
+
+/// Parse an expression and run assertions on the AST.
 #[track_caller]
 pub fn parse<F>(input: &str, f: F)
 where
@@ -125,21 +119,7 @@ where
     f(&ctx, ctx.ast().unwrap());
 }
 
-/// Parse with custom configuration
-///
-/// # Examples
-/// ```
-/// # use parpl::cel::test_util::*;
-/// # use parpl::cel::{ExprKind, ParseConfig};
-/// let config = ParseConfig {
-///     max_parse_depth: 128,
-///     max_ast_depth: 24,
-///     max_call_limit: 100,
-/// };
-/// parse_with_config("1 + 2", config, |_, ast| {
-///     assert!(matches!(ast.kind, ExprKind::Binary(..)));
-/// });
-/// ```
+/// Parse with custom configuration.
 #[track_caller]
 pub fn parse_with_config<F>(input: &str, config: ParseConfig, f: F)
 where
@@ -151,27 +131,13 @@ where
     f(&ctx, ctx.ast().unwrap());
 }
 
-/// Assert that parsing succeeds
-///
-/// # Examples
-/// ```
-/// # use parpl::cel::test_util::*;
-/// assert_parses("1 + 2");
-/// assert_parses("true ? 1 : 2");
-/// ```
+/// Assert that parsing succeeds.
 #[track_caller]
 pub fn assert_parses(input: &str) {
     parse(input, |_, _| {});
 }
 
-/// Assert that parsing fails
-///
-/// # Examples
-/// ```
-/// # use parpl::cel::test_util::*;
-/// assert_parse_fails("1 +");
-/// assert_parse_fails("@#$");
-/// ```
+/// Assert that parsing fails.
 #[track_caller]
 pub fn assert_parse_fails(input: &str) {
     let mut ctx = TestContext::new(ParseConfig::default());
@@ -181,16 +147,7 @@ pub fn assert_parse_fails(input: &str) {
     )
 }
 
-/// Assert that parsing fails with a specific error kind
-///
-/// Takes a matcher function that returns `true` if the error kind matches.
-///
-/// # Examples
-/// ```ignore
-/// # use parpl::cel::test_util::*;
-/// # use parpl::Error;
-/// assert_parse_fails_with("1 +", |e| matches!(e, Error::Syntax { .. }));
-/// ```
+/// Assert that parsing fails with a specific error kind.
 #[track_caller]
 pub fn assert_parse_fails_with<F>(input: &str, matcher: F)
 where
@@ -208,14 +165,7 @@ where
     }
 }
 
-/// Assert that the AST has a specific kind
-///
-/// # Examples
-/// ```
-/// # use parpl::cel::test_util::*;
-/// # use parpl::cel::ExprKind;
-/// assert_ast_kind("1 + 2", |kind| matches!(kind, ExprKind::Binary(..)));
-/// ```
+/// Assert that the AST has a specific kind.
 #[track_caller]
 pub fn assert_ast_kind<F>(input: &str, predicate: F)
 where
@@ -229,15 +179,7 @@ where
     });
 }
 
-/// Assert that the AST is a literal with specific value
-///
-/// # Examples
-/// ```
-/// # use parpl::cel::test_util::*;
-/// # use parpl::cel::Literal;
-/// assert_literal("42", |lit| matches!(lit, Literal::Int(42)));
-/// assert_literal("true", |lit| matches!(lit, Literal::Bool(true)));
-/// ```
+/// Assert that the AST is a literal with specific value.
 #[track_caller]
 pub fn assert_literal<F>(input: &str, predicate: F)
 where
@@ -254,14 +196,7 @@ where
     });
 }
 
-/// Assert that the AST is an identifier with specific name
-///
-/// # Examples
-/// ```
-/// # use parpl::cel::test_util::*;
-/// assert_ident("foo", "foo");
-/// assert_ident("my_var", "my_var");
-/// ```
+/// Assert that the AST is an identifier with specific name.
 #[track_caller]
 pub fn assert_ident(input: &str, expected_name: &str) {
     parse(input, |ctx, ast| match &ast.kind {
@@ -276,15 +211,7 @@ pub fn assert_ident(input: &str, expected_name: &str) {
     });
 }
 
-/// Assert that the AST is a binary operation
-///
-/// # Examples
-/// ```
-/// # use parpl::cel::test_util::*;
-/// # use parpl::cel::BinaryOp;
-/// assert_binary("1 + 2", BinaryOp::Add);
-/// assert_binary("x && y", BinaryOp::And);
-/// ```
+/// Assert that the AST is a binary operation.
 #[track_caller]
 pub fn assert_binary(input: &str, expected_op: BinaryOp) {
     parse(input, |_ctx, ast| match &ast.kind {
@@ -298,13 +225,7 @@ pub fn assert_binary(input: &str, expected_op: BinaryOp) {
     });
 }
 
-/// Assert that the AST is a ternary operation
-///
-/// # Examples
-/// ```
-/// # use parpl::cel::test_util::*;
-/// assert_ternary("true ? 1 : 2");
-/// ```
+/// Assert that the AST is a ternary operation.
 #[track_caller]
 pub fn assert_ternary(input: &str) {
     parse(input, |_ctx, ast| match &ast.kind {
@@ -313,13 +234,7 @@ pub fn assert_ternary(input: &str) {
     });
 }
 
-/// Assert that the AST is a list
-///
-/// # Examples
-/// ```
-/// # use parpl::cel::test_util::*;
-/// assert_list("[1, 2, 3]", 3);
-/// ```
+/// Assert that the AST is a list with expected length.
 #[track_caller]
 pub fn assert_list(input: &str, expected_len: usize) {
     parse(input, |_ctx, ast| match &ast.kind {
@@ -334,13 +249,7 @@ pub fn assert_list(input: &str, expected_len: usize) {
     });
 }
 
-/// Assert that the AST is a map
-///
-/// # Examples
-/// ```
-/// # use parpl::cel::test_util::*;
-/// assert_map("{a: 1, b: 2}", 2);
-/// ```
+/// Assert that the AST is a map with expected number of entries.
 #[track_caller]
 pub fn assert_map(input: &str, expected_len: usize) {
     parse(input, |_ctx, ast| match &ast.kind {
@@ -355,14 +264,7 @@ pub fn assert_map(input: &str, expected_len: usize) {
     });
 }
 
-/// Parse and format AST for debugging
-///
-/// # Examples
-/// ```
-/// # use parpl::cel::test_util::*;
-/// let output = parse_and_pretty("1 + 2");
-/// println!("{}", output);
-/// ```
+/// Parse and format AST for debugging.
 pub fn parse_and_pretty(input: &str) -> String {
     let mut ctx = TestContext::new(ParseConfig::default());
     match ctx.parse(input) {
@@ -371,14 +273,12 @@ pub fn parse_and_pretty(input: &str) -> String {
     }
 }
 
-/// Macro for table-driven tests
+/// Macro for table-driven tests.
 ///
-/// # Examples
-/// ```
-/// # use parpl::cel::test_util::*;
+/// Usage:
+/// ```ignore
 /// test_cases! {
 ///     literal_42: "42" => assert_parses,
-///     literal_true: "true" => assert_parses,
 ///     invalid: "1 +" => assert_parse_fails,
 /// }
 /// ```

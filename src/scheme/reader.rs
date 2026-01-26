@@ -666,42 +666,6 @@ fn integer_spelling_to_byte(spelling: &str, radix: u32) -> Option<u8> {
     Some(value as u8)
 }
 
-/// Parse a single `<datum>` from the given source string.
-///
-/// Grammar reference: see `syn.tex`, section *External representations*,
-/// production:
-///
-/// ```text
-/// <datum> ::= <simple datum> | <compound datum>
-///           | <label> = <datum> | <label> #
-/// ```
-pub fn parse<W: DatumWriter>(source: &str, writer: &mut W) -> Result<(W::Output, Span)> {
-    parse_with_max_depth(source, writer, constants::DEFAULT_MAX_DEPTH)
-}
-
-/// Parse a single `<datum>` from the given source string with an
-/// explicit maximum nesting depth.
-pub fn parse_with_max_depth<W: DatumWriter>(
-    source: &str,
-    writer: &mut W,
-    max_depth: u32,
-) -> Result<(W::Output, Span)> {
-    let mut stream = TokenStream::from_source(source);
-    let datum = stream.parse_with_max_depth(writer, max_depth)?;
-
-    if !stream.is_empty() {
-        // If there are remaining tokens, it's an error for a single datum parse
-        let next = stream.peek()?.ok_or(Error::Incomplete)?;
-        return Err(Error::syntax(
-            next.span,
-            "<datum>",
-            "unexpected token after datum",
-        ));
-    }
-
-    Ok(datum)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -713,6 +677,42 @@ mod tests {
         },
     };
     use bumpalo::Bump;
+
+    /// Parse a single `<datum>` from the given source string.
+    ///
+    /// Grammar reference: see `syn.tex`, section *External representations*,
+    /// production:
+    ///
+    /// ```text
+    /// <datum> ::= <simple datum> | <compound datum>
+    ///           | <label> = <datum> | <label> #
+    /// ```
+    pub(crate) fn parse<W: DatumWriter>(source: &str, writer: &mut W) -> Result<(W::Output, Span)> {
+        parse_with_max_depth(source, writer, constants::DEFAULT_MAX_DEPTH)
+    }
+
+    /// Parse a single `<datum>` from the given source string with an
+    /// explicit maximum nesting depth.
+    pub(crate) fn parse_with_max_depth<W: DatumWriter>(
+        source: &str,
+        writer: &mut W,
+        max_depth: u32,
+    ) -> Result<(W::Output, Span)> {
+        let mut stream = TokenStream::from_source(source);
+        let datum = stream.parse_with_max_depth(writer, max_depth)?;
+
+        if !stream.is_empty() {
+            // If there are remaining tokens, it's an error for a single datum parse
+            let next = stream.peek()?.ok_or(Error::Incomplete)?;
+            return Err(Error::syntax(
+                next.span,
+                "<datum>",
+                "unexpected token after datum",
+            ));
+        }
+
+        Ok(datum)
+    }
 
     struct TestCase {
         name: &'static str,
