@@ -792,9 +792,88 @@ fn apply_unary_repeated<W: CelWriter>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cel::parser::ParseConfig;
-    use crate::cel::reference::arena::ExprKind;
-    use crate::cel::test_util::TestContext;
+    use crate::cel::{
+        CelParser,
+        context::Builder,
+        parser::ParseConfig,
+        reference::arena::{ArenaCelWriter, Expr, ExprKind},
+    };
+    use crate::{Interner, StringPool, StringPoolId};
+    use bumpalo::Bump;
+
+    /// Simple error type for test failures.
+    #[derive(Debug)]
+    struct TestError(String);
+
+    impl std::fmt::Display for TestError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+
+    impl std::error::Error for TestError {}
+
+    /// Test context that bundles arena, interner, and parser for convenient test setup.
+    struct TestContext {
+        arena: Bump,
+        interner: StringPool,
+        parser: CelParser,
+        ast: Option<&'static Expr<'static>>,
+    }
+
+    impl TestContext {
+        fn new(config: ParseConfig) -> Self {
+            let parser = Builder::default()
+                .max_parse_depth(config.max_parse_depth)
+                .max_ast_depth(config.max_ast_depth)
+                .max_call_limit(config.max_call_limit)
+                .build();
+
+            Self {
+                arena: Bump::new(),
+                interner: StringPool::default(),
+                parser,
+                ast: None,
+            }
+        }
+
+        fn parse(&mut self, input: &str) -> Result<()> {
+            self.arena.reset();
+            self.ast = None;
+
+            // Unsafe lifetime extension for test convenience.
+            // Safe because TestContext owns the arena and outlives the AST reference.
+            let arena_ref: &'static Bump = unsafe { std::mem::transmute(&self.arena) };
+            let mut writer = ArenaCelWriter::new(arena_ref, &mut self.interner);
+
+            let ast = self.parser.parse(input, &mut writer)?;
+            self.ast = Some(ast);
+            Ok(())
+        }
+
+        fn ast(&self) -> Result<&'static Expr<'static>> {
+            self.ast.ok_or_else(|| crate::Error::WriterError {
+                span: crate::Span::new(0, 0),
+                source: Box::new(TestError("No AST".into())),
+            })
+        }
+
+        fn resolve<'a>(&'a self, id: &'a StringPoolId) -> Option<&'a str> {
+            self.interner.resolve(id)
+        }
+    }
+
+    impl Interner for TestContext {
+        type Id = StringPoolId;
+
+        fn intern(&mut self, s: &str) -> Self::Id {
+            self.interner.intern(s)
+        }
+
+        fn resolve<'a>(&'a self, id: &'a Self::Id) -> Option<&'a str> {
+            self.interner.resolve(id)
+        }
+    }
 
     // Test helper that uses TestContext
     fn build_ast(input: &str) -> Result<TestContext> {

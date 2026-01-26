@@ -1,5 +1,7 @@
-use crate::cel::{BinaryOp, CelWriter, Literal, UnaryOp};
-use crate::{NoOpInterner, Span};
+use crate::{
+    NoOpInterner, Span,
+    cel::{BinaryOp, CelWriter, Literal, UnaryOp},
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MiniExpr {

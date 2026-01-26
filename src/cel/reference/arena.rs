@@ -1,5 +1,7 @@
-use crate::cel::{BinaryOp, CelWriter, Literal, UnaryOp};
-use crate::{Span, StringPool, StringPoolId};
+use crate::{
+    Span, StringPool, StringPoolId,
+    cel::{BinaryOp, CelWriter, Literal, UnaryOp},
+};
 use bumpalo::Bump;
 
 // ============================================================================

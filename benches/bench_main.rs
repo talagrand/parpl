@@ -2,8 +2,10 @@
 
 use bumpalo::Bump;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use parpl::StringPool;
-use parpl::cel::{CelParser, reference::arena::ArenaCelWriter};
+use parpl::{
+    StringPool,
+    cel::{CelParser, reference::arena::ArenaCelWriter},
+};
 use std::hint::black_box;
 
 // CEL expressions of varying complexity

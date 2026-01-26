@@ -9,10 +9,6 @@ mod parser;
 pub mod reference;
 pub mod traits;
 
-// Test utilities - only available in test builds
-#[cfg(test)]
-pub(crate) mod test_util;
-
 /// Result type alias for parser operations.
 pub type Result<T> = std::result::Result<T, crate::Error>;
 
