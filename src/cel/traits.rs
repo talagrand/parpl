@@ -187,8 +187,41 @@ pub enum QuoteStyle {
 
 /// Trait for constructing CEL AST nodes.
 ///
-/// This trait abstracts over the memory management strategy (e.g. arena allocation).
-/// It allows the parser to be decoupled from specific allocator implementations.
+/// `CelWriter` abstracts over AST construction, allowing the parser to work
+/// with any expression representation. This enables:
+///
+/// - **Arena allocation**: Zero-copy ASTs with bumpalo
+/// - **Box allocation**: Traditional heap-allocated ASTs
+/// - **Custom types**: Your own expression types for evaluation
+///
+/// # Associated Types
+///
+/// - `StringId`: Handle type for interned strings (identifiers, field names)
+/// - `Bytes`: Type for byte literals (typically `&'arena [u8]` or `Vec<u8>`)
+/// - `Expr`: The expression node type you're building
+/// - `Error`: Error type for writer failures (use `Infallible` if infallible)
+/// - `Interner`: The string interner type (implements [`Interner`])
+///
+/// # Example
+///
+/// See [`reference::arena::ArenaCelWriter`](crate::cel::reference::arena::ArenaCelWriter)
+/// for a full implementation.
+///
+/// ```ignore
+/// impl CelWriter for MyCelWriter {
+///     type StringId = StringPoolId;
+///     type Bytes = Vec<u8>;
+///     type Expr = MyExpr;
+///     type Error = Infallible;
+///     type Interner = StringPool;
+///
+///     fn literal(&mut self, lit: Literal<...>, span: Span) -> Result<Self::Expr, Self::Error> {
+///         Ok(MyExpr::Literal(lit))
+///     }
+///
+///     // ... implement other methods
+/// }
+/// ```
 pub trait CelWriter {
     /// The type of string identifiers used by this writer (e.g. StringPoolId)
     type StringId: Clone + PartialEq + Debug;

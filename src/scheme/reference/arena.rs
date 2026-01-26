@@ -30,34 +30,26 @@ pub enum Datum<'a> {
     LabelRef(u64),
 }
 
-pub struct ArenaDatumWriter<'a> {
-    interner: StringPool,
-    arena: &'a Bump,
+pub struct ArenaDatumWriter<'a, 'arena> {
+    interner: &'a mut StringPool,
+    arena: &'arena Bump,
 }
 
-impl<'a> ArenaDatumWriter<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
-        Self {
-            interner: StringPool::default(),
-            arena,
-        }
-    }
-
-    /// Returns a reference to the string pool for resolving string IDs.
-    pub fn string_pool(&self) -> &StringPool {
-        &self.interner
+impl<'a, 'arena> ArenaDatumWriter<'a, 'arena> {
+    pub fn new(arena: &'arena Bump, interner: &'a mut StringPool) -> Self {
+        Self { interner, arena }
     }
 }
 
-impl<'a> DatumWriter for ArenaDatumWriter<'a> {
-    type Output = Syntax<Datum<'a>>;
+impl<'a, 'arena> DatumWriter for ArenaDatumWriter<'a, 'arena> {
+    type Output = Syntax<Datum<'arena>>;
     type Error = Infallible;
     type Interner = StringPool;
     type StringId = StringPoolId;
     type NumberOps = SimpleNumberOps;
 
     fn interner(&mut self) -> &mut Self::Interner {
-        &mut self.interner
+        self.interner
     }
 
     fn bool(&mut self, v: bool, s: Span) -> Result<Self::Output, Self::Error> {
@@ -341,13 +333,18 @@ impl<'d> DatumInspector for &Syntax<Datum<'d>> {
     }
 }
 
-pub fn read<'a>(source: &str, arena: &'a Bump) -> Result<Syntax<Datum<'a>>, Error> {
-    read_with_max_depth(source, arena, 64)
+pub fn read<'a>(
+    source: &str,
+    arena: &'a Bump,
+    interner: &mut StringPool,
+) -> Result<Syntax<Datum<'a>>, Error> {
+    read_with_max_depth(source, arena, interner, 64)
 }
 
 pub fn read_with_max_depth<'a>(
     source: &str,
     arena: &'a Bump,
+    interner: &mut StringPool,
     max_depth: u32,
 ) -> Result<Syntax<Datum<'a>>, Error> {
     let parser = crate::scheme::Builder::default()
@@ -355,8 +352,6 @@ pub fn read_with_max_depth<'a>(
         .reject_fold_case(true)
         .reject_comments(true)
         .build();
-    let mut writer = ArenaDatumWriter::new(arena);
-    parser
-        .parse(source, &mut writer)
-        .map(|(datum, _span)| datum)
+    let mut writer = ArenaDatumWriter::new(arena, interner);
+    parser.parse(source, &mut writer)
 }

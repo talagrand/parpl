@@ -34,8 +34,35 @@ pub enum DatumKind {
     Other,
 }
 
-/// Abstract interface for Scheme number operations.
-/// This decouples the Reader and Inspector from the concrete number representation.
+/// Trait for converting lexer number tokens to semantic number values.
+///
+/// This trait decouples the reader from specific number representations,
+/// allowing different implementations (exact integers, floating point,
+/// rationals, bignums, etc.).
+///
+/// # Implementing
+///
+/// Implement this trait to define how number literals are converted to
+/// your number type:
+///
+/// ```ignore
+/// impl SchemeNumberOps for MyNumberOps {
+///     type Number = MyNumber;
+///
+///     fn from_literal(lit: &NumberLiteral<'_>, span: Span) -> Result<MyNumber, Error> {
+///         // Parse the literal and return your number type
+///     }
+///
+///     fn eqv(a: &MyNumber, b: &MyNumber) -> bool {
+///         // Implement Scheme's eqv? semantics
+///     }
+/// }
+/// ```
+///
+/// # See Also
+///
+/// - [`reference::numbers::SimpleNumberOps`](crate::scheme::reference::numbers::SimpleNumberOps)
+///   for a reference implementation using `i64`/`f64`
 pub trait SchemeNumberOps: Debug + Sized {
     /// The opaque semantic number type used by the backend/expander.
     type Number: Debug + Clone;
@@ -50,6 +77,35 @@ pub trait SchemeNumberOps: Debug + Sized {
     fn eqv(a: &Self::Number, b: &Self::Number) -> bool;
 }
 
+/// Trait for inspecting Scheme datum values.
+///
+/// `DatumInspector` provides read-only access to datum structure, enabling
+/// generic algorithms over any datum representation (arena-allocated,
+/// Rc-based, boxed, etc.).
+///
+/// # Associated Types
+///
+/// The trait uses associated types to handle different ownership models:
+///
+/// - `NumberOps`: Number operations type (see [`SchemeNumberOps`])
+/// - `NumberRef<'a>`: Return type for number access (enables zero-copy or reconstruction)
+/// - `StringId<'a>`: Handle type for interned strings
+/// - `Child<'a>`: Type for child references (may be `&Self` or owned)
+///
+/// # Example
+///
+/// ```ignore
+/// fn count_atoms<D: DatumInspector>(datum: &D) -> usize {
+///     match datum.kind() {
+///         DatumKind::Pair => {
+///             let (car, cdr) = datum.as_pair().unwrap();
+///             count_atoms(&car) + count_atoms(&cdr)
+///         }
+///         DatumKind::Null => 0,
+///         _ => 1,
+///     }
+/// }
+/// ```
 pub trait DatumInspector: Sized {
     /// Fast type check.
     fn kind(&self) -> DatumKind;
@@ -139,6 +195,39 @@ pub trait DatumInspector: Sized {
     fn improper_tail<'a>(&'a self) -> Option<Self::Child<'a>>;
 }
 
+/// Trait for constructing Scheme datums during parsing.
+///
+/// `DatumWriter` abstracts over AST construction, allowing the parser to work
+/// with any datum representation (arena-allocated, Rc-based, boxed, etc.).
+///
+/// # Implementing
+///
+/// Implement this trait to use your own datum types with the parser:
+///
+/// ```ignore
+/// impl DatumWriter for MyWriter {
+///     type Output = MyDatum;
+///     type Error = MyError;
+///     type Interner = StringPool;
+///     type StringId = StringPoolId;
+///     type NumberOps = SimpleNumberOps;
+///
+///     fn interner(&mut self) -> &mut Self::Interner { &mut self.interner }
+///
+///     fn bool(&mut self, v: bool, s: Span) -> Result<Self::Output, Self::Error> {
+///         Ok(MyDatum::Bool(v))
+///     }
+///
+///     // ... implement other methods
+/// }
+/// ```
+///
+/// # See Also
+///
+/// - [`reference::arena::ArenaDatumWriter`](crate::scheme::reference::arena::ArenaDatumWriter)
+///   for a full reference implementation
+/// - [`reference::mini::MiniDatumWriter`](crate::scheme::reference::mini::MiniDatumWriter)
+///   for a minimal implementation
 pub trait DatumWriter {
     /// The concrete type being built
     type Output;

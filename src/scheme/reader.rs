@@ -683,7 +683,7 @@ fn integer_spelling_to_byte(spelling: &str, radix: u32) -> Option<u8> {
 mod tests {
     use super::*;
     use crate::{
-        Interner, LimitExceeded,
+        Interner, LimitExceeded, StringPool,
         scheme::{
             constants,
             lex::Token,
@@ -782,13 +782,14 @@ mod tests {
 
         fn run_datum(&self, expected: &Expected<DatumMatcher>) {
             let arena = Bump::new();
-            let mut writer = ArenaDatumWriter::new(&arena);
+            let mut interner = StringPool::new();
+            let mut writer = ArenaDatumWriter::new(&arena, &mut interner);
             let result = parse(self.input, &mut writer);
             match expected {
                 Expected::Success(matcher) => {
                     let (syntax, _) = result
                         .unwrap_or_else(|e| panic!("{}: expected success, got {:?}", self.name, e));
-                    matcher.check(&syntax.value, writer.string_pool(), self.name);
+                    matcher.check(&syntax.value, &interner, self.name);
                 }
                 Expected::Error(matcher) => {
                     let err =
@@ -936,7 +937,8 @@ mod tests {
         }
 
         let arena = Bump::new();
-        let mut writer = ArenaDatumWriter::new(&arena);
+        let mut interner = StringPool::new();
+        let mut writer = ArenaDatumWriter::new(&arena, &mut interner);
         let result = parse(&input, &mut writer);
         let err = result.expect_err("expected depth-limit error");
         ErrorMatcher::LimitExceeded.check(&err, "depth_limit_enforced_by_default");
@@ -956,7 +958,8 @@ mod tests {
         }
 
         let arena = Bump::new();
-        let mut writer = ArenaDatumWriter::new(&arena);
+        let mut interner = StringPool::new();
+        let mut writer = ArenaDatumWriter::new(&arena, &mut interner);
         let (syntax, _) = parse_with_max_depth(&input, &mut writer, 128)
             .expect("expected success with increased max depth");
         if let Datum::Pair(_, _) = syntax.value {

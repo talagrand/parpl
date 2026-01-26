@@ -172,7 +172,7 @@ impl SchemeParser {
     /// ```ignore
     /// let parser = SchemeParser::default();
     /// let mut writer = MyWriter::new();
-    /// let (datum, span) = parser.parse("(+ 1 2)", &mut writer)?;
+    /// let datum = parser.parse("(+ 1 2)", &mut writer)?;
     /// ```
     ///
     /// # Errors
@@ -182,14 +182,10 @@ impl SchemeParser {
     /// - [`Error::IncompleteToken`](crate::Error::IncompleteToken) - Input ends mid-token
     /// - [`Error::LimitExceeded`](crate::Error::LimitExceeded) - Nesting depth exceeded
     /// - [`Error::Unsupported`](crate::Error::Unsupported) - Feature not supported by writer
-    pub fn parse<W: DatumWriter>(
-        &self,
-        source: &str,
-        writer: &mut W,
-    ) -> Result<(W::Output, crate::Span)> {
+    pub fn parse<W: DatumWriter>(&self, source: &str, writer: &mut W) -> Result<W::Output> {
         let lexer = lex::lex_with_config(source, self.lex_config);
         let mut stream = TokenStream::new(lexer, self.max_depth);
-        let datum = stream.parse(writer)?;
+        let (datum, _span) = stream.parse(writer)?;
 
         if !stream.is_empty() {
             // If there are remaining tokens, it's an error for a single datum parse

@@ -191,9 +191,7 @@ pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<MiniDatum, Er
         .reject_comments(true)
         .build();
     let mut writer = MiniDatumWriter::default();
-    parser
-        .parse(source, &mut writer)
-        .map(|(datum, _span)| datum)
+    parser.parse(source, &mut writer)
 }
 
 #[cfg(test)]

@@ -178,9 +178,13 @@ fn bench_scheme_parsing(c: &mut Criterion) {
 
     group.bench_function("Simple (+ 1 2)", |b| {
         b.iter_batched_ref(
-            Bump::new,
-            |arena| {
-                let _ = parpl::scheme::reference::arena::read(black_box(SCHEME_SIMPLE), arena);
+            || (Bump::new(), StringPool::new()),
+            |(arena, interner)| {
+                let _ = parpl::scheme::reference::arena::read(
+                    black_box(SCHEME_SIMPLE),
+                    arena,
+                    interner,
+                );
             },
             BatchSize::SmallInput,
         )
@@ -188,9 +192,13 @@ fn bench_scheme_parsing(c: &mut Criterion) {
 
     group.bench_function("Nested", |b| {
         b.iter_batched_ref(
-            Bump::new,
-            |arena| {
-                let _ = parpl::scheme::reference::arena::read(black_box(SCHEME_NESTED), arena);
+            || (Bump::new(), StringPool::new()),
+            |(arena, interner)| {
+                let _ = parpl::scheme::reference::arena::read(
+                    black_box(SCHEME_NESTED),
+                    arena,
+                    interner,
+                );
             },
             BatchSize::SmallInput,
         )
@@ -198,9 +206,13 @@ fn bench_scheme_parsing(c: &mut Criterion) {
 
     group.bench_function("Factorial", |b| {
         b.iter_batched_ref(
-            Bump::new,
-            |arena| {
-                let _ = parpl::scheme::reference::arena::read(black_box(SCHEME_FACTORIAL), arena);
+            || (Bump::new(), StringPool::new()),
+            |(arena, interner)| {
+                let _ = parpl::scheme::reference::arena::read(
+                    black_box(SCHEME_FACTORIAL),
+                    arena,
+                    interner,
+                );
             },
             BatchSize::SmallInput,
         )
@@ -208,9 +220,13 @@ fn bench_scheme_parsing(c: &mut Criterion) {
 
     group.bench_function("Lambda", |b| {
         b.iter_batched_ref(
-            Bump::new,
-            |arena| {
-                let _ = parpl::scheme::reference::arena::read(black_box(SCHEME_LAMBDA), arena);
+            || (Bump::new(), StringPool::new()),
+            |(arena, interner)| {
+                let _ = parpl::scheme::reference::arena::read(
+                    black_box(SCHEME_LAMBDA),
+                    arena,
+                    interner,
+                );
             },
             BatchSize::SmallInput,
         )
@@ -218,9 +234,10 @@ fn bench_scheme_parsing(c: &mut Criterion) {
 
     group.bench_function("Quote", |b| {
         b.iter_batched_ref(
-            Bump::new,
-            |arena| {
-                let _ = parpl::scheme::reference::arena::read(black_box(SCHEME_QUOTE), arena);
+            || (Bump::new(), StringPool::new()),
+            |(arena, interner)| {
+                let _ =
+                    parpl::scheme::reference::arena::read(black_box(SCHEME_QUOTE), arena, interner);
             },
             BatchSize::SmallInput,
         )
@@ -228,9 +245,13 @@ fn bench_scheme_parsing(c: &mut Criterion) {
 
     group.bench_function("Complex", |b| {
         b.iter_batched_ref(
-            Bump::new,
-            |arena| {
-                let _ = parpl::scheme::reference::arena::read(black_box(SCHEME_COMPLEX), arena);
+            || (Bump::new(), StringPool::new()),
+            |(arena, interner)| {
+                let _ = parpl::scheme::reference::arena::read(
+                    black_box(SCHEME_COMPLEX),
+                    arena,
+                    interner,
+                );
             },
             BatchSize::SmallInput,
         )
