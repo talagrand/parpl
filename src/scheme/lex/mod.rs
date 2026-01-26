@@ -1,3 +1,9 @@
+//! R7RS Scheme lexer (internal for now, but could be exposed for advanced usage).
+//!
+//! This module provides the tokenization layer for Scheme source code.
+//! It is not part of the public API — users should use
+//! [`SchemeParser`](super::SchemeParser) for parsing.
+
 use crate::{
     Error, Span, Syntax,
     scheme::{
@@ -270,20 +276,6 @@ pub type SpannedToken<'a> = Syntax<Token<'a>>;
 /// - Intertoken space (whitespace, comments)
 /// - Fold-case directives (`#!fold-case`, `#!no-fold-case`)
 /// - All token types defined in the R7RS formal syntax
-///
-/// # Usage
-///
-/// ```
-/// use parpl::scheme::lex::lex;
-///
-/// let mut lexer = lex("(+ 1 2)");
-/// while let Some(result) = lexer.next() {
-///     match result {
-///         Ok(token) => println!("{:?}", token.value),
-///         Err(e) => eprintln!("Error: {}", e),
-///     }
-/// }
-/// ```
 pub struct Lexer<'i> {
     input: Input<'i>,
     source: &'i str,
@@ -338,14 +330,6 @@ impl<'i> Lexer<'i> {
             Err(ErrMode::Backtrack(_)) => Ok(None),
             Err(e) => Err(self.map_lex_error(start, e)),
         }
-    }
-
-    /// Create a new lexer for the given source string with default
-    /// configuration.
-    #[inline]
-    #[must_use]
-    pub fn new(source: &'i str) -> Self {
-        Self::with_config(source, LexConfig::default())
     }
 
     /// Create a new lexer for the given source string and configuration.
@@ -592,16 +576,17 @@ impl<'i> Iterator for Lexer<'i> {
 /// <nested comment> ::= #| <comment text> |#
 /// <directive> ::= #!fold-case | #!no-fold-case
 /// ```
-/// Convenience constructor using the default `LexConfig`.
-#[inline]
-#[must_use]
-pub fn lex(source: &str) -> Lexer<'_> {
-    Lexer::new(source)
-}
-
 /// Construct a lexer with an explicit `LexConfig`.
 #[inline]
 #[must_use]
 pub fn lex_with_config(source: &str, config: LexConfig) -> Lexer<'_> {
     Lexer::with_config(source, config)
+}
+
+/// Construct a lexer with the default configuration.
+#[cfg(test)]
+#[inline]
+#[must_use]
+pub fn lex(source: &str) -> Lexer<'_> {
+    lex_with_config(source, LexConfig::default())
 }

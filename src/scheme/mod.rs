@@ -6,7 +6,7 @@
 
 pub mod constants;
 mod context;
-pub mod lex;
+pub(crate) mod lex;
 mod reader;
 #[cfg(any(test, feature = "reference"))]
 pub mod reference;

@@ -188,8 +188,8 @@ impl SchemeParser {
         writer: &mut W,
     ) -> Result<(W::Output, crate::Span)> {
         let lexer = lex::lex_with_config(source, self.lex_config);
-        let mut stream = TokenStream::new(lexer);
-        let datum = stream.parse_with_max_depth(writer, self.max_depth)?;
+        let mut stream = TokenStream::new(lexer, self.max_depth);
+        let datum = stream.parse(writer)?;
 
         if !stream.is_empty() {
             // If there are remaining tokens, it's an error for a single datum parse
@@ -224,6 +224,6 @@ impl SchemeParser {
     #[must_use]
     pub fn token_stream<'i>(&self, source: &'i str) -> TokenStream<'i> {
         let lexer = lex::lex_with_config(source, self.lex_config);
-        TokenStream::new(lexer)
+        TokenStream::new(lexer, self.max_depth)
     }
 }

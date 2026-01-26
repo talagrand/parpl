@@ -30,10 +30,6 @@ name = "stack_depth_test"
 required-features = ["reference"]
 
 [[example]]
-name = "scheme_lex_benchmark"
-required-features = ["scheme"]
-
-[[example]]
 name = "demo"
 required-features = ["reference"]
 

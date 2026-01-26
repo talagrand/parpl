@@ -1,3 +1,34 @@
+//! Arena-allocated CEL AST implementation.
+//!
+//! This module provides a working `CelWriter` implementation using bumpalo
+//! arena allocation. It demonstrates how to build an efficient, zero-copy AST.
+//!
+//! # Types
+//!
+//! - [`Expr`]: A CEL expression node with span information
+//! - [`ExprKind`]: The specific kind of expression
+//! - [`ArenaCelWriter`]: The `CelWriter` implementation
+//!
+//! # Example
+//!
+//! ```
+//! # #[cfg(feature = "reference")]
+//! # fn example() -> Result<(), parpl::Error> {
+//! use bumpalo::Bump;
+//! use parpl::StringPool;
+//! use parpl::cel::{Builder, CelWriter};
+//! use parpl::cel::reference::arena::ArenaCelWriter;
+//!
+//! let arena = Bump::new();
+//! let mut interner = StringPool::new();
+//! let mut writer = ArenaCelWriter::new(&arena, &mut interner);
+//!
+//! let parser = Builder::default().build();
+//! let expr = parser.parse("1 + 2 * 3", &mut writer)?;
+//! # Ok(())
+//! # }
+//! ```
+
 use crate::{
     Span, StringPool, StringPoolId,
     cel::{BinaryOp, CelWriter, Literal, UnaryOp},

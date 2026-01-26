@@ -1,7 +1,7 @@
 use crate::{
     Error, Interner, Span,
     scheme::{
-        Result, constants,
+        Result,
         lex::{self, FiniteRealKind, NumberExactness, SpannedToken, Token},
         traits::{DatumWriter, SchemeNumberOps},
     },
@@ -22,36 +22,65 @@ fn writer_error<E: std::error::Error + Send + Sync + 'static>(span: Span, e: E) 
 // Token Stream with Datum Comment Handling
 // ============================================================================
 
-/// A token stream that handles `#;` datum comments at the parser level.
+/// A datum reader for parsing multiple datums from a source string.
 ///
-/// Uses inline peeking instead of `std::iter::Peekable` for better performance.
-/// The standard library's `Peekable` wrapper introduces overhead through double
-/// `Option` wrapping (`Option<Option<T>>`), closure-based `get_or_insert_with`,
-/// and generic abstraction boundaries that inhibit cross-function inlining.
-/// At authoring time, this inline peeking approach was responsible for ~9%
-/// performance improvement on parsing a 1K Scheme program.
+/// `TokenStream` provides:
+///
+/// - Automatic handling of `#;` datum comments (skips the following datum)
+/// - Parse one datum at a time via [`parse`](Self::parse)
+/// - Check for remaining input via [`is_empty`](Self::is_empty)
+///
+/// # Example
+///
+/// ```ignore
+/// let parser = SchemeParser::default();
+/// let mut stream = parser.token_stream("(+ 1 2) (define x 10)");
+/// let mut writer = MyWriter::new();
+///
+/// while !stream.is_empty() {
+///     let (datum, span) = stream.parse(&mut writer)?;
+///     // process datum...
+/// }
+/// ```
+///
+/// # Obtaining a TokenStream
+///
+/// Use [`SchemeParser::token_stream`](crate::scheme::SchemeParser::token_stream)
+/// to create a `TokenStream`. This ensures the lexer configuration matches the
+/// parser settings (e.g., comment handling, fold-case directives).
 pub struct TokenStream<'i> {
     lexer: lex::Lexer<'i>,
-    /// Peeked token, if any. Avoids `Peekable` wrapper overhead.
+    // Manual peek buffer instead of `std::iter::Peekable` to avoid double-`Option`
+    // wrapping (`Option<Option<T>>`), closure-based `get_or_insert_with`,
+    // and generic abstraction boundaries that inhibit cross-function inlining.
+    // At authoring time, this manual peeking approach was responsible for ~9%
+    // performance improvement on parsing a 1K Scheme program.
     peeked: Option<Result<SpannedToken<'i>>>,
+    // Maximum nesting depth for parsing.
+    max_depth: u32,
 }
 
 impl<'i> TokenStream<'i> {
     /// Create a new token stream from lexed tokens.
     #[inline]
     #[must_use]
-    pub fn new(lexer: lex::Lexer<'i>) -> Self {
+    pub(crate) fn new(lexer: lex::Lexer<'i>, max_depth: u32) -> Self {
         Self {
             lexer,
             peeked: None,
+            max_depth,
         }
     }
 
-    /// Lex source and create a token stream.
+    /// Create a token stream from source (test helper).
+    #[cfg(test)]
     #[inline]
     #[must_use]
-    pub fn from_source(source: &'i str) -> Self {
-        Self::new(lex::lex(source))
+    fn from_source(source: &'i str) -> Self {
+        Self::new(
+            lex::lex_with_config(source, lex::LexConfig::default()),
+            crate::scheme::constants::DEFAULT_MAX_DEPTH,
+        )
     }
 
     /// Internal: ensure we have a peeked token (or None at EOF).
@@ -101,11 +130,10 @@ impl<'i> TokenStream<'i> {
         self.raw_peek()
     }
 
-    /// Public peek that uses the default maximum depth when skipping
-    /// comments.
+    /// Peek that uses the configured maximum depth when skipping comments.
     #[inline]
-    pub fn peek(&mut self) -> Result<Option<&SpannedToken<'i>>> {
-        self.peek_with_max_depth(constants::DEFAULT_MAX_DEPTH)
+    pub(crate) fn peek(&mut self) -> Result<Option<&SpannedToken<'i>>> {
+        self.peek_with_max_depth(self.max_depth)
     }
 
     /// Peek at the next token's value without consuming it, skipping
@@ -115,12 +143,6 @@ impl<'i> TokenStream<'i> {
         Ok(self.peek_with_max_depth(depth)?.map(|st| &st.value))
     }
 
-    /// Public peek of the token value using the default depth.
-    #[inline]
-    pub fn peek_token_value(&mut self) -> Result<Option<&Token<'i>>> {
-        self.peek_token_value_with_max_depth(constants::DEFAULT_MAX_DEPTH)
-    }
-
     /// Consume and return the next token, skipping intertoken space,
     /// with an explicit maximum depth used when skipping comments.
     fn next_token_with_max_depth(&mut self, depth: u32) -> Result<Option<SpannedToken<'i>>> {
@@ -128,11 +150,12 @@ impl<'i> TokenStream<'i> {
         self.raw_next()
     }
 
-    /// Public `next_token` that uses the default maximum depth when
-    /// skipping comments.
+    /// Consume and return the next token, using the configured maximum depth
+    /// when skipping comments.
+    #[cfg(test)]
     #[inline]
-    pub fn next_token(&mut self) -> Result<Option<SpannedToken<'i>>> {
-        self.next_token_with_max_depth(constants::DEFAULT_MAX_DEPTH)
+    fn next_token(&mut self) -> Result<Option<SpannedToken<'i>>> {
+        self.next_token_with_max_depth(self.max_depth)
     }
 
     /// Check if the stream is exhausted (no more tokens after skipping comments).
@@ -244,11 +267,6 @@ impl<'i> TokenStream<'i> {
         Ok(())
     }
 
-    #[expect(dead_code)]
-    fn skip_one_datum(&mut self) -> Result<()> {
-        self.skip_one_datum_with_max_depth(constants::DEFAULT_MAX_DEPTH)
-    }
-
     /// Skip contents of a list/vector until the closing `)`.
     fn skip_list_contents_with_max_depth(&mut self, depth: u32) -> Result<()> {
         loop {
@@ -284,11 +302,6 @@ impl<'i> TokenStream<'i> {
         }
     }
 
-    #[expect(dead_code)]
-    fn skip_list_contents(&mut self) -> Result<()> {
-        self.skip_list_contents_with_max_depth(constants::DEFAULT_MAX_DEPTH)
-    }
-
     /// Parse a single `<datum>` from the token stream.
     ///
     /// Grammar reference (`syn.tex` / External representations):
@@ -302,10 +315,10 @@ impl<'i> TokenStream<'i> {
     /// covering the currently implemented `<simple datum>` and
     /// `<compound datum>` alternatives plus label forms (`#n=` / `#n#`).
     pub fn parse<W: DatumWriter>(&mut self, writer: &mut W) -> Result<(W::Output, Span)> {
-        self.parse_with_max_depth(writer, constants::DEFAULT_MAX_DEPTH)
+        self.parse_with_max_depth(writer, self.max_depth)
     }
 
-    pub fn parse_with_max_depth<W: DatumWriter>(
+    fn parse_with_max_depth<W: DatumWriter>(
         &mut self,
         writer: &mut W,
         depth: u32,
@@ -672,6 +685,7 @@ mod tests {
     use crate::{
         Interner, LimitExceeded,
         scheme::{
+            constants,
             lex::Token,
             reference::arena::{ArenaDatumWriter, Datum},
         },
@@ -687,7 +701,7 @@ mod tests {
     /// <datum> ::= <simple datum> | <compound datum>
     ///           | <label> = <datum> | <label> #
     /// ```
-    pub(crate) fn parse<W: DatumWriter>(source: &str, writer: &mut W) -> Result<(W::Output, Span)> {
+    pub fn parse<W: DatumWriter>(source: &str, writer: &mut W) -> Result<(W::Output, Span)> {
         parse_with_max_depth(source, writer, constants::DEFAULT_MAX_DEPTH)
     }
 
