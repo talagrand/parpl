@@ -518,10 +518,19 @@ fn build_primary<W: CelWriter>(
 ) -> Result<W::Expr> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
+    let pair_str = pair.as_str();
     let mut inner = pair.into_inner();
-    let first = inner
-        .next()
-        .expect("Parser validated: primary = { literal | ... | \"(\" ~ expr ~ \")\" | \"[\" ~ expr_list? ~ \",\"? ~ \"]\" | \"{\" ~ map_inits? ~ \",\"? ~ \"}\" | ... }");
+
+    // Handle empty list `[]` and empty map `{}` - these have no child rules
+    // because expr_list and map_inits are optional and not present
+    let Some(first) = inner.next() else {
+        // No child rules - must be empty list or empty map
+        return match pair_str.chars().next() {
+            Some('[') => writer.list(&[], span).map_err(|e| map_writer_error(e, span)),
+            Some('{') => writer.map(&[], span).map_err(|e| map_writer_error(e, span)),
+            _ => unreachable!("Parser validated: primary with no children must be [] or {{}}"),
+        };
+    };
 
     match first.as_rule() {
         Rule::literal => {
@@ -575,6 +584,11 @@ fn build_primary<W: CelWriter>(
             writer
                 .map(&entries, span)
                 .map_err(|e| map_writer_error(e, span))
+        }
+        Rule::selector => {
+            // Message literal: selector ("." selector)* "{" field_inits? "}"
+            // e.g., Type{field: value} or pkg.Type{field: value}
+            build_message_literal(depth_left, first, &mut inner, span, writer)
         }
         _ => {
             // Handle other primary forms
@@ -765,6 +779,52 @@ fn build_map_inits<W: CelWriter>(
     }
 
     Ok(entries)
+}
+
+/// Build message/struct literal: selector ("." selector)* "{" field_inits? "}"
+/// e.g., Type{}, Type{field: value}, pkg.Type{field: value}
+fn build_message_literal<W: CelWriter>(
+    depth_left: u32,
+    first_selector: pest::iterators::Pair<'_, Rule>,
+    inner: &mut pest::iterators::Pairs<'_, Rule>,
+    span: Span,
+    writer: &mut W,
+) -> Result<W::Expr> {
+    // Collect type name parts: first selector + any additional ".selector" parts
+    let mut type_parts = vec![writer.interner().intern(first_selector.as_str())];
+
+    // Collect additional selector parts until we hit "{" or field_inits
+    while let Some(pair) = inner.peek() {
+        if pair.as_rule() == Rule::selector {
+            type_parts.push(writer.interner().intern(inner.next().expect("peeked").as_str()));
+        } else {
+            break;
+        }
+    }
+
+    // Now collect field initializers if present
+    let mut values = Vec::new();
+
+    if let Some(field_inits_pair) = inner.peek()
+        && field_inits_pair.as_rule() == Rule::field_inits
+    {
+        let field_inits = inner.next().expect("peeked");
+        let mut field_inner = field_inits.into_inner();
+
+        // field_inits = { selector ~ ":" ~ expr ~ ("," ~ selector ~ ":" ~ expr)* }
+        while let Some(field_name_pair) = field_inner.next() {
+            let field_name = writer.interner().intern(field_name_pair.as_str());
+            let field_value_pair = field_inner
+                .next()
+                .expect("Parser validated: field_inits = { selector ~ \":\" ~ expr ~ ... }");
+            let field_value = build_expr(depth_left, field_value_pair, writer)?;
+            values.push((field_name, field_value));
+        }
+    }
+
+    writer
+        .structure(None, &type_parts, &values, span)
+        .map_err(|e| map_writer_error(e, span))
 }
 
 /// Extract span from a pest Pair
@@ -971,6 +1031,54 @@ mod tests {
                     assert_eq!(items.len(), 3);
                 }
                 _ => panic!("expected list"),
+            }
+        },
+
+        test_build_ast_empty_list: "[]" => |ctx| {
+            let ast = ctx.ast().unwrap();
+            match ast.kind {
+                ExprKind::List(items) => {
+                    assert_eq!(items.len(), 0);
+                }
+                _ => panic!("expected empty list"),
+            }
+        },
+
+        test_build_ast_empty_map: "{}" => |ctx| {
+            let ast = ctx.ast().unwrap();
+            match ast.kind {
+                ExprKind::Map(entries) => {
+                    assert_eq!(entries.len(), 0);
+                }
+                _ => panic!("expected empty map"),
+            }
+        },
+
+        test_build_ast_reserved_word_struct: "for{}" => |ctx| {
+            // Reserved words can be used as selectors in message literals
+            // since they're not valid idents, the message literal rule is used
+            let ast = ctx.ast().unwrap();
+            match ast.kind {
+                ExprKind::Struct(_, type_parts, values) => {
+                    assert_eq!(type_parts.len(), 1);
+                    assert_eq!(ctx.resolve(&type_parts[0]).unwrap(), "for");
+                    assert_eq!(values.len(), 0);
+                }
+                _ => panic!("expected struct with reserved word type, got {:?}", ast.kind),
+            }
+        },
+
+        test_build_ast_qualified_struct: "for.Type{}" => |ctx| {
+            // Qualified message literal with reserved word prefix
+            let ast = ctx.ast().unwrap();
+            match ast.kind {
+                ExprKind::Struct(_, type_parts, values) => {
+                    assert_eq!(type_parts.len(), 2);
+                    assert_eq!(ctx.resolve(&type_parts[0]).unwrap(), "for");
+                    assert_eq!(ctx.resolve(&type_parts[1]).unwrap(), "Type");
+                    assert_eq!(values.len(), 0);
+                }
+                _ => panic!("expected qualified struct, got {:?}", ast.kind),
             }
         },
     }
