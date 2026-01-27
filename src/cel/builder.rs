@@ -1081,5 +1081,32 @@ mod tests {
                 _ => panic!("expected qualified struct, got {:?}", ast.kind),
             }
         },
+
+        test_build_ast_ident_struct: "Foo{}" => |ctx| {
+            // Message literal with normal identifier (not reserved word)
+            // This tests that PEG ordering works correctly
+            let ast = ctx.ast().unwrap();
+            match ast.kind {
+                ExprKind::Struct(_, type_parts, values) => {
+                    assert_eq!(type_parts.len(), 1);
+                    assert_eq!(ctx.resolve(&type_parts[0]).unwrap(), "Foo");
+                    assert_eq!(values.len(), 0);
+                }
+                _ => panic!("expected struct Foo{{}}, got {:?}", ast.kind),
+            }
+        },
+
+        test_build_ast_leading_dot_struct: ".Foo{}" => |ctx| {
+            // Message literal with leading dot
+            let ast = ctx.ast().unwrap();
+            match ast.kind {
+                ExprKind::Struct(_, type_parts, values) => {
+                    assert_eq!(type_parts.len(), 1);
+                    assert_eq!(ctx.resolve(&type_parts[0]).unwrap(), "Foo");
+                    assert_eq!(values.len(), 0);
+                }
+                _ => panic!("expected struct .Foo{{}}, got {:?}", ast.kind),
+            }
+        },
     }
 }

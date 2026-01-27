@@ -35,7 +35,10 @@ pub const CEL_SEEDS: &[(&str, &str)] = &[
     ("list_with_items", "[1, 2, 3]"),
     ("map_with_items", r#"{"a": 1}"#),
 
-    // Message literals (reserved words as selectors)
+    // Message literals
+    ("ident_struct", "Foo{}"),
+    ("leading_dot_struct", ".Foo{}"),
+    ("struct_with_fields", "Foo{a: 1, b: 2}"),
     ("reserved_struct", "for{}"),
     ("qualified_struct", "for.Type{}"),
 ];

@@ -49,13 +49,15 @@ member = {
 }
 
 // CEL Spec (lines 83-89): Primary = ["."] IDENT ["(" [ExprList] ")"] | ...
+// NOTE: Message literal MUST come before ident rule because PEG is greedy (spec has ident rule first).
+// If ident comes first, "Foo{}" would parse "Foo" as ident, leaving "{}" unparsed.
 primary = {
     literal                                              // Literal value (try first to avoid 'r' or 'b' being parsed as identifiers)
+  | "."? ~ selector ~ ("." ~ selector)* ~ "{" ~ field_inits? ~ ","? ~ "}"  // Message literal (must precede ident!)
   | "."? ~ ident ~ ("(" ~ expr_list? ~ ")")?            // Function call or identifier
   | "(" ~ expr ~ ")"                                     // Parenthesized expression
   | "[" ~ expr_list? ~ ","? ~ "]"                        // List literal
   | "{" ~ map_inits? ~ ","? ~ "}"                        // Map literal
-  | "."? ~ selector ~ ("." ~ selector)* ~ "{" ~ field_inits? ~ ","? ~ "}"  // Message literal
 }
 
 // CEL Spec (line 90): ExprList = Expr {"," Expr}
