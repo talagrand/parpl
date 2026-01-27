@@ -27,3 +27,7 @@ path = "fuzz_targets/parse_scheme.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "generate-seeds"
+path = "src/bin/generate-seeds.rs"
