@@ -36,6 +36,8 @@ for quick integration, or adapt the code to your project's needs.
 
 ## Installation
 
+Requires Rust 1.90 or later.
+
 ```toml
 [dependencies]
 parpl = { version = "0.1", features = ["cel", "scheme"] }

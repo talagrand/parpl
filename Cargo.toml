@@ -66,6 +66,8 @@ index_refutable_slice = "warn"
 clone_on_ref_ptr = "warn"
 indexing_slicing = "warn"
 string_slice = "warn"
+enum_glob_use = "warn"
+wildcard_imports = "warn"
 
 [package.metadata.docs.rs]
 all-features = true
