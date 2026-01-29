@@ -7,39 +7,39 @@
 // to ensure traceability and conformance verification.
 
 // =============================================================================
-// Top-Level Expression Grammar (langdef.md lines 68-94)
+// Top-Level Expression Grammar (langdef.md lines 27-51)
 // =============================================================================
 
-// CEL Spec (line 68): Expr = ConditionalOr ["?" ConditionalOr ":" Expr]
+// CEL Spec (line 27): Expr = ConditionalOr ["?" ConditionalOr ":" Expr]
 expr = { conditional_or ~ ("?" ~ conditional_or ~ ":" ~ expr)? }
 
-// CEL Spec (line 69): ConditionalOr = [ConditionalOr "||"] ConditionalAnd
+// CEL Spec (line 28): ConditionalOr = [ConditionalOr "||"] ConditionalAnd
 conditional_or = { conditional_and ~ ("||" ~ conditional_and)* }
 
-// CEL Spec (line 70): ConditionalAnd = [ConditionalAnd "&&"] Relation
+// CEL Spec (line 29): ConditionalAnd = [ConditionalAnd "&&"] Relation
 conditional_and = { relation ~ ("&&" ~ relation)* }
 
-// CEL Spec (line 71): Relation = [Relation Relop] Addition
+// CEL Spec (line 30): Relation = [Relation Relop] Addition
 relation = { addition ~ (relop ~ addition)* }
 
-// CEL Spec (line 72): Relop = "<" | "<=" | ">=" | ">" | "==" | "!=" | "in"
+// CEL Spec (line 31): Relop = "<" | "<=" | ">=" | ">" | "==" | "!=" | "in"
 // Note: Order matters in PEG! Must try "<=" before "<" to avoid incorrect match
 relop = { "<=" | ">=" | "==" | "!=" | "<" | ">" | "in" }
 
-// CEL Spec (line 73): Addition = [Addition ("+" | "-")] Multiplication
+// CEL Spec (line 32): Addition = [Addition ("+" | "-")] Multiplication
 addition = { multiplication ~ (("+" | "-") ~ multiplication)* }
 
-// CEL Spec (line 74): Multiplication = [Multiplication ("*" | "/" | "%")] Unary
+// CEL Spec (line 33): Multiplication = [Multiplication ("*" | "/" | "%")] Unary
 multiplication = { unary ~ (("*" | "/" | "%") ~ unary)* }
 
-// CEL Spec (lines 75-78): Unary = Member | "!" {"!"} Member | "-" {"-"} Member
+// CEL Spec (lines 34-37): Unary = Member | "!" {"!"} Member | "-" {"-"} Member
 unary = {
     member
   | "!"+ ~ member
   | "-"+ ~ member
 }
 
-// CEL Spec (lines 79-82): Member = Primary | Member "." SELECTOR ["(" [ExprList] ")"] | Member "[" Expr "]"
+// CEL Spec (lines 38-41): Member = Primary | Member "." SELECTOR ["(" [ExprList] ")"] | Member "[" Expr "]"
 // The member rule handles field access and indexing operations on a primary expression
 member = {
     primary ~ (
@@ -48,7 +48,7 @@ member = {
     )*
 }
 
-// CEL Spec (lines 83-89): Primary = ["."] IDENT ["(" [ExprList] ")"] | ...
+// CEL Spec (lines 42-48): Primary = ["."] IDENT ["(" [ExprList] ")"] | ...
 // NOTE: Message literal MUST come before ident rule because PEG is greedy (spec has ident rule first).
 // If ident comes first, "Foo{}" would parse "Foo" as ident, leaving "{}" unparsed.
 primary = {
@@ -60,31 +60,31 @@ primary = {
   | "{" ~ map_inits? ~ ","? ~ "}"                        // Map literal
 }
 
-// CEL Spec (line 90): ExprList = Expr {"," Expr}
+// CEL Spec (line 49): ExprList = Expr {"," Expr}
 expr_list = { expr ~ ("," ~ expr)* }
 
-// CEL Spec (line 91): FieldInits = SELECTOR ":" Expr {"," SELECTOR ":" Expr}
+// CEL Spec (line 50): FieldInits = SELECTOR ":" Expr {"," SELECTOR ":" Expr}
 field_inits = { selector ~ ":" ~ expr ~ ("," ~ selector ~ ":" ~ expr)* }
 
-// CEL Spec (line 92): MapInits = Expr ":" Expr {"," Expr ":" Expr}
+// CEL Spec (line 51): MapInits = Expr ":" Expr {"," Expr ":" Expr}
 map_inits = { expr ~ ":" ~ expr ~ ("," ~ expr ~ ":" ~ expr)* }
 
 // =============================================================================
-// Lexical Rules (langdef.md lines 139-169)
+// Lexical Rules (langdef.md lines 99-127)
 // =============================================================================
 
-// CEL Spec (line 139): IDENT = SELECTOR - RESERVED
+// CEL Spec (line 99): IDENT = SELECTOR - RESERVED
 ident = @{ 
     !(reserved ~ !ASCII_ALPHANUMERIC) ~ selector
 }
 
-// CEL Spec (line 140): SELECTOR = [_a-zA-Z][_a-zA-Z0-9]* - KEYWORD
+// CEL Spec (line 100): SELECTOR = [_a-zA-Z][_a-zA-Z0-9]* - KEYWORD
 selector = @{
     !(keyword ~ !ASCII_ALPHANUMERIC) ~ 
     (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")*
 }
 
-// CEL Spec (lines 141-142): LITERAL = INT_LIT | UINT_LIT | FLOAT_LIT | STRING_LIT | BYTES_LIT | BOOL_LIT | NULL_LIT
+// CEL Spec (lines 101-102): LITERAL = INT_LIT | UINT_LIT | FLOAT_LIT | STRING_LIT | BYTES_LIT | BOOL_LIT | NULL_LIT
 literal = {
     float_lit    // Must come before int_lit to match decimal point
   | uint_lit     // Must come before int_lit to match 'u' suffix
@@ -95,35 +95,35 @@ literal = {
   | null_lit
 }
 
-// CEL Spec (line 143): INT_LIT = -? DIGIT+ | -? 0x HEXDIGIT+
+// CEL Spec (line 103): INT_LIT = -? DIGIT+ | -? 0x HEXDIGIT+
 int_lit = @{
     "-"? ~ "0" ~ ("x" | "X") ~ ASCII_HEX_DIGIT+
   | "-"? ~ ASCII_DIGIT+
 }
 
-// CEL Spec (line 144): UINT_LIT = INT_LIT [uU]
+// CEL Spec (line 104): UINT_LIT = INT_LIT [uU]
 uint_lit = @{
     int_lit ~ ("u" | "U")
 }
 
-// CEL Spec (line 145): FLOAT_LIT = -? DIGIT* . DIGIT+ EXPONENT? | -? DIGIT+ EXPONENT
+// CEL Spec (line 105): FLOAT_LIT = -? DIGIT* . DIGIT+ EXPONENT? | -? DIGIT+ EXPONENT
 float_lit = @{
     "-"? ~ ASCII_DIGIT* ~ "." ~ ASCII_DIGIT+ ~ exponent?
   | "-"? ~ ASCII_DIGIT+ ~ exponent
 }
 
-// CEL Spec (line 146): DIGIT = [0-9]
+// CEL Spec (line 106): DIGIT = [0-9]
 // (Built-in ASCII_DIGIT used instead)
 
-// CEL Spec (line 147): HEXDIGIT = [0-9abcdefABCDEF]
+// CEL Spec (line 107): HEXDIGIT = [0-9abcdefABCDEF]
 hexdigit = { '0'..'9' | 'a'..'f' | 'A'..'F' }
 
-// CEL Spec (line 148): EXPONENT = [eE] [+-]? DIGIT+
+// CEL Spec (line 108): EXPONENT = [eE] [+-]? DIGIT+
 exponent = @{
     ("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+
 }
 
-// CEL Spec (lines 149-153): STRING_LIT = [rR]? ( "..." | '...' | """...""" | '''...''' )
+// CEL Spec (lines 109-113): STRING_LIT = [rR]? ( "..." | '...' | """...""" | '''...''' )
 // CEL-RESTRICTED: Escape sequences not yet implemented (will be handled during value construction)
 string_lit = @{
     ("r" | "R")? ~ (
@@ -134,25 +134,25 @@ string_lit = @{
     )
 }
 
-// CEL Spec (line 154): BYTES_LIT = [bB] STRING_LIT
+// CEL Spec (line 114): BYTES_LIT = [bB] STRING_LIT
 bytes_lit = ${ ("b" | "B") ~ string_lit }
 
-// CEL Spec (lines 155-159): ESCAPE = \ [abfnrtv\?"'`] | ...
+// CEL Spec (lines 115-119): ESCAPE = \ [abfnrtv\?"'`] | ...
 // CEL-RESTRICTED: Escape sequences not yet implemented
 // (Will be handled during string literal processing)
 
-// CEL Spec (line 160): BOOL_LIT = "true" | "false"
+// CEL Spec (line 120): BOOL_LIT = "true" | "false"
 bool_lit = @{ "true" | "false" }
 
-// CEL Spec (line 161): NULL_LIT = "null"
+// CEL Spec (line 121): NULL_LIT = "null"
 null_lit = @{ "null" }
 
-// CEL Spec (line 162): KEYWORD = BOOL_LIT | NULL_LIT | "in"
+// CEL Spec (line 122): KEYWORD = BOOL_LIT | NULL_LIT | "in"
 keyword = @{
     "true" | "false" | "null" | "in"
 }
 
-// CEL Spec (lines 163-165): RESERVED = "as" | "break" | ...
+// CEL Spec (lines 123-126): RESERVED = "as" | "break" | ...
 reserved = @{
     "as" | "break" | "const" | "continue" | "else"
   | "for" | "function" | "if" | "import" | "let"
@@ -160,10 +160,10 @@ reserved = @{
   | "var" | "void" | "while"
 }
 
-// CEL Spec (line 166): WHITESPACE = [\t\n\f\r ]+
+// CEL Spec (line 127): WHITESPACE = [\t\n\f\r ]+
 WHITESPACE = _{ " " | "\t" | "\n" | "\r" | "\x0C" }
 
-// CEL Spec (line 167): COMMENT = '//' ~\n* \n
+// CEL Spec (line 128): COMMENT = '//' ~\n* \n
 COMMENT = _{ "//" ~ (!"\n" ~ ANY)* ~ "\n"? }
 
 // =============================================================================
