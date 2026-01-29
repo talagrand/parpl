@@ -224,8 +224,8 @@ mod tests {
     fn test_nonterminal_format() {
         // Test that nonterminals use angle bracket format
         let bad_inputs = vec![
-            (")", "<primary>"),                     // single rule
-            ("foo bar", "<end-of-input>, <in_kw>"), // EOI converted + multiple rules (in_kw is part of relop)
+            (")", "<unary>"),              // single rule
+            ("foo bar", "<end-of-input>"), // EOI converted; also includes many operator rules
         ];
 
         for (input, expected_contains) in bad_inputs {

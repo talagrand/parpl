@@ -287,7 +287,7 @@ fn build_relation<W: CelWriter>(
 }
 
 /// Build addition/subtraction expression
-/// CEL Spec: addition = { multiplication ~ (("+" | "-") ~ multiplication)* }
+/// CEL Spec: addition = { multiplication ~ (add_op ~ multiplication)* }
 fn build_addition<W: CelWriter>(
     depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
@@ -305,24 +305,19 @@ fn build_addition<W: CelWriter>(
         writer,
     )?;
 
-    while let Some(next) = inner.next() {
-        let op = match next.as_str() {
+    // Process (add_op ~ multiplication) pairs
+    while let Some(op_pair) = inner.next() {
+        debug_assert_eq!(op_pair.as_rule(), Rule::add_op, "Expected add_op");
+        let op = match op_pair.as_str() {
             "+" => BinaryOp::Add,
             "-" => BinaryOp::Subtract,
-            _ => {
-                // It's the right operand
-                let right = build_multiplication(depth_left, next, writer)?;
-                left = writer
-                    .binary(BinaryOp::Add, left, right, span)
-                    .map_err(|e| map_writer_error(e, span))?;
-                continue;
-            }
+            _ => unreachable!("Parser validated: add_op = {{ \"+\" | \"-\" }}"),
         };
         let right = build_multiplication(
             depth_left,
-            inner.next().expect(
-                "Parser validated: addition = { ... ~ ((\" +\" | \"-\") ~ multiplication)* }",
-            ),
+            inner
+                .next()
+                .expect("Parser validated: addition = { ... ~ (add_op ~ multiplication)* }"),
             writer,
         )?;
         left = writer
@@ -334,7 +329,7 @@ fn build_addition<W: CelWriter>(
 }
 
 /// Build multiplication/division/modulo expression
-/// CEL Spec: multiplication = { unary ~ (("*" | "/" | "%") ~ unary)* }
+/// CEL Spec: multiplication = { unary ~ (mul_op ~ unary)* }
 fn build_multiplication<W: CelWriter>(
     depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
@@ -352,25 +347,20 @@ fn build_multiplication<W: CelWriter>(
         writer,
     )?;
 
-    while let Some(next) = inner.next() {
-        let op = match next.as_str() {
+    // Process (mul_op ~ unary) pairs
+    while let Some(op_pair) = inner.next() {
+        debug_assert_eq!(op_pair.as_rule(), Rule::mul_op, "Expected mul_op");
+        let op = match op_pair.as_str() {
             "*" => BinaryOp::Multiply,
             "/" => BinaryOp::Divide,
             "%" => BinaryOp::Modulo,
-            _ => {
-                // It's the right operand
-                let right = build_unary(depth_left, next, writer)?;
-                left = writer
-                    .binary(BinaryOp::Multiply, left, right, span)
-                    .map_err(|e| map_writer_error(e, span))?;
-                continue;
-            }
+            _ => unreachable!("Parser validated: mul_op = {{ \"*\" | \"/\" | \"%\" }}"),
         };
         let right = build_unary(
             depth_left,
-            inner.next().expect(
-                "Parser validated: multiplication = { ... ~ ((\"*\" | \"/\" | \"%\") ~ unary)* }",
-            ),
+            inner
+                .next()
+                .expect("Parser validated: multiplication = { ... ~ (mul_op ~ unary)* }"),
             writer,
         )?;
         left = writer
@@ -382,7 +372,7 @@ fn build_multiplication<W: CelWriter>(
 }
 
 /// Build unary expression
-/// CEL Spec: unary = { member | "!"+ ~ member | "-"+ ~ member }
+/// CEL Spec: unary = { not_unary | neg_unary | member }
 fn build_unary<W: CelWriter>(
     depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
@@ -393,34 +383,40 @@ fn build_unary<W: CelWriter>(
     let mut inner = pair.into_inner();
     let first = inner
         .next()
-        .expect("Parser validated: unary = { member | \"!\"+  ~ member | \"-\"+ ~ member }");
+        .expect("Parser validated: unary = { not_unary | neg_unary | member }");
 
-    match first.as_str() {
-        s if s.chars().all(|c| c == '!') => {
-            let count = s.len();
-            let operand = build_member(
-                depth_left,
-                inner
-                    .next()
-                    .expect("Parser validated: unary = { ... | \"!\"+ ~ member | ... }"),
-                writer,
-            )?;
+    match first.as_rule() {
+        Rule::not_unary => {
+            // not_unary = ${ "!"+ ~ member }
+            // Use pair text to count leading ! characters
+            let text = first.as_str();
+            let count = text.chars().take_while(|&c| c == '!').count();
+            let member = first
+                .into_inner()
+                .next()
+                .expect("Parser validated: not_unary = { \"!\"+ ~ member }");
+            let operand = build_member(depth_left, member, writer)?;
             // Apply NOT count times (!! cancels out)
             apply_unary_repeated(writer, UnaryOp::Not, count, operand, span)
         }
-        s if s.chars().all(|c| c == '-') => {
-            let count = s.len();
-            let operand = build_member(
-                depth_left,
-                inner
-                    .next()
-                    .expect("Parser validated: unary = { ... | \"-\"+ ~ member }"),
-                writer,
-            )?;
+        Rule::neg_unary => {
+            // neg_unary = ${ "-"+ ~ member }
+            // Use pair text to count leading - characters
+            let text = first.as_str();
+            let count = text.chars().take_while(|&c| c == '-').count();
+            let member = first
+                .into_inner()
+                .next()
+                .expect("Parser validated: neg_unary = { \"-\"+ ~ member }");
+            let operand = build_member(depth_left, member, writer)?;
             // Apply Negate count times (-- cancels out)
             apply_unary_repeated(writer, UnaryOp::Negate, count, operand, span)
         }
-        _ => build_member(depth_left, first, writer), // It's a member expression
+        Rule::member => build_member(depth_left, first, writer),
+        _ => unreachable!(
+            "Parser validated: unary contains not_unary, neg_unary, or member, got {:?}",
+            first.as_rule()
+        ),
     }
 }
 
@@ -439,80 +435,88 @@ fn build_member<W: CelWriter>(
         depth_left,
         inner
             .next()
-            .expect("Parser validated: member = { primary ~ ... }"),
+            .expect("Parser validated: member = { primary ~ member_suffix* }"),
         writer,
     )?;
 
-    while let Some(next) = inner.next() {
-        match next.as_str() {
-            "." => {
-                // Field access or method call
-                let selector = inner
+    // Process member_suffix rules (field_access or index_access)
+    for suffix in inner {
+        debug_assert_eq!(
+            suffix.as_rule(),
+            Rule::member_suffix,
+            "Expected member_suffix"
+        );
+        let suffix_inner = suffix
+            .into_inner()
+            .next()
+            .expect("Parser validated: member_suffix = { field_access | index_access }");
+
+        match suffix_inner.as_rule() {
+            Rule::field_access => {
+                // field_access = { "." ~ selector ~ call_suffix? }
+                let mut fa_inner = suffix_inner.into_inner();
+                let selector = fa_inner
                     .next()
-                    .expect("Parser validated: member = { ... ~ (\".\" ~ selector ~ ...)* }");
+                    .expect("Parser validated: field_access = { \".\" ~ selector ~ ... }");
                 let field_name = writer.interner().intern(selector.as_str());
 
-                // Check if there's a function call
-                if let Some(peek) = inner.peek() {
-                    if peek.as_str() == "(" {
-                        inner.next(); // consume "("
-                        let args = if let Some(args_pair) = inner.peek() {
-                            if args_pair.as_rule() == Rule::expr_list {
-                                build_expr_list(
-                                    depth_left,
-                                    inner.next().expect(
-                                        "Parser validated: member = { ... ~ (\"(\" ~ expr_list? ~ \")\")? }",
-                                    ),
-                                    writer,
-                                )?
-                            } else {
-                                Vec::new()
-                            }
-                        } else {
-                            Vec::new()
-                        };
-                        // Consume ")" - it's implicit in the grammar
-
-                        expr = writer
-                            .member(expr, field_name, Some(&args), span)
-                            .map_err(|e| map_writer_error(e, span))?;
-                    } else {
-                        expr = writer
-                            .member(expr, field_name, None, span)
-                            .map_err(|e| map_writer_error(e, span))?;
-                    }
+                // Check for call_suffix (method call with arguments)
+                if let Some(call_suffix) = fa_inner.next() {
+                    debug_assert_eq!(
+                        call_suffix.as_rule(),
+                        Rule::call_suffix,
+                        "Expected call_suffix"
+                    );
+                    let args = build_call_suffix_args(depth_left, call_suffix, writer)?;
+                    expr = writer
+                        .member(expr, field_name, Some(&args), span)
+                        .map_err(|e| map_writer_error(e, span))?;
                 } else {
+                    // Field access without call
                     expr = writer
                         .member(expr, field_name, None, span)
                         .map_err(|e| map_writer_error(e, span))?;
                 }
             }
-            "[" => {
-                // Index access - call build_expr to start at top of precedence chain
-                let index = build_expr(
-                    depth_left,
-                    inner
-                        .next()
-                        .expect("Parser validated: member = { ... ~ (\"[\" ~ expr ~ \"]\")* }"),
-                    writer,
-                )?;
-                // "]" is implicit
+            Rule::index_access => {
+                // index_access = { "[" ~ expr ~ "]" }
+                let index_expr = suffix_inner
+                    .into_inner()
+                    .next()
+                    .expect("Parser validated: index_access = { \"[\" ~ expr ~ \"]\" }");
+                let index = build_expr(depth_left, index_expr, writer)?;
                 expr = writer
                     .index(expr, index, span)
                     .map_err(|e| map_writer_error(e, span))?;
             }
-            _ => {
-                // This is part of the next operation
-                continue;
-            }
+            _ => unreachable!(
+                "Parser validated: member_suffix contains field_access or index_access, got {:?}",
+                suffix_inner.as_rule()
+            ),
         }
     }
 
     Ok(expr)
 }
 
+/// Extract arguments from a call_suffix rule
+fn build_call_suffix_args<W: CelWriter>(
+    depth_left: u32,
+    call_suffix: pest::iterators::Pair<'_, Rule>,
+    writer: &mut W,
+) -> Result<Vec<W::Expr>> {
+    // call_suffix = { "(" ~ expr_list? ~ ")" }
+    let mut cs_inner = call_suffix.into_inner();
+    if let Some(expr_list) = cs_inner.next() {
+        debug_assert_eq!(expr_list.as_rule(), Rule::expr_list, "Expected expr_list");
+        build_expr_list(depth_left, expr_list, writer)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
 /// Build primary expression (bottom of precedence chain)
-/// CEL Spec: primary = { literal | "."? ~ ident ~ ("(" ~ expr_list? ~ ")")? | ... }
+/// CEL Spec: primary = { literal | message_literal | ident_or_call | paren_expr | list_literal | map_literal }
 fn build_primary<W: CelWriter>(
     depth_left: u32,
     pair: pest::iterators::Pair<'_, Rule>,
@@ -520,21 +524,11 @@ fn build_primary<W: CelWriter>(
 ) -> Result<W::Expr> {
     let depth_left = check_depth(depth_left)?;
     let span = span_from_pair(&pair);
-    let pair_str = pair.as_str();
     let mut inner = pair.into_inner();
 
-    // Handle empty list `[]` and empty map `{}` - these have no child rules
-    // because expr_list and map_inits are optional and not present
-    let Some(first) = inner.next() else {
-        // No child rules - must be empty list or empty map
-        return match pair_str.chars().next() {
-            Some('[') => writer
-                .list(&[], span)
-                .map_err(|e| map_writer_error(e, span)),
-            Some('{') => writer.map(&[], span).map_err(|e| map_writer_error(e, span)),
-            _ => unreachable!("Parser validated: primary with no children must be [] or {{}}"),
-        };
-    };
+    let first = inner
+        .next()
+        .expect("Parser validated: primary has at least one child rule");
 
     match first.as_rule() {
         Rule::literal => {
@@ -543,120 +537,150 @@ fn build_primary<W: CelWriter>(
                 .literal(lit, span)
                 .map_err(|e| map_writer_error(e, span))
         }
-        Rule::ident => {
-            let name = writer.interner().intern(first.as_str());
-            // Check for function call
-            if inner.peek().map(|p| p.as_str()) == Some("(") {
-                inner.next(); // consume "("
-                let args = if let Some(args_pair) = inner.peek() {
-                    if args_pair.as_rule() == Rule::expr_list {
-                        build_expr_list(
-                            depth_left,
-                            inner.next().expect(
-                                "Parser validated: primary = { ... ~ \"(\" ~ expr_list? ~ \")\" }",
-                            ),
-                            writer,
-                        )?
-                    } else {
-                        Vec::new()
-                    }
-                } else {
-                    Vec::new()
-                };
+        Rule::message_literal => {
+            // message_literal = { "."? ~ selector ~ ("." ~ selector)* ~ "{" ~ field_inits? ~ ","? ~ "}" }
+            build_message_literal_rule(depth_left, first, span, writer)
+        }
+        Rule::ident_or_call => {
+            // ident_or_call = { "."? ~ ident ~ call_suffix? }
+            build_ident_or_call(depth_left, first, span, writer)
+        }
+        Rule::paren_expr => {
+            // paren_expr = { "(" ~ expr ~ ")" }
+            let expr_pair = first
+                .into_inner()
+                .next()
+                .expect("Parser validated: paren_expr = { \"(\" ~ expr ~ \")\" }");
+            build_expr(depth_left, expr_pair, writer)
+        }
+        Rule::list_literal => {
+            // list_literal = { "[" ~ expr_list? ~ ","? ~ "]" }
+            let mut ll_inner = first.into_inner();
+            if let Some(expr_list) = ll_inner.next() {
+                debug_assert_eq!(expr_list.as_rule(), Rule::expr_list, "Expected expr_list");
+                let items = build_expr_list(depth_left, expr_list, writer)?;
                 writer
-                    .call(None, name, &args, span)
+                    .list(&items, span)
                     .map_err(|e| map_writer_error(e, span))
             } else {
+                // Empty list
                 writer
-                    .ident(name, span)
+                    .list(&[], span)
                     .map_err(|e| map_writer_error(e, span))
             }
         }
-        // Parenthesized expression - ONLY place that calls build_expr()
-        // This starts at the top of the precedence chain again
-        Rule::expr => build_expr(depth_left, first, writer),
-        Rule::expr_list => {
-            // List literal: [expr, ...]
-            let items = build_expr_list(depth_left, first, writer)?;
-            writer
-                .list(&items, span)
-                .map_err(|e| map_writer_error(e, span))
-        }
-        Rule::map_inits => {
-            // Map literal: {key: value, ...}
-            let entries = build_map_inits(depth_left, first, writer)?;
-            writer
-                .map(&entries, span)
-                .map_err(|e| map_writer_error(e, span))
-        }
-        Rule::selector => {
-            // Message literal: selector ("." selector)* "{" field_inits? "}"
-            // e.g., Type{field: value} or pkg.Type{field: value}
-            build_message_literal(depth_left, first, &mut inner, span, writer)
-        }
-        _ => {
-            // Handle other primary forms
-            match first.as_str() {
-                "[" => {
-                    // Empty list or list with items
-                    if let Some(list_pair) = inner.peek() {
-                        if list_pair.as_rule() == Rule::expr_list {
-                            let items = build_expr_list(
-                                depth_left,
-                                inner.next().expect(
-                                    "Parser validated: primary = { ... ~ \"[\" ~ expr_list? ~ \",\"? ~ \"]\" }",
-                                ),
-                                writer,
-                            )?;
-                            writer
-                                .list(&items, span)
-                                .map_err(|e| map_writer_error(e, span))
-                        } else {
-                            writer
-                                .list(&[], span)
-                                .map_err(|e| map_writer_error(e, span))
-                        }
-                    } else {
-                        writer
-                            .list(&[], span)
-                            .map_err(|e| map_writer_error(e, span))
-                    }
-                }
-                "{" => {
-                    // Empty map or map with entries
-                    if let Some(map_pair) = inner.peek() {
-                        if map_pair.as_rule() == Rule::map_inits {
-                            let entries = build_map_inits(
-                                depth_left,
-                                inner.next().expect(
-                                    "Parser validated: primary = { ... ~ \"{\" ~ map_inits? ~ \",\"? ~ \"}\" }",
-                                ),
-                                writer,
-                            )?;
-                            writer
-                                .map(&entries, span)
-                                .map_err(|e| map_writer_error(e, span))
-                        } else {
-                            writer.map(&[], span).map_err(|e| map_writer_error(e, span))
-                        }
-                    } else {
-                        writer.map(&[], span).map_err(|e| map_writer_error(e, span))
-                    }
-                }
-                "." => {
-                    // Leading dot identifier: .ident
-                    let ident_pair = inner
-                        .next()
-                        .expect("Parser validated: primary = { \".\" ~ ident }");
-                    let name = writer.interner().intern(ident_pair.as_str());
-                    writer
-                        .ident(name, span)
-                        .map_err(|e| map_writer_error(e, span))
-                }
-                _ => unreachable!("unexpected primary: {}", first.as_str()),
+        Rule::map_literal => {
+            // map_literal = { "{" ~ map_inits? ~ ","? ~ "}" }
+            let mut ml_inner = first.into_inner();
+            if let Some(map_inits) = ml_inner.next() {
+                debug_assert_eq!(map_inits.as_rule(), Rule::map_inits, "Expected map_inits");
+                let entries = build_map_inits(depth_left, map_inits, writer)?;
+                writer
+                    .map(&entries, span)
+                    .map_err(|e| map_writer_error(e, span))
+            } else {
+                // Empty map
+                writer.map(&[], span).map_err(|e| map_writer_error(e, span))
             }
         }
+        _ => unreachable!(
+            "Parser validated: primary contains one of the expected rules, got {:?}",
+            first.as_rule()
+        ),
     }
+}
+
+/// Build ident_or_call: identifier or function call with optional leading dot
+fn build_ident_or_call<W: CelWriter>(
+    depth_left: u32,
+    pair: pest::iterators::Pair<'_, Rule>,
+    span: Span,
+    writer: &mut W,
+) -> Result<W::Expr> {
+    // ident_or_call = { "."? ~ ident ~ call_suffix? }
+    // CEL Spec: Leading dot (.) forces absolute/root scope resolution, bypassing
+    // container prefixes and comprehension iteration variables. We preserve it
+    // in the identifier name per cel-go's approach (e.g., ".y" not "y").
+    let has_leading_dot = pair.as_str().starts_with('.');
+    let mut inner = pair.into_inner();
+    let ident = inner
+        .next()
+        .expect("Parser validated: ident_or_call = { \".\"? ~ ident ~ ... }");
+    let name = if has_leading_dot {
+        let dotted_name = format!(".{}", ident.as_str());
+        writer.interner().intern(&dotted_name)
+    } else {
+        writer.interner().intern(ident.as_str())
+    };
+
+    if let Some(call_suffix) = inner.next() {
+        // Function call
+        debug_assert_eq!(
+            call_suffix.as_rule(),
+            Rule::call_suffix,
+            "Expected call_suffix"
+        );
+        let args = build_call_suffix_args(depth_left, call_suffix, writer)?;
+        writer
+            .call(None, name, &args, span)
+            .map_err(|e| map_writer_error(e, span))
+    } else {
+        // Plain identifier
+        writer
+            .ident(name, span)
+            .map_err(|e| map_writer_error(e, span))
+    }
+}
+
+/// Build message_literal from Rule::message_literal pair
+fn build_message_literal_rule<W: CelWriter>(
+    depth_left: u32,
+    pair: pest::iterators::Pair<'_, Rule>,
+    span: Span,
+    writer: &mut W,
+) -> Result<W::Expr> {
+    // message_literal = { "."? ~ selector ~ ("." ~ selector)* ~ "{" ~ field_inits? ~ ","? ~ "}" }
+    // CEL Spec: Leading dot (.) forces absolute/root scope resolution, bypassing
+    // container prefixes. We preserve it in the first type part per cel-go's approach.
+    let has_leading_dot = pair.as_str().starts_with('.');
+    let mut inner = pair.into_inner();
+
+    // Collect type name parts (selectors)
+    let mut type_parts = Vec::new();
+    let mut is_first = true;
+    for part in inner.by_ref() {
+        if part.as_rule() == Rule::selector {
+            let name = if is_first && has_leading_dot {
+                let dotted_name = format!(".{}", part.as_str());
+                writer.interner().intern(&dotted_name)
+            } else {
+                writer.interner().intern(part.as_str())
+            };
+            type_parts.push(name);
+            is_first = false;
+        } else if part.as_rule() == Rule::field_inits {
+            // Process field initializers
+            let mut values = Vec::new();
+            let mut field_inner = part.into_inner();
+            // field_inits = { selector ~ ":" ~ expr ~ ("," ~ selector ~ ":" ~ expr)* }
+            while let Some(field_name_pair) = field_inner.next() {
+                let field_name = writer.interner().intern(field_name_pair.as_str());
+                let field_value_pair = field_inner
+                    .next()
+                    .expect("Parser validated: field_inits = { selector ~ \":\" ~ expr ~ ... }");
+                let field_value = build_expr(depth_left, field_value_pair, writer)?;
+                values.push((field_name, field_value));
+            }
+            return writer
+                .structure(None, &type_parts, &values, span)
+                .map_err(|e| map_writer_error(e, span));
+        }
+    }
+
+    // No field_inits found - empty message literal
+    writer
+        .structure(None, &type_parts, &[], span)
+        .map_err(|e| map_writer_error(e, span))
 }
 
 fn process_literal_pair<W: CelWriter>(
@@ -783,56 +807,6 @@ fn build_map_inits<W: CelWriter>(
     }
 
     Ok(entries)
-}
-
-/// Build message/struct literal: selector ("." selector)* "{" field_inits? "}"
-/// e.g., Type{}, Type{field: value}, pkg.Type{field: value}
-fn build_message_literal<W: CelWriter>(
-    depth_left: u32,
-    first_selector: pest::iterators::Pair<'_, Rule>,
-    inner: &mut pest::iterators::Pairs<'_, Rule>,
-    span: Span,
-    writer: &mut W,
-) -> Result<W::Expr> {
-    // Collect type name parts: first selector + any additional ".selector" parts
-    let mut type_parts = vec![writer.interner().intern(first_selector.as_str())];
-
-    // Collect additional selector parts until we hit "{" or field_inits
-    while let Some(pair) = inner.peek() {
-        if pair.as_rule() == Rule::selector {
-            type_parts.push(
-                writer
-                    .interner()
-                    .intern(inner.next().expect("peeked").as_str()),
-            );
-        } else {
-            break;
-        }
-    }
-
-    // Now collect field initializers if present
-    let mut values = Vec::new();
-
-    if let Some(field_inits_pair) = inner.peek()
-        && field_inits_pair.as_rule() == Rule::field_inits
-    {
-        let field_inits = inner.next().expect("peeked");
-        let mut field_inner = field_inits.into_inner();
-
-        // field_inits = { selector ~ ":" ~ expr ~ ("," ~ selector ~ ":" ~ expr)* }
-        while let Some(field_name_pair) = field_inner.next() {
-            let field_name = writer.interner().intern(field_name_pair.as_str());
-            let field_value_pair = field_inner
-                .next()
-                .expect("Parser validated: field_inits = { selector ~ \":\" ~ expr ~ ... }");
-            let field_value = build_expr(depth_left, field_value_pair, writer)?;
-            values.push((field_name, field_value));
-        }
-    }
-
-    writer
-        .structure(None, &type_parts, &values, span)
-        .map_err(|e| map_writer_error(e, span))
 }
 
 /// Extract span from a pest Pair
@@ -1106,12 +1080,12 @@ mod tests {
         },
 
         test_build_ast_leading_dot_struct: ".Foo{}" => |ctx| {
-            // Message literal with leading dot
+            // Message literal with leading dot (preserved for absolute scope resolution)
             let ast = ctx.ast().unwrap();
             match ast.kind {
                 ExprKind::Struct(_, type_parts, values) => {
                     assert_eq!(type_parts.len(), 1);
-                    assert_eq!(ctx.resolve(&type_parts[0]).unwrap(), "Foo");
+                    assert_eq!(ctx.resolve(&type_parts[0]).unwrap(), ".Foo");
                     assert_eq!(values.len(), 0);
                 }
                 _ => panic!("expected struct .Foo{{}}, got {:?}", ast.kind),

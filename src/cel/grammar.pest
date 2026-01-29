@@ -31,38 +31,79 @@ relop = { "<=" | ">=" | "==" | "!=" | "<" | ">" | in_kw }
 in_kw = @{ "in" ~ !ident_cont }
 
 // CEL Spec (line 32): Addition = [Addition ("+" | "-")] Multiplication
-addition = { multiplication ~ (("+" | "-") ~ multiplication)* }
+// NOTE: add_op is a disambiguation rule that does not appear in langdef.md.
+// It exists because PEST only emits pairs for named rules, not for literal tokens.
+addition = { multiplication ~ (add_op ~ multiplication)* }
+add_op = { "+" | "-" }
 
 // CEL Spec (line 33): Multiplication = [Multiplication ("*" | "/" | "%")] Unary
-multiplication = { unary ~ (("*" | "/" | "%") ~ unary)* }
+// NOTE: mul_op is a disambiguation rule that does not appear in langdef.md.
+// It exists because PEST only emits pairs for named rules, not for literal tokens.
+multiplication = { unary ~ (mul_op ~ unary)* }
+mul_op = { "*" | "/" | "%" }
 
 // CEL Spec (lines 34-37): Unary = Member | "!" {"!"} Member | "-" {"-"} Member
+// NOTE: not_unary and neg_unary are disambiguation rules that do not appear in langdef.md.
+// They exist because PEST only emits pairs for named rules, not for literal tokens.
+// IMPORTANT: member must be first to allow negative literals like -9223372036854775808 to be
+// parsed as int_lit rather than Unary(Negate, ...) which would overflow.
 unary = {
     member
-  | "!"+ ~ member
-  | "-"+ ~ member
+  | not_unary
+  | neg_unary  
 }
+not_unary = { "!"+ ~ member }
+neg_unary = { "-"+ ~ member }
 
 // CEL Spec (lines 38-41): Member = Primary | Member "." SELECTOR ["(" [ExprList] ")"] | Member "[" Expr "]"
-// The member rule handles field access and indexing operations on a primary expression
-member = {
-    primary ~ (
-        "." ~ selector ~ ("(" ~ expr_list? ~ ")")?
-      | "[" ~ expr ~ "]"
-    )*
-}
+// NOTE: member_suffix, field_access, index_access, and call_suffix are disambiguation rules
+// that do not appear in langdef.md. They exist because PEST only emits pairs for named rules,
+// not for literal tokens like "." or "[". Without these rules, the builder cannot distinguish
+// field access from index access.
+member = { primary ~ member_suffix* }
+
+// Disambiguation rule: wraps field access or index access so builder can match on rule type
+member_suffix = { field_access | index_access }
+
+// Disambiguation rule: "." selector with optional method call arguments
+field_access = { "." ~ selector ~ call_suffix? }
+
+// Disambiguation rule: "[" expr "]" index operation
+index_access = { "[" ~ expr ~ "]" }
+
+// Disambiguation rule: "(" expr_list? ")" for method/function call arguments
+call_suffix = { "(" ~ expr_list? ~ ")" }
 
 // CEL Spec (lines 42-48): Primary = ["."] IDENT ["(" [ExprList] ")"] | ...
-// NOTE: Message literal MUST come before ident rule because PEG is greedy (spec has ident rule first).
-// If ident comes first, "Foo{}" would parse "Foo" as ident, leaving "{}" unparsed.
+// NOTE: message_literal, ident_or_call, paren_expr, list_literal, and map_literal are
+// disambiguation rules that do not appear in langdef.md. They exist because PEST only emits
+// pairs for named rules, not for literal tokens like "(", "[", or "{". Without these rules,
+// the builder cannot distinguish between the different primary expression forms.
+// NOTE: Message literal MUST come before ident_or_call because PEG is greedy.
+// If ident_or_call comes first, "Foo{}" would parse "Foo" as ident, leaving "{}" unparsed.
 primary = {
-    literal                                              // Literal value (try first to avoid 'r' or 'b' being parsed as identifiers)
-  | "."? ~ selector ~ ("." ~ selector)* ~ "{" ~ field_inits? ~ ","? ~ "}"  // Message literal (must precede ident!)
-  | "."? ~ ident ~ ("(" ~ expr_list? ~ ")")?            // Function call or identifier
-  | "(" ~ expr ~ ")"                                     // Parenthesized expression
-  | "[" ~ expr_list? ~ ","? ~ "]"                        // List literal
-  | "{" ~ map_inits? ~ ","? ~ "}"                        // Map literal
+    literal
+  | message_literal
+  | ident_or_call
+  | paren_expr
+  | list_literal
+  | map_literal
 }
+
+// Disambiguation rule: Type{field: value} or pkg.Type{field: value}
+message_literal = { "."? ~ selector ~ ("." ~ selector)* ~ "{" ~ field_inits? ~ ","? ~ "}" }
+
+// Disambiguation rule: identifier or function call with optional leading dot
+ident_or_call = { "."? ~ ident ~ call_suffix? }
+
+// Disambiguation rule: parenthesized expression
+paren_expr = { "(" ~ expr ~ ")" }
+
+// Disambiguation rule: list literal [expr, ...]
+list_literal = { "[" ~ expr_list? ~ ","? ~ "]" }
+
+// Disambiguation rule: map literal {key: value, ...}
+map_literal = { "{" ~ map_inits? ~ ","? ~ "}" }
 
 // CEL Spec (line 49): ExprList = Expr {"," Expr}
 expr_list = { expr ~ ("," ~ expr)* }

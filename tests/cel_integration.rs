@@ -230,8 +230,8 @@ fn test_cel_parser_conformance() {
     };
 
     let parser = Builder::default()
-        .max_parse_depth(256)
-        .max_ast_depth(64)
+        .max_parse_depth(512)
+        .max_ast_depth(512)
         .build();
 
     let mut passed = 0;
@@ -285,25 +285,9 @@ fn test_cel_parser_conformance() {
         }
     }
 
-    // BUGBUG: These 3 tests fail due to nesting depth limits.
-    // This needs investigation.
-    const BUGBUG_DEPTH_FAILURES: &[&str] = &[
-        "parse/nest/message_literal",
-        "parse/nest/parens",
-        "parse/repeat/index",
-    ];
-
-    let unexpected_failures: Vec<_> = failures
-        .iter()
-        .filter(|(test_id, _, _)| !BUGBUG_DEPTH_FAILURES.contains(&test_id.as_str()))
-        .collect();
-
     assert!(
-        unexpected_failures.is_empty(),
-        "Unexpected test failures: {:?}",
-        unexpected_failures
-            .iter()
-            .map(|(id, _, _)| id)
-            .collect::<Vec<_>>()
+        failures.is_empty(),
+        "Test failures: {:?}",
+        failures.iter().map(|(id, _, _)| id).collect::<Vec<_>>()
     );
 }
