@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1769706113634,
+  "lastUpdate": 1769707065620,
   "repoUrl": "https://github.com/talagrand/parpl",
   "entries": {
     "Parpl Benchmark": [
@@ -1991,6 +1991,126 @@ window.BENCHMARK_DATA = {
             "name": "MiniScheme Parsing/1K Sample",
             "value": 7089,
             "range": "± 40",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "git@talagrand.org",
+            "name": "Eugene Talagrand",
+            "username": "talagrand"
+          },
+          "committer": {
+            "email": "git@talagrand.org",
+            "name": "Eugene Talagrand",
+            "username": "talagrand"
+          },
+          "distinct": true,
+          "id": "dbc0523a1cc3db10cdb70e97b405167b33923d8f",
+          "message": "Fix CI: properly add cel-spec submodule and fix doc links\n\n- Add cel-spec submodule reference (was missing, only .gitmodules existed)\n- Fix unresolved intra-doc links in arena.rs by using full crate paths\n\nFixes:\n- Test Suite jobs with --features reference were failing because the\n  cel-spec submodule was never properly committed (only .gitmodules was)\n- Documentation job failing on unresolved links to Expr, ExprKind,\n  ArenaCelWriter",
+          "timestamp": "2026-01-29T17:13:53Z",
+          "tree_id": "efe0e09d6f47367b7df6a6921668754830aa8222",
+          "url": "https://github.com/talagrand/parpl/commit/dbc0523a1cc3db10cdb70e97b405167b33923d8f"
+        },
+        "date": 1769707064764,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "CEL Parsing/Simple (1 + 2)",
+            "value": 3528,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Arithmetic",
+            "value": 10445,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Comparison",
+            "value": 13734,
+            "range": "± 155",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Function Call",
+            "value": 18260,
+            "range": "± 123",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Ternary",
+            "value": 14001,
+            "range": "± 107",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "CEL Parsing/Complex",
+            "value": 35377,
+            "range": "± 252",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Simple (+ 1 2)",
+            "value": 915,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Nested",
+            "value": 3080,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Factorial",
+            "value": 7614,
+            "range": "± 82",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Lambda",
+            "value": 3596,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Quote",
+            "value": 3544,
+            "range": "± 57",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "Scheme Parsing/Complex",
+            "value": 7109,
+            "range": "± 79",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/Simple (+ 1 2)",
+            "value": 783,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/Nested",
+            "value": 2680,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/Factorial",
+            "value": 6827,
+            "range": "± 65",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "MiniScheme Parsing/1K Sample",
+            "value": 7040,
+            "range": "± 44",
             "unit": "ns/iter"
           }
         ]
