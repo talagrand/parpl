@@ -9,6 +9,8 @@ license = "MIT"
 keywords = ["parser", "scheme", "cel", "lexer", "grammar"]
 repository = "https://github.com/talagrand/parpl"
 categories = ["parsing", "compilers"]
+# Exclude spec submodules from crates.io package (large external test data)
+exclude = ["specs/"]
 
 [features]
 default = []
@@ -29,6 +31,10 @@ string-interner = "0.19"
 name = "stack_depth_test"
 required-features = ["reference"]
 
+[[test]]
+name = "cel_integration"
+required-features = ["reference"]
+
 [[example]]
 name = "demo"
 required-features = ["reference"]
@@ -39,6 +45,10 @@ required-features = ["reference"]
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
+# Protocol buffer libraries for official CEL test conformance suite
+protox = "0.7"
+prost = "0.13"
+prost-reflect = { version = "0.14", features = ["text-format"] }
 
 [[bench]]
 name = "bench_main"

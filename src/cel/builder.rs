@@ -964,6 +964,7 @@ mod tests {
 
     // ============================================================
     // Section: AST Construction Tests
+    // Note: Most test coverage is derived from the CEL integration test
     // ============================================================
 
     test_cases! {

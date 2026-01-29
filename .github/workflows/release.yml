@@ -60,6 +60,10 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
+      with:
+        # Explicitly disabled: submodules would bloat the crates.io package.
+        # These are also filtered out in Cargo.toml by excluding the "specs/" directory.
+        submodules: false
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
