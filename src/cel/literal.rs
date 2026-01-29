@@ -213,37 +213,44 @@ fn collect_hex_digits(chars: &mut std::str::Chars, count: usize, span: Span) -> 
 /// - Decimal: "123", "-456"
 /// - Hexadecimal: "0xFF", "-0x10"
 ///
-/// This is **fully conformant** with the CEL spec - only decimal and hex are defined.
-/// Overflow checking ensures values fit in i64 range (spec requires overflow errors).
+/// CEL spec only specifies decimal and hexadecimal integer literals.
+/// This will overflow as necessary (outside of i64 range), which is required by the spec.
+///
+/// # Implementation Note
+/// We use i128 as an intermediary to handle i64::MIN correctly. The value
+/// -9223372036854775808 cannot be parsed as a positive i64 then negated (the
+/// positive value overflows). By parsing the absolute value as u64, then
+/// applying the sign in i128 space, the math works naturally. i128 is supported
+/// on all Rust targets (emulated on 32-bit), and even emulated it's faster
+/// than manual edge-case handling.
 pub fn parse_int(s: &str, span: Span) -> Result<i64> {
-    // Handle negative sign
-    let (negative, s) = if let Some(rest) = s.strip_prefix('-') {
-        (true, rest)
-    } else {
-        (false, s)
+    // Strip sign
+    let (negative, u) = match s.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, s),
     };
 
-    // Parse based on prefix
-    let abs_value = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+    // Strip hex prefix if present, parse absolute value as u64
+    let abs_value = if let Some(hex) = u.strip_prefix("0x").or_else(|| u.strip_prefix("0X")) {
         // Hexadecimal
-        i64::from_str_radix(hex, 16).map_err(|_| {
-            Error::syntax(span, "<int_lit>", format!("Invalid integer literal: {s}"))
-        })?
+        u64::from_str_radix(hex, 16)
+            .map_err(|_| Error::syntax(span, "<int_lit>", format!("Invalid hex literal: {s}")))?
     } else {
-        // Decimal
-        s.parse::<i64>().map_err(|_| {
+        u.parse::<u64>().map_err(|_| {
             Error::syntax(span, "<int_lit>", format!("Invalid integer literal: {s}"))
         })?
     };
 
-    // Apply sign
-    if negative {
-        abs_value
-            .checked_neg()
-            .ok_or_else(|| Error::syntax(span, "<int_lit>", format!("Integer overflow: -{s}")))
+    // Apply sign in i128 space (handles i64::MIN correctly)
+    let signed: i128 = if negative {
+        -(abs_value as i128)
     } else {
-        Ok(abs_value)
-    }
+        abs_value as i128
+    };
+
+    // Range check to i64
+    i64::try_from(signed)
+        .map_err(|_| Error::syntax(span, "<int_lit>", format!("Integer overflow: {s}")))
 }
 
 /// Process a raw unsigned integer literal string into a u64 value.
