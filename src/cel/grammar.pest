@@ -144,22 +144,20 @@ exponent = @{
 }
 
 // CEL Spec (lines 109-113): STRING_LIT = [rR]? ( "..." | '...' | """...""" | '''...''' )
-// CEL-RESTRICTED: Escape sequences not yet implemented (will be handled during value construction)
+// Escape sequences (\X) are recognized as a unit so they don't terminate the string.
+// Escape processing happens after parsing.
+// ESCAPE rule omitted from parser since not used
 string_lit = @{
     ("r" | "R")? ~ (
         "\"\"\"" ~ (!"\"\"\"" ~ ANY)* ~ "\"\"\""
       | "'''" ~ (!"'''" ~ ANY)* ~ "'''"
-      | "\"" ~ (!"\"" ~ !"\r" ~ !"\n" ~ ANY)* ~ "\""
-      | "'" ~ (!"'" ~ !"\r" ~ !"\n" ~ ANY)* ~ "'"
+      | "\"" ~ ("\\" ~ ANY | !"\"" ~ !"\r" ~ !"\n" ~ ANY)* ~ "\""
+      | "'" ~ ("\\" ~ ANY | !"'" ~ !"\r" ~ !"\n" ~ ANY)* ~ "'"
     )
 }
 
 // CEL Spec (line 114): BYTES_LIT = [bB] STRING_LIT
 bytes_lit = ${ ("b" | "B") ~ string_lit }
-
-// CEL Spec (lines 115-119): ESCAPE = \ [abfnrtv\?"'`] | ...
-// CEL-RESTRICTED: Escape sequences not yet implemented
-// (Will be handled during string literal processing)
 
 // CEL Spec (line 120): BOOL_LIT = "true" | "false"
 // NOTE: Must check word boundary (!ident_cont) to avoid matching prefix of identifiers like "trueish"
