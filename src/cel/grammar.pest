@@ -23,8 +23,12 @@ conditional_and = { relation ~ ("&&" ~ relation)* }
 relation = { addition ~ (relop ~ addition)* }
 
 // CEL Spec (line 31): Relop = "<" | "<=" | ">=" | ">" | "==" | "!=" | "in"
-// Note: Order matters in PEG! Must try "<=" before "<" to avoid incorrect match
-relop = { "<=" | ">=" | "==" | "!=" | "<" | ">" | "in" }
+// Note: Order matters in PEG! Must try "<=" before "<" to avoid incorrect match.
+// The "in" keyword requires a word boundary check to avoid matching prefix of identifiers like "infix".
+relop = { "<=" | ">=" | "==" | "!=" | "<" | ">" | in_kw }
+
+// "in" keyword with word boundary check
+in_kw = @{ "in" ~ !ident_cont }
 
 // CEL Spec (line 32): Addition = [Addition ("+" | "-")] Multiplication
 addition = { multiplication ~ (("+" | "-") ~ multiplication)* }
@@ -70,18 +74,40 @@ field_inits = { selector ~ ":" ~ expr ~ ("," ~ selector ~ ":" ~ expr)* }
 map_inits = { expr ~ ":" ~ expr ~ ("," ~ expr ~ ":" ~ expr)* }
 
 // =============================================================================
+// CEL Character Classes (langdef.md lines 99-100, 106-107)
+// =============================================================================
+// We define CEL's character classes explicitly rather than using PEST's built-in
+// ASCII_* classes to ensure exact conformance with the CEL specification.
+
+// CEL Spec (line 100): [_a-zA-Z] - valid first character of an identifier
+ident_start = { "_" | 'a'..'z' | 'A'..'Z' }
+
+// CEL Spec (line 100): [_a-zA-Z0-9] - valid continuation character of an identifier
+ident_cont = { "_" | 'a'..'z' | 'A'..'Z' | '0'..'9' }
+
+// CEL Spec (line 106): DIGIT = [0-9]
+cel_digit = { '0'..'9' }
+
+// CEL Spec (line 107): HEXDIGIT = [0-9abcdefABCDEF]
+cel_hexdigit = { '0'..'9' | 'a'..'f' | 'A'..'F' }
+
+// =============================================================================
 // Lexical Rules (langdef.md lines 99-127)
 // =============================================================================
 
 // CEL Spec (line 99): IDENT = SELECTOR - RESERVED
+// PEG simulation of set subtraction: match SELECTOR but reject if it's a RESERVED word.
+// A word is reserved only if the keyword is NOT followed by an identifier continuation char.
 ident = @{ 
-    !(reserved ~ !ASCII_ALPHANUMERIC) ~ selector
+    !(reserved ~ !ident_cont) ~ selector
 }
 
 // CEL Spec (line 100): SELECTOR = [_a-zA-Z][_a-zA-Z0-9]* - KEYWORD
+// PEG simulation of set subtraction: match identifier pattern but reject if it's a KEYWORD.
+// A word is a keyword only if NOT followed by an identifier continuation char.
 selector = @{
-    !(keyword ~ !ASCII_ALPHANUMERIC) ~ 
-    (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")*
+    !(keyword ~ !ident_cont) ~ 
+    ident_start ~ ident_cont*
 }
 
 // CEL Spec (lines 101-102): LITERAL = INT_LIT | UINT_LIT | FLOAT_LIT | STRING_LIT | BYTES_LIT | BOOL_LIT | NULL_LIT
@@ -97,8 +123,8 @@ literal = {
 
 // CEL Spec (line 103): INT_LIT = -? DIGIT+ | -? 0x HEXDIGIT+
 int_lit = @{
-    "-"? ~ "0" ~ ("x" | "X") ~ ASCII_HEX_DIGIT+
-  | "-"? ~ ASCII_DIGIT+
+    "-"? ~ "0" ~ ("x" | "X") ~ cel_hexdigit+
+  | "-"? ~ cel_digit+
 }
 
 // CEL Spec (line 104): UINT_LIT = INT_LIT [uU]
@@ -108,19 +134,13 @@ uint_lit = @{
 
 // CEL Spec (line 105): FLOAT_LIT = -? DIGIT* . DIGIT+ EXPONENT? | -? DIGIT+ EXPONENT
 float_lit = @{
-    "-"? ~ ASCII_DIGIT* ~ "." ~ ASCII_DIGIT+ ~ exponent?
-  | "-"? ~ ASCII_DIGIT+ ~ exponent
+    "-"? ~ cel_digit* ~ "." ~ cel_digit+ ~ exponent?
+  | "-"? ~ cel_digit+ ~ exponent
 }
-
-// CEL Spec (line 106): DIGIT = [0-9]
-// (Built-in ASCII_DIGIT used instead)
-
-// CEL Spec (line 107): HEXDIGIT = [0-9abcdefABCDEF]
-hexdigit = { '0'..'9' | 'a'..'f' | 'A'..'F' }
 
 // CEL Spec (line 108): EXPONENT = [eE] [+-]? DIGIT+
 exponent = @{
-    ("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+
+    ("e" | "E") ~ ("+" | "-")? ~ cel_digit+
 }
 
 // CEL Spec (lines 109-113): STRING_LIT = [rR]? ( "..." | '...' | """...""" | '''...''' )
@@ -142,22 +162,27 @@ bytes_lit = ${ ("b" | "B") ~ string_lit }
 // (Will be handled during string literal processing)
 
 // CEL Spec (line 120): BOOL_LIT = "true" | "false"
-bool_lit = @{ "true" | "false" }
+// NOTE: Must check word boundary (!ident_cont) to avoid matching prefix of identifiers like "trueish"
+bool_lit = @{ ("true" | "false") ~ !ident_cont }
 
 // CEL Spec (line 121): NULL_LIT = "null"
-null_lit = @{ "null" }
+// NOTE: Must check word boundary (!ident_cont) to avoid matching prefix of identifiers like "null_type"
+null_lit = @{ "null" ~ !ident_cont }
 
 // CEL Spec (line 122): KEYWORD = BOOL_LIT | NULL_LIT | "in"
+// NOTE: Keywords are only keywords when not followed by identifier continuation characters
 keyword = @{
-    "true" | "false" | "null" | "in"
+    ("true" | "false" | "null" | "in") ~ !ident_cont
 }
 
 // CEL Spec (lines 123-126): RESERVED = "as" | "break" | ...
+// NOTE: Reserved words are only reserved when not followed by identifier continuation characters
 reserved = @{
-    "as" | "break" | "const" | "continue" | "else"
-  | "for" | "function" | "if" | "import" | "let"
-  | "loop" | "package" | "namespace" | "return"
-  | "var" | "void" | "while"
+    ( "as" | "break" | "const" | "continue" | "else"
+    | "for" | "function" | "if" | "import" | "let"
+    | "loop" | "package" | "namespace" | "return"
+    | "var" | "void" | "while"
+    ) ~ !ident_cont
 }
 
 // CEL Spec (line 127): WHITESPACE = [\t\n\f\r ]+

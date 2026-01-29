@@ -259,7 +259,9 @@ fn build_relation<W: CelWriter>(
     )?;
 
     while let Some(op_pair) = inner.next() {
-        let op = match op_pair.as_str() {
+        // op_pair is a relop rule
+        let op_str = op_pair.as_str();
+        let op = match op_str {
             "<" => BinaryOp::Less,
             "<=" => BinaryOp::LessEq,
             ">" => BinaryOp::Greater,
@@ -267,7 +269,7 @@ fn build_relation<W: CelWriter>(
             "==" => BinaryOp::Equals,
             "!=" => BinaryOp::NotEquals,
             "in" => BinaryOp::In,
-            _ => unreachable!("unexpected relop: {}", op_pair.as_str()),
+            _ => unreachable!("unexpected relop: {}", op_str),
         };
         let right = build_addition(
             depth_left,
@@ -526,7 +528,9 @@ fn build_primary<W: CelWriter>(
     let Some(first) = inner.next() else {
         // No child rules - must be empty list or empty map
         return match pair_str.chars().next() {
-            Some('[') => writer.list(&[], span).map_err(|e| map_writer_error(e, span)),
+            Some('[') => writer
+                .list(&[], span)
+                .map_err(|e| map_writer_error(e, span)),
             Some('{') => writer.map(&[], span).map_err(|e| map_writer_error(e, span)),
             _ => unreachable!("Parser validated: primary with no children must be [] or {{}}"),
         };
@@ -796,7 +800,11 @@ fn build_message_literal<W: CelWriter>(
     // Collect additional selector parts until we hit "{" or field_inits
     while let Some(pair) = inner.peek() {
         if pair.as_rule() == Rule::selector {
-            type_parts.push(writer.interner().intern(inner.next().expect("peeked").as_str()));
+            type_parts.push(
+                writer
+                    .interner()
+                    .intern(inner.next().expect("peeked").as_str()),
+            );
         } else {
             break;
         }
