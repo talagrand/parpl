@@ -1,4 +1,6 @@
 #![doc = include_str!("../README.md")]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![warn(missing_docs)]
 // Allow indexing in test code - tests should panic on unexpected values
 #![cfg_attr(test, allow(clippy::indexing_slicing))]
 

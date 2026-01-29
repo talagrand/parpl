@@ -1,5 +1,5 @@
-//! Starter implementations of [`DatumWriter`](super::traits::DatumWriter) and
-//! [`SchemeNumberOps`](super::traits::SchemeNumberOps).
+//! Starter implementations of [`DatumWriter`](super::DatumWriter) and
+//! [`SchemeNumberOps`](super::SchemeNumberOps).
 //!
 //! These implementations are designed to be studied and forked.
 //! They are provided for illustrative purposes for how everything comes
@@ -16,6 +16,9 @@
 //!
 //! - [`numbers`]: Number tower implementations which can be used by any AST implementation (`SimpleNumberOps` for i64/f64)
 
+/// Full R7RS datum support using bumpalo arena allocation with i64/f64 numbers.
 pub mod arena;
+/// Subset of Scheme (integers only, no vectors/chars/labels) using Vec allocation.
 pub mod mini;
+/// Number tower implementations (`SimpleNumberOps` for i64/f64).
 pub mod numbers;

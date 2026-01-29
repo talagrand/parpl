@@ -11,13 +11,15 @@ use std::ops::Deref;
 /// A simple number representation that can hold integers and floats and nothing else.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SimpleNumber {
+    /// An exact integer value.
     Integer(i64),
+    /// An inexact floating-point value.
     Float(f64),
 }
 
 /// Identity `Deref` implementation for `SimpleNumber`.
 ///
-/// This allows `SimpleNumber` to be used as a `NumberRef` in [`DatumInspector`](crate::scheme::traits::DatumInspector)
+/// This allows `SimpleNumber` to be used as a `NumberRef` in [`DatumInspector`](crate::scheme::DatumInspector)
 /// implementations with split storage (separate `Integer` and `Float` datum variants).
 /// The number is returned by value (it's `Copy`), and `Deref` provides uniform access.
 impl Deref for SimpleNumber {

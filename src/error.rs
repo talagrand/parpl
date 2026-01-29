@@ -18,7 +18,10 @@ pub enum LimitExceeded {
     ///
     /// The `message` field contains a human-readable description. CEL populates
     /// this with specific depth/limit values; Scheme uses a fixed message.
-    NestingDepth { message: String },
+    NestingDepth {
+        /// Human-readable description of the limit exceeded.
+        message: String,
+    },
 }
 
 impl std::fmt::Display for LimitExceeded {

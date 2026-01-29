@@ -1,4 +1,4 @@
-//! Starter implementations of [`CelWriter`](super::traits::CelWriter).
+//! Starter implementations of [`CelWriter`](super::CelWriter).
 //!
 //! These implementations are designed to be studied and forked.
 //! They are provided for illustrative purposes for how everything comes
@@ -11,5 +11,7 @@
 //! - [`arena`]: Full CEL AST using bumpalo arena allocation
 //! - [`mini`]: Minimal CEL subset (no floats/null) using Box allocation
 
+/// Full CEL AST using bumpalo arena allocation.
 pub mod arena;
+/// Minimal CEL subset (no floats/null) using Box allocation.
 pub mod mini;

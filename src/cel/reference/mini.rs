@@ -3,30 +3,52 @@ use crate::{
     cel::{BinaryOp, CelWriter, Literal, UnaryOp},
 };
 
+/// A minimal CEL expression node.
+///
+/// This is a simple, Box-allocated AST suitable for small expressions
+/// and quick prototyping. For performance-critical use cases, see
+/// [`arena::Expr`](super::arena::Expr).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MiniExpr {
+    /// The kind of expression (operator, literal, etc.).
     pub kind: MiniExprKind,
+    /// Source location of this expression.
     pub span: Span,
 }
 
+/// The different kinds of CEL expressions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MiniExprKind {
+    /// Ternary conditional: `a ? b : c`
     Ternary(Box<MiniExpr>, Box<MiniExpr>, Box<MiniExpr>),
+    /// Binary operation: `a + b`, `a && b`, etc.
     Binary(BinaryOp, Box<MiniExpr>, Box<MiniExpr>),
+    /// Unary operation: `-a`, `!a`
     Unary(UnaryOp, Box<MiniExpr>),
+    /// Member access with optional call: `a.b`, `a.b(args)`
     Member(Box<MiniExpr>, String, Option<Vec<MiniExpr>>),
+    /// Index access: `a[b]`
     Index(Box<MiniExpr>, Box<MiniExpr>),
+    /// Function call: `f(args)` or `receiver.f(args)`
     Call(Option<Box<MiniExpr>>, String, Vec<MiniExpr>),
+    /// Identifier reference: `x`, `myVar`
     Ident(String),
+    /// List literal: `[1, 2, 3]`
     List(Vec<MiniExpr>),
+    /// Map literal: `{a: 1, b: 2}`
     Map(Vec<(MiniExpr, MiniExpr)>),
+    /// Struct literal: `MyType{field: value}`
     Struct(Option<Box<MiniExpr>>, Vec<String>, Vec<(String, MiniExpr)>),
+    /// Literal value (int, string, bool, bytes)
     Literal(Literal<String, Vec<u8>>),
 }
 
+/// Errors specific to the mini CEL parser.
 #[derive(Debug)]
 pub enum MiniError {
+    /// Floats are not supported in this minimal implementation.
     UnsupportedFloat,
+    /// Null values are not supported in this minimal implementation.
     UnsupportedNull,
 }
 
@@ -41,6 +63,10 @@ impl std::fmt::Display for MiniError {
 
 impl std::error::Error for MiniError {}
 
+/// A minimal CEL writer that uses Box allocation.
+///
+/// This writer does not support floats or null values. It is suitable
+/// for very simple CEL use cases.
 pub struct MiniCelWriter {
     interner: NoOpInterner,
 }

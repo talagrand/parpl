@@ -7,20 +7,33 @@ use crate::{
     },
 };
 
+/// A minimal Scheme datum representation.
+///
+/// This is a simple, Vec-allocated AST suitable for small programs
+/// and quick prototyping. It only supports a subset of Scheme:
+/// - Integers (no floats, rationals, or complex numbers)
+/// - Symbols and strings
+/// - Booleans
+/// - Proper lists (no improper lists, vectors, or characters)
+///
+/// For fuller R7RS support, see [`arena::Datum`](super::arena::Datum).
 #[derive(Debug, Clone, PartialEq)]
 pub enum MiniDatum {
-    /// Numbers (integers only)
+    /// Numbers (integers only).
     Number(i64),
-    /// Symbols (identifiers)
+    /// Symbols (identifiers).
     Symbol(String),
-    /// String literals
+    /// String literals.
     String(String),
-    /// Boolean values
+    /// Boolean values.
     Bool(bool),
-    /// Lists (proper lists only)
+    /// Lists (proper lists only).
     List(Vec<MiniDatum>),
 }
 
+/// Number operations for the minimal Scheme implementation.
+///
+/// Only supports 64-bit integers; rejects floats, rationals, and complex numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MiniNumberOps;
 
@@ -92,6 +105,10 @@ impl SchemeNumberOps for MiniNumberOps {
     }
 }
 
+/// A minimal datum writer for the Scheme subset.
+///
+/// This writer only supports integers, symbols, strings, booleans,
+/// and proper lists. All other constructs return an error.
 #[derive(Default)]
 pub struct MiniDatumWriter {
     interner: NoOpInterner,
@@ -180,10 +197,14 @@ impl DatumWriter for MiniDatumWriter {
     }
 }
 
+/// Parses a minimal Scheme datum from the source string.
+///
+/// Uses a default max depth of 64 for nested structures.
 pub fn read(source: &str) -> Result<MiniDatum, Error> {
     read_with_max_depth(source, 64)
 }
 
+/// Parses a minimal Scheme datum with a custom maximum nesting depth.
 pub fn read_with_max_depth(source: &str, max_depth: u32) -> Result<MiniDatum, Error> {
     let parser = crate::scheme::Builder::default()
         .max_depth(max_depth)

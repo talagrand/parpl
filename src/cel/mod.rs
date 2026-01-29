@@ -76,7 +76,7 @@ mod literal;
 mod parser;
 #[cfg(any(test, feature = "reference"))]
 pub mod reference;
-pub mod traits;
+mod traits;
 
 /// Result type alias for parser operations.
 pub type Result<T> = std::result::Result<T, crate::Error>;

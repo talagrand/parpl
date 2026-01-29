@@ -11,9 +11,8 @@ use bumpalo::Bump;
 use parpl::{
     StringPool,
     cel::{
-        Builder, CelParser, Result,
+        Builder, CelParser, CelWriter, Result,
         reference::arena::{ArenaCelWriter, Expr},
-        traits::CelWriter,
     },
 };
 

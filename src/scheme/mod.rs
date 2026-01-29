@@ -7,7 +7,7 @@
 //! # Integration
 //!
 //! Parpl is designed to integrate into your project. You provide your own datum (AST)
-//! representation by implementing [`DatumWriter`](traits::DatumWriter), and the
+//! representation by implementing [`DatumWriter`], and the
 //! parser calls your methods to construct values as it reads.
 //!
 //! ```ignore
@@ -48,7 +48,7 @@
 //! The parser supports the complete R7RS external representation syntax:
 //!
 //! - **Atoms**: booleans, numbers, characters, strings, symbols
-//! - **Numbers**: integers, rationals, floats, complex (lexed; conversion delegated to your [`SchemeNumberOps`](traits::SchemeNumberOps))
+//! - **Numbers**: integers, rationals, floats, complex (lexed; conversion delegated to your [`SchemeNumberOps`])
 //! - **Compound**: lists, dotted pairs, vectors, bytevectors
 //! - **Quotation**: `'`, `` ` ``, `,`, `,@`
 //! - **Labels**: `#n=` / `#n#` for shared structure
@@ -98,21 +98,18 @@ pub(crate) mod lex;
 mod reader;
 #[cfg(any(test, feature = "reference"))]
 pub mod reference;
-pub mod traits;
-
-// Public re-exports for the number-literal IR.
-//
-// These types are produced by the Scheme lexer and are intentionally exposed so
-// downstream crates can implement `SchemeNumberOps` without depending on the
-// internal `scheme::lex` module.
-pub use lex::{
-    FiniteRealKind, FiniteRealMagnitude, NumberExactness, NumberLiteral, NumberLiteralKind,
-    NumberRadix, NumberValue, RealMagnitude, RealRepr, Sign,
-};
+mod traits;
 
 // Re-export key types for convenient access (single canonical path)
 pub use context::{Builder, SchemeParser};
 pub use reader::TokenStream;
+pub use traits::{DatumInspector, DatumKind, DatumWriter, SchemeNumberOps};
+
+// Number literal types for implementing SchemeNumberOps
+pub use lex::{
+    FiniteRealKind, FiniteRealMagnitude, NumberExactness, NumberLiteral, NumberLiteralKind,
+    NumberRadix, NumberValue, RealMagnitude, RealRepr, Sign,
+};
 
 /// Result type alias for parser operations.
 pub type Result<T> = std::result::Result<T, crate::Error>;
@@ -124,8 +121,8 @@ pub type Result<T> = std::result::Result<T, crate::Error>;
 /// Documented string constants for unsupported features.
 ///
 /// These are used with [`crate::Error::Unsupported`] to indicate features or formats
-/// that a [`DatumWriter`](traits::DatumWriter) or
-/// [`SchemeNumberOps`](traits::SchemeNumberOps) implementation may reject.
+/// that a [`DatumWriter`] or
+/// [`SchemeNumberOps`] implementation may reject.
 ///
 /// Using `&'static str` instead of an enum allows language-specific extensions
 /// without modifying the core error type.

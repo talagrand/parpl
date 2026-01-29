@@ -541,7 +541,7 @@ pub fn process_literal<W: CelWriter>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cel::traits::QuoteStyle;
+    use crate::cel::QuoteStyle;
     use crate::{Interner, Span, StringPool, StringPoolId};
     use bumpalo::Bump;
 
@@ -596,7 +596,7 @@ mod tests {
         }
         fn unary(
             &mut self,
-            _op: crate::cel::traits::UnaryOp,
+            _op: crate::cel::UnaryOp,
             _operand: Self::Expr,
             _span: Span,
         ) -> std::result::Result<Self::Expr, Self::Error> {
@@ -604,7 +604,7 @@ mod tests {
         }
         fn binary(
             &mut self,
-            _op: crate::cel::traits::BinaryOp,
+            _op: crate::cel::BinaryOp,
             _left: Self::Expr,
             _right: Self::Expr,
             _span: Span,

@@ -38,10 +38,12 @@ pub struct Span {
 }
 
 impl Span {
+    /// Creates a new span with the given start and end byte offsets.
     pub fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }
 
+    /// Merges two spans, returning the smallest span that contains both.
     pub fn merge(self, other: Span) -> Span {
         Span {
             start: std::cmp::min(self.start, other.start),

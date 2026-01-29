@@ -10,32 +10,43 @@ use std::convert::Infallible;
 /// of `spec/syn.md`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Datum<'a> {
+    /// Boolean value (`#t` or `#f`).
     Boolean(bool),
-    /// Integer number (exact)
+    /// Integer number (exact).
     Integer(i64),
-    /// Floating-point number (inexact)
+    /// Floating-point number (inexact).
     Float(f64),
+    /// Character literal (`#\\a`, `#\\newline`, etc.).
     Character(char),
+    /// String literal.
     String(StringPoolId),
+    /// Symbol (identifier).
     Symbol(StringPoolId),
+    /// Byte vector (`#u8(...)`).
     ByteVector(&'a [u8]),
     /// The empty list `()`.
     EmptyList,
     /// Proper and improper lists are represented via pairs.
     Pair(&'a Syntax<Datum<'a>>, &'a Syntax<Datum<'a>>),
+    /// Vector (`#(...)`).
     Vector(&'a [Syntax<Datum<'a>>]),
-    /// A labeled datum: #n=datum
+    /// A labeled datum: `#n=datum`
     Labeled(u64, &'a Syntax<Datum<'a>>),
-    /// A reference to a previously defined label: #n#
+    /// A reference to a previously defined label: `#n#`
     LabelRef(u64),
 }
 
+/// Arena-based datum writer for Scheme.
+///
+/// Allocates all AST nodes in a bumpalo arena for efficient memory management.
+/// Strings are interned in a [`StringPool`].
 pub struct ArenaDatumWriter<'a, 'arena> {
     interner: &'a mut StringPool,
     arena: &'arena Bump,
 }
 
 impl<'a, 'arena> ArenaDatumWriter<'a, 'arena> {
+    /// Creates a new arena-based datum writer.
     pub fn new(arena: &'arena Bump, interner: &'a mut StringPool) -> Self {
         Self { interner, arena }
     }
@@ -151,6 +162,7 @@ impl<'a, 'arena> DatumWriter for ArenaDatumWriter<'a, 'arena> {
 
 // Implement DatumInspector for Syntax<Datum>
 
+/// Iterator over list elements in an arena-allocated datum.
 pub struct SampleListIter<'a, 'd> {
     current: Option<&'a Syntax<Datum<'d>>>,
     len: usize,
@@ -333,6 +345,9 @@ impl<'d> DatumInspector for &Syntax<Datum<'d>> {
     }
 }
 
+/// Parses a Scheme datum from the source string.
+///
+/// Uses a default max depth of 64 for nested structures.
 pub fn read<'a>(
     source: &str,
     arena: &'a Bump,
@@ -341,6 +356,7 @@ pub fn read<'a>(
     read_with_max_depth(source, arena, interner, 64)
 }
 
+/// Parses a Scheme datum with a custom maximum nesting depth.
 pub fn read_with_max_depth<'a>(
     source: &str,
     arena: &'a Bump,

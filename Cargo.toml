@@ -69,6 +69,7 @@ string_slice = "warn"
 
 [package.metadata.docs.rs]
 all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [profile.release]
 # Optimize for size

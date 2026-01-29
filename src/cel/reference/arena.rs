@@ -137,6 +137,7 @@ pub struct ArenaCelWriter<'a, 'arena> {
 }
 
 impl<'a, 'arena> ArenaCelWriter<'a, 'arena> {
+    /// Creates a new arena-based CEL writer.
     pub fn new(arena: &'arena Bump, interner: &'a mut StringPool) -> Self {
         Self { arena, interner }
     }

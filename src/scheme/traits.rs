@@ -137,6 +137,7 @@ pub trait DatumInspector: Sized {
     /// regardless of the underlying storage strategy.
     fn as_number<'a>(&'a self) -> Option<Self::NumberRef<'a>>;
 
+    /// Returns the character if this datum is a character.
     fn as_char(&self) -> Option<char>;
 
     /// The type of string ID used by this inspector.
@@ -152,6 +153,7 @@ pub trait DatumInspector: Sized {
     /// To get the text, pass this ID to the `Interner`.
     fn as_str<'a>(&'a self) -> Option<Self::StringId<'a>>;
 
+    /// Returns the byte vector if this datum is a byte vector.
     fn as_bytes(&self) -> Option<&[u8]>;
 
     // --- Compounds (Recursive Views) ---
@@ -164,13 +166,15 @@ pub trait DatumInspector: Sized {
     where
         Self: 'a;
 
-    /// Returns references to the head and tail.
+    /// Returns references to the head and tail if this datum is a pair.
     fn as_pair<'a>(&'a self) -> Option<(Self::Child<'a>, Self::Child<'a>)>;
 
     /// Returns an iterator over vector elements.
     type VectorIter<'a>: Iterator<Item = Self::Child<'a>>
     where
         Self: 'a;
+
+    /// Returns an iterator over vector elements if this is a vector.
     fn vector_iter<'a>(&'a self) -> Option<Self::VectorIter<'a>>;
 
     /// Returns the label ID and the inner datum if this is a labeled datum.
@@ -181,6 +185,7 @@ pub trait DatumInspector: Sized {
 
     // --- Utilities ---
 
+    /// Returns true if this datum is the empty list.
     fn is_null(&self) -> bool {
         matches!(self.kind(), DatumKind::Null)
     }
@@ -190,6 +195,7 @@ pub trait DatumInspector: Sized {
     where
         Self: 'a;
 
+    /// Returns an iterator over the elements of a list.
     fn list_iter<'a>(&'a self) -> Self::ListIter<'a>;
 
     /// Returns the improper tail of the list, if one exists.
@@ -253,19 +259,27 @@ pub trait DatumWriter {
     type NumberOps: SchemeNumberOps;
 
     // --- Atoms ---
+
+    /// Constructs a boolean datum.
     fn bool(&mut self, v: bool, s: Span) -> Result<Self::Output, Self::Error>;
+
+    /// Constructs a number datum.
     fn number(
         &mut self,
         v: <Self::NumberOps as SchemeNumberOps>::Number,
         s: Span,
     ) -> Result<Self::Output, Self::Error>;
+
+    /// Constructs a character datum.
     fn char(&mut self, v: char, s: Span) -> Result<Self::Output, Self::Error>;
 
-    // Both strings and symbols now take IDs.
-    // The caller (Reader/Expander) must use their Interner to produce these IDs.
+    /// Constructs a string datum from an interned string ID.
     fn string(&mut self, v: Self::StringId, s: Span) -> Result<Self::Output, Self::Error>;
+
+    /// Constructs a symbol datum from an interned string ID.
     fn symbol(&mut self, v: Self::StringId, s: Span) -> Result<Self::Output, Self::Error>;
 
+    /// Constructs a byte vector datum.
     fn bytevector(&mut self, v: &[u8], s: Span) -> Result<Self::Output, Self::Error>;
 
     // --- Compounds ---
@@ -280,6 +294,7 @@ pub trait DatumWriter {
         I: IntoIterator<Item = Self::Output>,
         I::IntoIter: ExactSizeIterator;
 
+    /// Constructs an improper list (dotted pair) from head elements and a tail.
     fn improper_list<I>(
         &mut self,
         head: I,
@@ -290,11 +305,13 @@ pub trait DatumWriter {
         I: IntoIterator<Item = Self::Output>,
         I::IntoIter: ExactSizeIterator;
 
+    /// Constructs a vector from the given elements.
     fn vector<I>(&mut self, iter: I, s: Span) -> Result<Self::Output, Self::Error>
     where
         I: IntoIterator<Item = Self::Output>,
         I::IntoIter: ExactSizeIterator;
 
+    /// Constructs a labeled datum (`#n=datum`).
     fn labeled(
         &mut self,
         id: u64,
@@ -302,6 +319,7 @@ pub trait DatumWriter {
         s: Span,
     ) -> Result<Self::Output, Self::Error>;
 
+    /// Constructs a label reference (`#n#`).
     fn label_ref(&mut self, id: u64, s: Span) -> Result<Self::Output, Self::Error>;
 
     // --- Optimization Hook ---

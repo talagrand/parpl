@@ -52,7 +52,7 @@ pub type PResult<O> = std::result::Result<O, ErrMode<ContextError>>;
 /// ```
 /// Radix base for a Scheme number literal.
 ///
-/// Invariant: only 2, 8, 10, or 16.
+/// Valid values: 2 (binary), 8 (octal), 10 (decimal), or 16 (hexadecimal).
 pub type NumberRadix = u32;
 
 /// Exactness marker of a Scheme number literal.
@@ -62,7 +62,9 @@ pub type NumberRadix = u32;
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NumberExactness {
+    /// Explicit `#e` prefix: exact number.
     Exact,
+    /// Explicit `#i` prefix: inexact number.
     Inexact,
     /// No explicit `#e`/`#i` prefix; exactness is determined
     /// by the default rules of the report.
@@ -75,7 +77,9 @@ pub enum NumberExactness {
 /// in `RealRepr`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sign {
+    /// Positive sign (`+` or implicit).
     Positive,
+    /// Negative sign (`-`).
     Negative,
 }
 
@@ -93,8 +97,10 @@ pub enum FiniteRealKind {
 
 // --- Lexer-specific Number Representations (Zero-Copy) ---
 
+/// The magnitude (unsigned value) of a finite real number.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FiniteRealMagnitude<'a> {
+    /// The kind of finite real (integer, rational, decimal).
     pub kind: FiniteRealKind,
     /// Signless spelling of the finite real.
     ///
@@ -102,10 +108,14 @@ pub struct FiniteRealMagnitude<'a> {
     pub spelling: &'a str,
 }
 
+/// The magnitude of a real number, including special values.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RealMagnitude<'a> {
+    /// A finite real value.
     Finite(FiniteRealMagnitude<'a>),
+    /// Positive or negative infinity (`+inf.0`, `-inf.0`).
     Infinity,
+    /// Not-a-number (`+nan.0`, `-nan.0`).
     NaN,
 }
 
@@ -120,6 +130,7 @@ pub struct RealRepr<'a> {
     ///
     /// Invariant: if `magnitude` is `Infinity` or `NaN`, then `sign.is_some()`.
     pub sign: Option<Sign>,
+    /// The unsigned magnitude of this real number.
     pub magnitude: RealMagnitude<'a>,
 }
 
@@ -130,27 +141,40 @@ impl<'a> RealRepr<'a> {
     }
 }
 
+/// A parsed number value from the lexer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NumberValue<'a> {
+    /// A real number (not complex).
     Real(RealRepr<'a>),
+    /// A complex number in rectangular form: `a+bi`
     Rectangular {
+        /// The real part.
         real: RealRepr<'a>,
+        /// The imaginary part.
         imag: RealRepr<'a>,
     },
+    /// A complex number in polar form: `r@θ`
     Polar {
+        /// The magnitude (radius).
         magnitude: RealRepr<'a>,
+        /// The angle (theta).
         angle: RealRepr<'a>,
     },
 }
 
+/// The parsed components of a number literal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NumberLiteralKind<'a> {
+    /// The radix (2, 8, 10, or 16).
     pub radix: NumberRadix,
+    /// The exactness marker (#e, #i, or unspecified).
     pub exactness: NumberExactness,
+    /// The parsed numeric value.
     pub value: NumberValue<'a>,
 }
 
 impl<'a> NumberLiteralKind<'a> {
+    /// Converts this into a `NumberLiteral` with empty source text.
     pub fn into_literal(self) -> NumberLiteral<'a> {
         NumberLiteral {
             text: "",
@@ -159,9 +183,12 @@ impl<'a> NumberLiteralKind<'a> {
     }
 }
 
+/// A complete number literal with source text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NumberLiteral<'a> {
+    /// The original source text of this number.
     pub text: &'a str,
+    /// The parsed structure of this number.
     pub kind: NumberLiteralKind<'a>,
 }
 

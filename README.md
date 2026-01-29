@@ -56,7 +56,7 @@ AST nodes as the parser encounters each construct:
 impl CelWriter for MyInterpreter {
     type Expr = MyExpr;
     type StringId = MySymbolId;
-    // ...
+    ...
     
     fn binary(&mut self, op: BinaryOp, left: Self::Expr, right: Self::Expr, span: Span) 
         -> Result<Self::Expr, Self::Error> 
@@ -64,31 +64,47 @@ impl CelWriter for MyInterpreter {
         // Build your own binary expression node
         Ok(MyExpr::Binary { op, left, right })
     }
+    
+    // ... additional methods
 }
 
 // For Scheme: implement DatumWriter
 impl DatumWriter for MySchemeReader {
     type Output = MyDatum;
     type StringId = MySymbolId;
-    // ...
+    ...
     
     fn list<I>(&mut self, items: I, span: Span) -> Result<Self::Output, Self::Error> {
         // Build your own list representation
         Ok(MyDatum::List(items.collect()))
     }
+    
+    // ... additional methods
 }
 ```
 
 ### Using the Parsers
 
-```rust,ignore
+```
+# #[cfg(feature = "reference")]
+# fn example() -> Result<(), parpl::Error> {
+# use bumpalo::Bump;
+# use parpl::StringPool;
+# use parpl::scheme::reference::arena::ArenaDatumWriter;
+# use parpl::cel::reference::arena::ArenaCelWriter;
+# let arena = Bump::new();
+# let mut interner = StringPool::new();
 // CEL
 let parser = parpl::cel::CelParser::default();
-let ast = parser.parse("user.age >= 18", &mut my_writer)?;
+# let mut cel_writer = ArenaCelWriter::new(&arena, &mut interner);
+let ast = parser.parse("user.age >= 18", &mut cel_writer)?;
 
 // Scheme
 let parser = parpl::scheme::SchemeParser::default();
-let datum = parser.parse("(+ 1 2 3)", &mut my_writer)?;
+# let mut scheme_writer = ArenaDatumWriter::new(&arena, &mut interner);
+let datum = parser.parse("(+ 1 2 3)", &mut scheme_writer)?;
+# Ok(())
+# }
 ```
 
 ### Starter Implementations
@@ -96,8 +112,10 @@ let datum = parser.parse("(+ 1 2 3)", &mut my_writer)?;
 The `reference` feature includes working implementations designed to be forked.
 Use them as-is for quick integration, or adapt the code to your project's needs.
 
-```rust,ignore
-// Example using reference implementation (requires "reference" feature)
+```
+# #[cfg(feature = "reference")]
+# fn example() -> Result<(), parpl::Error> {
+use bumpalo::Bump;
 use parpl::StringPool;
 use parpl::scheme::reference::arena::{ArenaDatumWriter, Datum};
 
@@ -106,6 +124,8 @@ let mut interner = StringPool::new();
 let mut writer = ArenaDatumWriter::new(&arena, &mut interner);
 let parser = parpl::scheme::SchemeParser::default();
 let datum = parser.parse("(lambda (x) x)", &mut writer)?;
+# Ok(())
+# }
 ```
 
 ## Features
@@ -120,7 +140,16 @@ let datum = parser.parse("(lambda (x) x)", &mut writer)?;
 
 Both parsers enforce configurable depth limits to prevent stack overflow:
 
-```rust,ignore
+```
+# #[cfg(feature = "reference")]
+# fn example() -> Result<(), parpl::Error> {
+# use bumpalo::Bump;
+# use parpl::StringPool;
+# use parpl::scheme::reference::arena::ArenaDatumWriter;
+# let arena = Bump::new();
+# let mut interner = StringPool::new();
+# let source = "(+ 1 2)";
+# let mut datum_writer = ArenaDatumWriter::new(&arena, &mut interner);
 // CEL: Two-phase depth protection
 let parser = parpl::cel::Builder::default()
     .max_parse_depth(128)  // Heuristic pre-validation
@@ -132,23 +161,16 @@ let parser = parpl::cel::Builder::default()
 let parser = parpl::scheme::Builder::default()
     .max_depth(64)
     .build();
-let datum = parser.parse(source, &mut writer)?;
+let datum = parser.parse(source, &mut datum_writer)?;
+# Ok(())
+# }
 ```
 
 ## Error Handling
 
-All errors include source spans for precise error reporting:
-
-```rust,ignore
-pub enum Error {
-    Incomplete,           // Input needs more data (REPL-friendly)
-    IncompleteToken,      // Input ends mid-token
-    Syntax { span, ... }, // Syntax error with location
-    Unsupported { ... },  // Feature not supported by writer
-    LimitExceeded { ... }, // Safety limit exceeded
-    WriterError { ... },  // Error from your writer implementation
-}
-```
+All errors include source spans for precise error reporting. The parser distinguishes incomplete 
+input (for REPL use) from syntax errors, and propagates errors from your writer implementation. 
+See [`Error`](https://docs.rs/parpl/latest/parpl/enum.Error.html) for details.
 
 ## Feature Flags
 
