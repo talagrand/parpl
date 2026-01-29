@@ -5,9 +5,9 @@
 //!
 //! # Types
 //!
-//! - [`Expr`]: A CEL expression node with span information
-//! - [`ExprKind`]: The specific kind of expression
-//! - [`ArenaCelWriter`]: The `CelWriter` implementation
+//! - [`Expr`](crate::cel::reference::arena::Expr): A CEL expression node with span information
+//! - [`ExprKind`](crate::cel::reference::arena::ExprKind): The specific kind of expression
+//! - [`ArenaCelWriter`](crate::cel::reference::arena::ArenaCelWriter): The `CelWriter` implementation
 //!
 //! # Example
 //!
