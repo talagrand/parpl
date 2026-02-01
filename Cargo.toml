@@ -46,7 +46,7 @@ required-features = ["reference"]
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 # Protocol buffer libraries for official CEL test conformance suite
-protox = "0.7"
+protox = "0.9"
 prost = "0.13"
 prost-reflect = { version = "0.14", features = ["text-format"] }
 
