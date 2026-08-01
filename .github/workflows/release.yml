@@ -23,7 +23,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
 
     - name: Get tag name
       id: tag_name
@@ -59,7 +59,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         # Explicitly disabled: submodules would bloat the crates.io package.
         # These are also filtered out in Cargo.toml by excluding the "specs/" directory.
